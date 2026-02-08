@@ -198,6 +198,25 @@ app.post(
     return res.json({ ok: true, pedido_id: id });
   }
 );
+// Listar pedidos "novo" (pro AHK buscar)
+app.get("/pedidos/novos", auth, (req, res) => {
+  const whatsapp = req.user.whatsapp;
+  const mesAtual = nowYYYYMM();
+  const dir = path.join(PEDIDOS_DIR, whatsapp, mesAtual);
+
+  if (!fs.existsSync(dir)) return res.json({ ok: true, pedidos: [] });
+
+  const pedidos = [];
+  for (const id of fs.readdirSync(dir)) {
+    const pdir = path.join(dir, id);
+    const st = path.join(pdir, "status.txt");
+    if (fs.existsSync(st) && fs.readFileSync(st, "utf8").trim() === "novo") {
+      pedidos.push({ id });
+    }
+  }
+
+  return res.json({ ok: true, pedidos });
+});
 
 // Baixar zip do pedido
 app.get("/pedidos/:id/zip", auth, (req, res) => {
