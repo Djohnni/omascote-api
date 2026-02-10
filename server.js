@@ -118,7 +118,8 @@ app.post(
   "/pedidos",
   auth,
   upload.fields([
-    { name:"escudo1", maxCount:1 },
+    { name:"escudo1", maxCount:1 }, // escudo do time
+    { name:"escudo2", maxCount:1 }, // escudo do adversário
     { name:"mascote", maxCount:1 },
     { name:"patrocinadores", maxCount:20 }
   ]),
@@ -143,24 +144,34 @@ app.post(
       return res.status(400).json({ ok:false });
     }
 
-    // ===== SALVA ESCUDO / MASCOTE DO TIME =====
+    const files = req.files || {};
+
+    // ===== TIME (persistente) =====
     const timeDir = path.join(TIMES_DIR, whatsapp);
     ensureDir(timeDir);
 
-    const files = req.files || {};
-
     if (files["escudo1"]?.[0]) {
-      fs.renameSync(files["escudo1"][0].path, path.join(timeDir, "escudo.png"));
+      fs.copyFileSync(files["escudo1"][0].path, path.join(timeDir,"escudo.png"));
     }
     if (files["mascote"]?.[0]) {
-      fs.renameSync(files["mascote"][0].path, path.join(timeDir, "mascote.png"));
+      fs.copyFileSync(files["mascote"][0].path, path.join(timeDir,"mascote.png"));
     }
 
-    // ===== PEDIDO =====
+    // ===== PEDIDO (COMPLETO COMO ANTES) =====
     const id = newPedidoId();
     const base = path.join(PEDIDOS_DIR, whatsapp, mesAtual, id);
     ensureDir(base);
     ensureDir(path.join(base,"patrocinadores"));
+
+    if (files["escudo1"]?.[0]) {
+      fs.copyFileSync(files["escudo1"][0].path, path.join(base,"escudo_time.png"));
+    }
+    if (files["escudo2"]?.[0]) {
+      fs.renameSync(files["escudo2"][0].path, path.join(base,"escudo_adversario.png"));
+    }
+    if (files["mascote"]?.[0]) {
+      fs.copyFileSync(files["mascote"][0].path, path.join(base,"mascote.png"));
+    }
 
     const pats = files["patrocinadores"] || [];
     pats.forEach((f,i)=>{
@@ -176,8 +187,6 @@ app.post(
       hora,
       arena,
       mascote_tipo: mascote_tipo || "",
-      usa_escudo_time: true,
-      usa_mascote_time: fs.existsSync(path.join(timeDir,"mascote.png")),
       patrocinadores_qtd: pats.length,
       status: "novo",
       criado_em: new Date().toISOString()
