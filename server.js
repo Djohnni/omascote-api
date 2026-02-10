@@ -83,16 +83,18 @@ app.post("/auth/login",(req,res)=>{
 
   const clientes = readClientes();
   const c = clientes[whatsapp];
-  if (!c || !c.ativo) return res.status(403).json({ ok:false });
+  if (!c) return res.status(401).json({ ok:false, error:"Cliente não encontrado" });
+  if (!c.ativo) return res.status(403).json({ ok:false, error:"Mensalidade inativa" });
 
   if (!bcrypt.compareSync(senha, c.senha_hash)) {
-    return res.status(401).json({ ok:false });
+    return res.status(401).json({ ok:false, error:"Senha incorreta" });
   }
 
   const mesAtual = nowYYYYMM();
   if (c.ciclo_mes !== mesAtual){
     c.ciclo_mes = mesAtual;
     c.usados_no_ciclo = 0;
+    clientes[whatsapp] = c;
     writeClientes(clientes);
   }
 
@@ -108,8 +110,9 @@ app.post("/auth/login",(req,res)=>{
 
 // Perfil
 app.get("/me", auth, (req,res)=>{
-  const c = readClientes()[req.user.whatsapp];
-  if (!c) return res.status(404).json({ ok:false });
+  const clientes = readClientes();
+  const c = clientes[req.user.whatsapp];
+  if (!c) return res.status(404).json({ ok:false, error:"Cliente não encontrado" });
   res.json({ ok:true, nome_time:c.nome_time, plano:c.plano, usados_no_ciclo:c.usados_no_ciclo, ativo:c.ativo });
 });
 
@@ -120,28 +123,31 @@ app.post(
   upload.fields([
     { name:"escudo1", maxCount:1 }, // escudo do time
     { name:"escudo2", maxCount:1 }, // escudo do adversário
-    { name:"mascote", maxCount:1 },
+    { name:"mascote", maxCount:1 }, // mascote do time (opcional)
     { name:"patrocinadores", maxCount:20 }
   ]),
   (req,res)=>{
     const whatsapp = req.user.whatsapp;
     const clientes = readClientes();
     const c = clientes[whatsapp];
-    if (!c || !c.ativo) return res.status(403).json({ ok:false });
+    if (!c || !c.ativo) return res.status(403).json({ ok:false, error:"Mensalidade inativa" });
 
+    // Reseta ciclo se mudou o mês
     const mesAtual = nowYYYYMM();
     if (c.ciclo_mes !== mesAtual){
       c.ciclo_mes = mesAtual;
       c.usados_no_ciclo = 0;
     }
+
     if (c.usados_no_ciclo >= c.plano){
+      clientes[whatsapp] = c;
       writeClientes(clientes);
-      return res.status(403).json({ ok:false });
+      return res.status(403).json({ ok:false, error:`Limite mensal atingido (${c.plano})` });
     }
 
     const { rodada, data, hora, arena, mascote_tipo } = req.body || {};
     if (!rodada || !data || !hora || !arena){
-      return res.status(400).json({ ok:false });
+      return res.status(400).json({ ok:false, error:"rodada, data, hora e arena são obrigatórios" });
     }
 
     const files = req.files || {};
@@ -150,32 +156,35 @@ app.post(
     const timeDir = path.join(TIMES_DIR, whatsapp);
     ensureDir(timeDir);
 
+    // Salva no time (persistente)
     if (files["escudo1"]?.[0]) {
-      fs.copyFileSync(files["escudo1"][0].path, path.join(timeDir,"escudo.png"));
+      fs.copyFileSync(files["escudo1"][0].path, path.join(timeDir, "escudo.png"));
     }
     if (files["mascote"]?.[0]) {
-      fs.copyFileSync(files["mascote"][0].path, path.join(timeDir,"mascote.png"));
+      fs.copyFileSync(files["mascote"][0].path, path.join(timeDir, "mascote.png"));
     }
 
-    // ===== PEDIDO (COMPLETO COMO ANTES) =====
+    // ===== PEDIDO (COMPLETO COMO ANTES — AHK COMPATÍVEL) =====
     const id = newPedidoId();
     const base = path.join(PEDIDOS_DIR, whatsapp, mesAtual, id);
     ensureDir(base);
-    ensureDir(path.join(base,"patrocinadores"));
+    ensureDir(path.join(base, "patrocinadores"));
 
+    // IMPORTANTÍSSIMO: nomes iguais ao fluxo antigo
     if (files["escudo1"]?.[0]) {
-      fs.copyFileSync(files["escudo1"][0].path, path.join(base,"escudo_time.png"));
+      fs.copyFileSync(files["escudo1"][0].path, path.join(base, "escudo1.png"));
     }
     if (files["escudo2"]?.[0]) {
-      fs.renameSync(files["escudo2"][0].path, path.join(base,"escudo_adversario.png"));
+      fs.renameSync(files["escudo2"][0].path, path.join(base, "escudo2.png"));
     }
     if (files["mascote"]?.[0]) {
-      fs.copyFileSync(files["mascote"][0].path, path.join(base,"mascote.png"));
+      fs.copyFileSync(files["mascote"][0].path, path.join(base, "mascote.png"));
     }
 
+    // Patrocinadores
     const pats = files["patrocinadores"] || [];
     pats.forEach((f,i)=>{
-      fs.renameSync(f.path, path.join(base,"patrocinadores",`pat${i+1}.png`));
+      fs.renameSync(f.path, path.join(base, "patrocinadores", `pat${String(i+1).padStart(2,"0")}.png`));
     });
 
     const pedido = {
@@ -192,10 +201,11 @@ app.post(
       criado_em: new Date().toISOString()
     };
 
-    fs.writeFileSync(path.join(base,"pedido.json"), JSON.stringify(pedido,null,2));
-    fs.writeFileSync(path.join(base,"status.txt"), "novo");
+    fs.writeFileSync(path.join(base, "pedido.json"), JSON.stringify(pedido, null, 2), "utf8");
+    fs.writeFileSync(path.join(base, "status.txt"), "novo", "utf8");
 
-    c.usados_no_ciclo++;
+    c.usados_no_ciclo = (c.usados_no_ciclo || 0) + 1;
+    c.ciclo_mes = mesAtual;
     clientes[whatsapp] = c;
     writeClientes(clientes);
 
@@ -203,39 +213,56 @@ app.post(
   }
 );
 
-// Listar novos
+// Listar pedidos "novo"
 app.get("/pedidos/novos", auth, (req,res)=>{
-  const dir = path.join(PEDIDOS_DIR, req.user.whatsapp, nowYYYYMM());
+  const whatsapp = req.user.whatsapp;
+  const mesAtual = nowYYYYMM();
+  const dir = path.join(PEDIDOS_DIR, whatsapp, mesAtual);
+
   if (!fs.existsSync(dir)) return res.json({ ok:true, pedidos:[] });
 
-  const pedidos = fs.readdirSync(dir).filter(id=>{
-    const st = path.join(dir,id,"status.txt");
-    return fs.existsSync(st) && fs.readFileSync(st,"utf8").trim()==="novo";
-  }).map(id=>({ id }));
-
+  const pedidos = [];
+  for (const id of fs.readdirSync(dir)) {
+    const pdir = path.join(dir, id);
+    const st = path.join(pdir, "status.txt");
+    if (fs.existsSync(st) && fs.readFileSync(st, "utf8").trim() === "novo") {
+      pedidos.push({ id });
+    }
+  }
   res.json({ ok:true, pedidos });
 });
 
-// Zip
+// Baixar zip do pedido
 app.get("/pedidos/:id/zip", auth, (req,res)=>{
-  const base = path.join(PEDIDOS_DIR, req.user.whatsapp, nowYYYYMM(), req.params.id);
-  if (!fs.existsSync(base)) return res.status(404).json({ ok:false });
+  const whatsapp = req.user.whatsapp;
+  const mesAtual = nowYYYYMM();
+  const base = path.join(PEDIDOS_DIR, whatsapp, mesAtual, req.params.id);
+  if (!fs.existsSync(base)) return res.status(404).json({ ok:false, error:"Pedido não encontrado" });
 
   res.setHeader("Content-Type","application/zip");
   res.setHeader("Content-Disposition",`attachment; filename="${req.params.id}.zip"`);
 
-  const archive = archiver("zip",{ zlib:{ level:9 }});
+  const archive = archiver("zip", { zlib: { level: 9 } });
+  archive.on("error", err => res.status(500).end(String(err)));
   archive.pipe(res);
-  archive.directory(base,false);
+
+  archive.directory(base, false);
   archive.finalize();
 });
 
-// Status
+// Atualizar status
 app.post("/pedidos/:id/status", auth, (req,res)=>{
-  const base = path.join(PEDIDOS_DIR, req.user.whatsapp, nowYYYYMM(), req.params.id);
-  if (!fs.existsSync(base)) return res.status(404).json({ ok:false });
+  const whatsapp = req.user.whatsapp;
+  const mesAtual = nowYYYYMM();
+  const base = path.join(PEDIDOS_DIR, whatsapp, mesAtual, req.params.id);
+  if (!fs.existsSync(base)) return res.status(404).json({ ok:false, error:"Pedido não encontrado" });
 
-  fs.writeFileSync(path.join(base,"status.txt"), req.body.status);
+  const { status } = req.body || {};
+  if (!["novo", "em_producao", "pronto"].includes(status)) {
+    return res.status(400).json({ ok:false, error:"status inválido" });
+  }
+
+  fs.writeFileSync(path.join(base, "status.txt"), status, "utf8");
   res.json({ ok:true });
 });
 
