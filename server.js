@@ -49,7 +49,7 @@ function nowYYYYMM() {
   const d = new Date();
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
-  return ${y}-${m};
+  return `${y}-${m}`;
 }
 
 function newPedidoId() {
@@ -60,7 +60,7 @@ function newPedidoId() {
   const hh = String(d.getHours()).padStart(2, "0");
   const mm = String(d.getMinutes()).padStart(2, "0");
   const ss = String(d.getSeconds()).padStart(2, "0");
-  return ${y}${mo}${da}_${hh}${mm}${ss};
+  return `${y}${mo}${da}_${hh}${mm}${ss}`;
 }
 
 function auth(req, res, next) {
@@ -83,7 +83,7 @@ const storage = multer.diskStorage({
 
   filename: (req, file, cb) => {
     const safe = file.originalname.replace(/[^\w.\-]+/g, "_");
-    cb(null, ${Date.now()}_${safe});
+    cb(null, `${Date.now()}_${safe}`);
   }
 });
 
@@ -179,15 +179,16 @@ app.post(
     if (c.usados_no_ciclo >= c.plano) {
       clientes[whatsapp] = c;
       writeClientes(clientes);
-      return res.status(403).json({ ok: false, error: Limite mensal atingido (${c.plano}) });
+      return res.status(403).json({ ok: false, error: `Limite mensal atingido (${c.plano})` });
     }
 
     const { rodada, data, hora, arena, mascote_tipo } = req.body || {};
 
-    if (!rodada || !data || !hora || !arena) {
+    // ✅ ÚNICA MUDANÇA: hora e arena NÃO são mais obrigatórios
+    if (!rodada || !data) {
       return res.status(400).json({
         ok: false,
-        error: "rodada, data, hora e arena são obrigatórios"
+        error: "rodada e data são obrigatórios"
       });
     }
 
@@ -212,10 +213,10 @@ app.post(
     const pats = files["patrocinadores"] || [];
 
     pats.forEach((f, i) => {
-     const dest = path.join(
-  base,
-  `pat${String(i + 1).padStart(2, "0")}.png`
-);
+      const dest = path.join(
+        base,
+        `pat${String(i + 1).padStart(2, "0")}.png`
+      );
 
       fs.renameSync(f.path, dest);
     });
@@ -288,7 +289,7 @@ app.get("/pedidos/:id/zip", auth, (req, res) => {
     return res.status(404).json({ ok: false, error: "Pedido não encontrado" });
 
   res.setHeader("Content-Type", "application/zip");
-  res.setHeader("Content-Disposition", attachment; filename="${req.params.id}.zip");
+  res.setHeader("Content-Disposition", `attachment; filename="${req.params.id}.zip"`);
 
   const archive = archiver("zip", { zlib: { level: 9 } });
 
