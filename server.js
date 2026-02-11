@@ -195,7 +195,6 @@ app.post(
     const base = path.join(PEDIDOS_DIR, whatsapp, mesAtual, id);
 
     ensureDir(base);
-    ensureDir(path.join(base, "patrocinadores"));
 
     const files = req.files || {};
 
@@ -213,11 +212,11 @@ app.post(
     const pats = files["patrocinadores"] || [];
 
     pats.forEach((f, i) => {
-      const dest = path.join(
-        base,
-        "patrocinadores",
-        pat${String(i + 1).padStart(2, "0")}.png
-      );
+     const dest = path.join(
+  base,
+  `pat${String(i + 1).padStart(2, "0")}.png`
+);
+
       fs.renameSync(f.path, dest);
     });
 
