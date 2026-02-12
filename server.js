@@ -151,17 +151,14 @@ app.get("/me", auth, (req, res) => {
   });
 });
 
-// Criar pedido
-app.post(
-  "/pedidos",
-  auth,
-  upload.fields([
-    { name: "escudo1", maxCount: 1 },
-    { name: "escudo2", maxCount: 1 },
-    { name: "mascote", maxCount: 1 },
-    { name: "patrocinadores", maxCount: 20 }
-  ]),
-  (req, res) => {
+/**
+ * ✅ ÚNICA EVOLUÇÃO DO SISTEMA:
+ * Criamos um "handler" reutilizável que grava um campo fixo "categoria"
+ * (pedido/mascote/contratacao) no pedido.json.
+ * Assim o AHK identifica o tipo sem depender do que o cliente digita.
+ */
+function criarPedidoHandler(categoria) {
+  return (req, res) => {
 
     const whatsapp = req.user.whatsapp;
     const clientes = readClientes();
@@ -184,7 +181,7 @@ app.post(
 
     const { rodada, data, hora, arena, mascote_tipo } = req.body || {};
 
-    // ✅ ÚNICA MUDANÇA: hora e arena NÃO são mais obrigatórios
+    // ✅ Mantido: hora e arena NÃO são obrigatórios
     if (!rodada || !data) {
       return res.status(400).json({
         ok: false,
@@ -217,11 +214,13 @@ app.post(
         base,
         `pat${String(i + 1).padStart(2, "0")}.png`
       );
-
       fs.renameSync(f.path, dest);
     });
 
     const pedido = {
+      // ✅ NOVO: categoria travada pelo backend (não editável pelo cliente)
+      categoria, // "pedido" | "mascote" | "contratacao"
+
       id,
       whatsapp,
       mes: mesAtual,
@@ -250,7 +249,47 @@ app.post(
     writeClientes(clientes);
 
     return res.json({ ok: true, pedido_id: id });
-  }
+  };
+}
+
+// ===== CRIAR PEDIDO (3 ROTAS) =====
+// Mantém a rota atual (compatibilidade): categoria "pedido"
+app.post(
+  "/pedidos",
+  auth,
+  upload.fields([
+    { name: "escudo1", maxCount: 1 },
+    { name: "escudo2", maxCount: 1 },
+    { name: "mascote", maxCount: 1 },
+    { name: "patrocinadores", maxCount: 20 }
+  ]),
+  criarPedidoHandler("pedido")
+);
+
+// NOVO: criar mascote (categoria travada)
+app.post(
+  "/mascotes",
+  auth,
+  upload.fields([
+    { name: "escudo1", maxCount: 1 },
+    { name: "escudo2", maxCount: 1 },
+    { name: "mascote", maxCount: 1 },
+    { name: "patrocinadores", maxCount: 20 }
+  ]),
+  criarPedidoHandler("mascote")
+);
+
+// NOVO: contratação (categoria travada)
+app.post(
+  "/contratacao",
+  auth,
+  upload.fields([
+    { name: "escudo1", maxCount: 1 },
+    { name: "escudo2", maxCount: 1 },
+    { name: "mascote", maxCount: 1 },
+    { name: "patrocinadores", maxCount: 20 }
+  ]),
+  criarPedidoHandler("contratacao")
 );
 
 // Listar novos
