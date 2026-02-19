@@ -179,7 +179,7 @@ function criarPedidoHandler(categoria) {
       return res.status(403).json({ ok: false, error: `Limite mensal atingido (${c.plano})` });
     }
 
-    const { rodada, data, hora, arena, mascote_tipo } = req.body || {};
+const { rodada, data, hora, arena, mascote_tipo, flyer_tipo } = req.body || {};
 
     // ✅ Mantido: hora e arena NÃO são obrigatórios
     if (!rodada || !data) {
@@ -219,7 +219,10 @@ function criarPedidoHandler(categoria) {
 
     const pedido = {
       // ✅ NOVO: categoria travada pelo backend (não editável pelo cliente)
-      categoria, // "pedido" | "mascote" | "contratacao"
+      categoria: categoria === "pedido" && flyer_tipo
+  ? flyer_tipo.replace("zz1","").toUpperCase()
+  : categoria,
+, // "pedido" | "mascote" | "contratacao"
 
       id,
       whatsapp,
