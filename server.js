@@ -217,25 +217,24 @@ const { rodada, data, hora, arena, mascote_tipo, flyer_tipo } = req.body || {};
       fs.renameSync(f.path, dest);
     });
 
-    const pedido = {
-      // ✅ NOVO: categoria travada pelo backend (não editável pelo cliente)
-      categoria: categoria === "pedido" && flyer_tipo
-  ? flyer_tipo.replace("zz1","").toUpperCase()
-  : categoria,
-, // "pedido" | "mascote" | "contratacao"
+  const pedido = {
+  categoria: (categoria === "pedido" && flyer_tipo)
+    ? flyer_tipo.replace("zz1","").toUpperCase()
+    : categoria,
 
-      id,
-      whatsapp,
-      mes: mesAtual,
-      rodada,
-      data,
-      hora,
-      arena,
-      mascote_tipo: mascote_tipo || "",
-      patrocinadores_qtd: pats.length,
-      status: "novo",
-      criado_em: new Date().toISOString()
-    };
+  id,
+  whatsapp,
+  mes: mesAtual,
+  rodada,
+  data,
+  hora,
+  arena,
+  mascote_tipo: mascote_tipo || "",
+  patrocinadores_qtd: pats.length,
+  status: "novo",
+  criado_em: new Date().toISOString()
+};
+
 
     fs.writeFileSync(
       path.join(base, "pedido.json"),
