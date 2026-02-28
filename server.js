@@ -17,7 +17,7 @@ const isRender = process.env.RENDER || process.env.NODE_ENV === "production";
 
 const DATA_DIR = isRender
   ? "/var/data"
-  : path.join(__dirname, "data");const PEDIDOS_DIR = path.join(DATA_DIR, "pedidos");
+  : path.join(__dirname, "dados");const PEDIDOS_DIR = path.join(DATA_DIR, "pedidos");
 const CLIENTES_FILE = path.join(DATA_DIR, "clientes.json");
 
 // CORS: permite seu site chamar a API
