@@ -379,7 +379,7 @@ app.get("/pedidos/:id/info", auth, (req, res) => {
 });
 
 // ===== PREVIEW DA IMAGEM FINAL =====
-app.get("/pedidos/:id/preview", auth, (req, res) => {
+app.get("/pedidos/:id/preview", (req, res) => {
   const whatsapp = req.user.whatsapp;
   const base = getPedidoBase(whatsapp, req.params.id);
 
