@@ -158,7 +158,7 @@ app.get("/me", auth, (req, res) => {
 /**
  * ✅ ÚNICA EVOLUÇÃO DO SISTEMA:
  * Criamos um "handler" reutilizável que grava um campo fixo "categoria"
- * (pedido/mascote/contratacao) no pedido.json.
+ * (pedido/mascote/resultado_do_jogo) no pedido.json.
  * Assim o AHK identifica o tipo sem depender do que o cliente digita.
  */
 function criarPedidoHandler(categoria) {
@@ -286,8 +286,9 @@ app.post(
 );
 
 // NOVO: contratação (categoria travada)
+// NOVO: resultado do jogo (categoria travada)
 app.post(
-  "/contratacao",
+  "/resultado_do_jogo",
   auth,
   upload.fields([
     { name: "escudo1", maxCount: 1 },
@@ -295,7 +296,7 @@ app.post(
     { name: "mascote", maxCount: 1 },
     { name: "patrocinadores", maxCount: 20 }
   ]),
-  criarPedidoHandler("contratacao")
+  criarPedidoHandler("resultado")
 );
 
 // Listar novos
