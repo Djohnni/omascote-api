@@ -6,7 +6,6 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const multer = require("multer");
 const archiver = require("archiver");
-const uploadResultado = multer({ storage });
 
 const app = express();
 
@@ -115,6 +114,7 @@ const storage = multer.diskStorage({
 });
 
 const upload = multer({ storage });
+const uploadResultado = multer({ storage });
 
 // ===== ROTAS =====
 
@@ -184,9 +184,7 @@ app.get("/me", auth, (req, res) => {
   });
 });
 
-/**
- * Cria pedido
- */
+// ===== CRIA PEDIDO =====
 function criarPedidoHandler(categoria) {
   return (req, res) => {
     const whatsapp = req.user.whatsapp;
@@ -318,7 +316,7 @@ app.post(
   criarPedidoHandler("resultado")
 );
 
-// Listar novos
+// ===== LISTAR NOVOS =====
 app.get("/pedidos/novos", auth, (req, res) => {
   const whatsapp = req.user.whatsapp;
   const mesAtual = nowYYYYMM();
@@ -342,7 +340,7 @@ app.get("/pedidos/novos", auth, (req, res) => {
   return res.json({ ok: true, pedidos });
 });
 
-// Info do pedido
+// ===== INFO DO PEDIDO =====
 app.get("/pedidos/:id/info", auth, (req, res) => {
   const whatsapp = req.user.whatsapp;
   const base = getPedidoBase(whatsapp, req.params.id);
@@ -380,7 +378,7 @@ app.get("/pedidos/:id/info", auth, (req, res) => {
   });
 });
 
-// Preview da imagem final
+// ===== PREVIEW DA IMAGEM FINAL =====
 app.get("/pedidos/:id/preview", auth, (req, res) => {
   const whatsapp = req.user.whatsapp;
   const base = getPedidoBase(whatsapp, req.params.id);
@@ -398,7 +396,7 @@ app.get("/pedidos/:id/preview", auth, (req, res) => {
   return res.sendFile(resultadoFinalPath);
 });
 
-// Baixar zip
+// ===== BAIXAR ZIP =====
 app.get("/pedidos/:id/zip", auth, (req, res) => {
   const whatsapp = req.user.whatsapp;
   const base = getPedidoBase(whatsapp, req.params.id);
@@ -419,7 +417,7 @@ app.get("/pedidos/:id/zip", auth, (req, res) => {
   archive.finalize();
 });
 
-// Atualizar status
+// ===== ATUALIZAR STATUS =====
 app.post("/pedidos/:id/status", auth, (req, res) => {
   const whatsapp = req.user.whatsapp;
   const base = getPedidoBase(whatsapp, req.params.id);
@@ -438,60 +436,17 @@ app.post("/pedidos/:id/status", auth, (req, res) => {
 
   return res.json({ ok: true });
 });
-// Info do pedido + se imagem já ficou pronta
-app.get("/pedidos/:id/info", auth, (req, res) => {
-  const whatsapp = req.user.whatsapp;
-  const mesAtual = nowYYYYMM();
-  const base = path.join(PEDIDOS_DIR, whatsapp, mesAtual, req.params.id);
 
-  if (!fs.existsSync(base)) {
-    return res.status(404).json({ ok: false, error: "Pedido não encontrado" });
-  }
-
-  const statusPath = path.join(base, "status.txt");
-  const previewPath = path.join(base, "resultado_final.png");
-
-  let status = "novo";
-  if (fs.existsSync(statusPath)) {
-    status = fs.readFileSync(statusPath, "utf8").trim();
-  }
-
-  return res.json({
-    ok: true,
-    pedido_id: req.params.id,
-    status,
-    imagem_pronta: fs.existsSync(previewPath)
-  });
-});
-
-// Preview / download da imagem pronta
-app.get("/pedidos/:id/preview", auth, (req, res) => {
-  const whatsapp = req.user.whatsapp;
-  const mesAtual = nowYYYYMM();
-  const base = path.join(PEDIDOS_DIR, whatsapp, mesAtual, req.params.id);
-
-  if (!fs.existsSync(base)) {
-    return res.status(404).json({ ok: false, error: "Pedido não encontrado" });
-  }
-
-  const previewPath = path.join(base, "resultado_final.png");
-
-  if (!fs.existsSync(previewPath)) {
-    return res.status(404).json({ ok: false, error: "Imagem ainda não ficou pronta" });
-  }
-
-  return res.sendFile(previewPath);
-});
+// ===== UPLOAD DO RESULTADO FINAL =====
 app.post(
   "/pedidos/:id/upload-resultado",
   auth,
   uploadResultado.single("resultado"),
   (req, res) => {
     const whatsapp = req.user.whatsapp;
-    const mesAtual = nowYYYYMM();
-    const base = path.join(PEDIDOS_DIR, whatsapp, mesAtual, req.params.id);
+    const base = getPedidoBase(whatsapp, req.params.id);
 
-    if (!fs.existsSync(base)) {
+    if (!base) {
       return res.status(404).json({ ok: false, error: "Pedido não encontrado" });
     }
 
@@ -519,6 +474,7 @@ app.post(
     }
   }
 );
+
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
