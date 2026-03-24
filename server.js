@@ -437,7 +437,50 @@ app.post("/pedidos/:id/status", auth, (req, res) => {
 
   return res.json({ ok: true });
 });
+// Info do pedido + se imagem já ficou pronta
+app.get("/pedidos/:id/info", auth, (req, res) => {
+  const whatsapp = req.user.whatsapp;
+  const mesAtual = nowYYYYMM();
+  const base = path.join(PEDIDOS_DIR, whatsapp, mesAtual, req.params.id);
 
+  if (!fs.existsSync(base)) {
+    return res.status(404).json({ ok: false, error: "Pedido não encontrado" });
+  }
+
+  const statusPath = path.join(base, "status.txt");
+  const previewPath = path.join(base, "resultado_final.png");
+
+  let status = "novo";
+  if (fs.existsSync(statusPath)) {
+    status = fs.readFileSync(statusPath, "utf8").trim();
+  }
+
+  return res.json({
+    ok: true,
+    pedido_id: req.params.id,
+    status,
+    imagem_pronta: fs.existsSync(previewPath)
+  });
+});
+
+// Preview / download da imagem pronta
+app.get("/pedidos/:id/preview", auth, (req, res) => {
+  const whatsapp = req.user.whatsapp;
+  const mesAtual = nowYYYYMM();
+  const base = path.join(PEDIDOS_DIR, whatsapp, mesAtual, req.params.id);
+
+  if (!fs.existsSync(base)) {
+    return res.status(404).json({ ok: false, error: "Pedido não encontrado" });
+  }
+
+  const previewPath = path.join(base, "resultado_final.png");
+
+  if (!fs.existsSync(previewPath)) {
+    return res.status(404).json({ ok: false, error: "Imagem ainda não ficou pronta" });
+  }
+
+  return res.sendFile(previewPath);
+});
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
