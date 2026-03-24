@@ -12,12 +12,15 @@ const app = express();
 // ===== CONFIG BÁSICA =====
 const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || "TROQUE_ISSO_AGORA";
+
 // ===== DATA STORAGE (RENDER DISK) =====
 const isRender = process.env.RENDER || process.env.NODE_ENV === "production";
 
 const DATA_DIR = isRender
   ? "/var/data"
-  : path.join(__dirname, "dados");const PEDIDOS_DIR = path.join(DATA_DIR, "pedidos");
+  : path.join(__dirname, "dados");
+
+const PEDIDOS_DIR = path.join(DATA_DIR, "pedidos");
 const CLIENTES_FILE = path.join(DATA_DIR, "clientes.json");
 
 // CORS: permite seu site chamar a API
@@ -37,8 +40,9 @@ ensureDir(DATA_DIR);
 ensureDir(PEDIDOS_DIR);
 ensureDir(path.join(DATA_DIR, "tmp_uploads"));
 
-if (!fs.existsSync(CLIENTES_FILE))
+if (!fs.existsSync(CLIENTES_FILE)) {
   fs.writeFileSync(CLIENTES_FILE, JSON.stringify({}, null, 2), "utf8");
+}
 
 // ===== HELPERS =====
 function readClientes() {
@@ -67,10 +71,28 @@ function newPedidoId() {
   return `${y}${mo}${da}_${hh}${mm}${ss}`;
 }
 
+function getPedidoBase(whatsapp, pedidoId) {
+  const pastaWhatsapp = path.join(PEDIDOS_DIR, whatsapp);
+
+  if (!fs.existsSync(pastaWhatsapp)) return null;
+
+  const meses = fs.readdirSync(pastaWhatsapp);
+
+  for (const mes of meses) {
+    const base = path.join(pastaWhatsapp, mes, pedidoId);
+    if (fs.existsSync(base)) return base;
+  }
+
+  return null;
+}
+
 function auth(req, res, next) {
   const h = req.headers.authorization || "";
   const token = h.startsWith("Bearer ") ? h.slice(7) : "";
-  if (!token) return res.status(401).json({ ok: false, error: "Sem token" });
+
+  if (!token) {
+    return res.status(401).json({ ok: false, error: "Sem token" });
+  }
 
   try {
     req.user = jwt.verify(token, JWT_SECRET);
@@ -96,28 +118,33 @@ const upload = multer({ storage });
 // ===== ROTAS =====
 
 // Health check
-app.get("/", (req, res) =>
-  res.json({ ok: true, msg: "omascote-api online" })
-);
+app.get("/", (req, res) => {
+  res.json({ ok: true, msg: "omascote-api online" });
+});
 
 // Login
 app.post("/auth/login", (req, res) => {
   const { whatsapp, senha } = req.body || {};
-  if (!whatsapp || !senha)
+
+  if (!whatsapp || !senha) {
     return res.status(400).json({ ok: false, error: "whatsapp e senha obrigatórios" });
+  }
 
   const clientes = readClientes();
   const c = clientes[whatsapp];
 
-  if (!c)
+  if (!c) {
     return res.status(401).json({ ok: false, error: "Cliente não encontrado" });
+  }
 
-  if (!c.ativo)
+  if (!c.ativo) {
     return res.status(403).json({ ok: false, error: "Mensalidade inativa" });
+  }
 
   const ok = bcrypt.compareSync(senha, c.senha_hash);
-  if (!ok)
+  if (!ok) {
     return res.status(401).json({ ok: false, error: "Senha incorreta" });
+  }
 
   const mesAtual = nowYYYYMM();
   if (c.ciclo_mes !== mesAtual) {
@@ -143,8 +170,9 @@ app.get("/me", auth, (req, res) => {
   const clientes = readClientes();
   const c = clientes[req.user.whatsapp];
 
-  if (!c)
+  if (!c) {
     return res.status(404).json({ ok: false, error: "Cliente não encontrado" });
+  }
 
   return res.json({
     ok: true,
@@ -156,20 +184,17 @@ app.get("/me", auth, (req, res) => {
 });
 
 /**
- * ✅ ÚNICA EVOLUÇÃO DO SISTEMA:
- * Criamos um "handler" reutilizável que grava um campo fixo "categoria"
- * (pedido/mascote/resultado_do_jogo) no pedido.json.
- * Assim o AHK identifica o tipo sem depender do que o cliente digita.
+ * Cria pedido
  */
 function criarPedidoHandler(categoria) {
   return (req, res) => {
-
     const whatsapp = req.user.whatsapp;
     const clientes = readClientes();
     const c = clientes[whatsapp];
 
-    if (!c || !c.ativo)
+    if (!c || !c.ativo) {
       return res.status(403).json({ ok: false, error: "Mensalidade inativa" });
+    }
 
     const mesAtual = nowYYYYMM();
     if (c.ciclo_mes !== mesAtual) {
@@ -180,12 +205,14 @@ function criarPedidoHandler(categoria) {
     if (c.usados_no_ciclo >= c.plano) {
       clientes[whatsapp] = c;
       writeClientes(clientes);
-      return res.status(403).json({ ok: false, error: `Limite mensal atingido (${c.plano})` });
+      return res.status(403).json({
+        ok: false,
+        error: `Limite mensal atingido (${c.plano})`
+      });
     }
 
-const { rodada, data, hora, arena, mascote_tipo, flyer_tipo } = req.body || {};
+    const { rodada, data, hora, arena, mascote_tipo, flyer_tipo } = req.body || {};
 
-    // ✅ Mantido: hora e arena NÃO são obrigatórios
     if (!rodada || !data) {
       return res.status(400).json({
         ok: false,
@@ -214,31 +241,26 @@ const { rodada, data, hora, arena, mascote_tipo, flyer_tipo } = req.body || {};
     const pats = files["patrocinadores"] || [];
 
     pats.forEach((f, i) => {
-      const dest = path.join(
-        base,
-        `pat${String(i + 1).padStart(2, "0")}.png`
-      );
+      const dest = path.join(base, `pat${String(i + 1).padStart(2, "0")}.png`);
       fs.renameSync(f.path, dest);
     });
 
-  const pedido = {
-  categoria: (categoria === "pedido" && flyer_tipo)
-    ? flyer_tipo.replace("zz1","").toUpperCase()
-    : categoria,
-
-  id,
-  whatsapp,
-  mes: mesAtual,
-  rodada,
-  data,
-  hora,
-  arena,
-  mascote_tipo: mascote_tipo || "",
-  patrocinadores_qtd: pats.length,
-  status: "novo",
-  criado_em: new Date().toISOString()
-};
-
+    const pedido = {
+      categoria: (categoria === "pedido" && flyer_tipo)
+        ? flyer_tipo.replace("zz1", "").toUpperCase()
+        : categoria,
+      id,
+      whatsapp,
+      mes: mesAtual,
+      rodada,
+      data,
+      hora,
+      arena,
+      mascote_tipo: mascote_tipo || "",
+      patrocinadores_qtd: pats.length,
+      status: "novo",
+      criado_em: new Date().toISOString()
+    };
 
     fs.writeFileSync(
       path.join(base, "pedido.json"),
@@ -258,8 +280,7 @@ const { rodada, data, hora, arena, mascote_tipo, flyer_tipo } = req.body || {};
   };
 }
 
-// ===== CRIAR PEDIDO (3 ROTAS) =====
-// Mantém a rota atual (compatibilidade): categoria "pedido"
+// ===== CRIAR PEDIDO =====
 app.post(
   "/pedidos",
   auth,
@@ -272,7 +293,6 @@ app.post(
   criarPedidoHandler("pedido")
 );
 
-// NOVO: criar mascote (categoria travada)
 app.post(
   "/mascotes",
   auth,
@@ -285,8 +305,6 @@ app.post(
   criarPedidoHandler("mascote")
 );
 
-// NOVO: contratação (categoria travada)
-// NOVO: resultado do jogo (categoria travada)
 app.post(
   "/resultado_do_jogo",
   auth,
@@ -301,13 +319,13 @@ app.post(
 
 // Listar novos
 app.get("/pedidos/novos", auth, (req, res) => {
-
   const whatsapp = req.user.whatsapp;
   const mesAtual = nowYYYYMM();
   const dir = path.join(PEDIDOS_DIR, whatsapp, mesAtual);
 
-  if (!fs.existsSync(dir))
+  if (!fs.existsSync(dir)) {
     return res.json({ ok: true, pedidos: [] });
+  }
 
   const pedidos = [];
 
@@ -315,8 +333,7 @@ app.get("/pedidos/novos", auth, (req, res) => {
     const pdir = path.join(dir, id);
     const st = path.join(pdir, "status.txt");
 
-    if (fs.existsSync(st) &&
-        fs.readFileSync(st, "utf8").trim() === "novo") {
+    if (fs.existsSync(st) && fs.readFileSync(st, "utf8").trim() === "novo") {
       pedidos.push({ id });
     }
   }
@@ -324,15 +341,70 @@ app.get("/pedidos/novos", auth, (req, res) => {
   return res.json({ ok: true, pedidos });
 });
 
+// Info do pedido
+app.get("/pedidos/:id/info", auth, (req, res) => {
+  const whatsapp = req.user.whatsapp;
+  const base = getPedidoBase(whatsapp, req.params.id);
+
+  if (!base) {
+    return res.status(404).json({ ok: false, error: "Pedido não encontrado" });
+  }
+
+  const pedidoJsonPath = path.join(base, "pedido.json");
+  const statusPath = path.join(base, "status.txt");
+  const resultadoFinalPath = path.join(base, "resultado_final.png");
+
+  let pedido = {};
+  if (fs.existsSync(pedidoJsonPath)) {
+    try {
+      pedido = JSON.parse(fs.readFileSync(pedidoJsonPath, "utf8"));
+    } catch {}
+  }
+
+  const status = fs.existsSync(statusPath)
+    ? fs.readFileSync(statusPath, "utf8").trim()
+    : "novo";
+
+  const imagem_pronta = fs.existsSync(resultadoFinalPath);
+
+  return res.json({
+    ok: true,
+    id: req.params.id,
+    status,
+    categoria: pedido.categoria || "",
+    imagem_pronta,
+    preview_url: imagem_pronta
+      ? `${req.protocol}://${req.get("host")}/pedidos/${req.params.id}/preview`
+      : null
+  });
+});
+
+// Preview da imagem final
+app.get("/pedidos/:id/preview", auth, (req, res) => {
+  const whatsapp = req.user.whatsapp;
+  const base = getPedidoBase(whatsapp, req.params.id);
+
+  if (!base) {
+    return res.status(404).json({ ok: false, error: "Pedido não encontrado" });
+  }
+
+  const resultadoFinalPath = path.join(base, "resultado_final.png");
+
+  if (!fs.existsSync(resultadoFinalPath)) {
+    return res.status(404).json({ ok: false, error: "Imagem final ainda não disponível" });
+  }
+
+  return res.sendFile(resultadoFinalPath);
+});
+
 // Baixar zip
 app.get("/pedidos/:id/zip", auth, (req, res) => {
-
   const whatsapp = req.user.whatsapp;
-  const mesAtual = nowYYYYMM();
-  const base = path.join(PEDIDOS_DIR, whatsapp, mesAtual, req.params.id);
+  const base = getPedidoBase(whatsapp, req.params.id);
 
-  if (!fs.existsSync(base))
+  if (!base) {
     return res.status(404).json({ ok: false, error: "Pedido não encontrado" });
+  }
 
   res.setHeader("Content-Type", "application/zip");
   res.setHeader("Content-Disposition", `attachment; filename="${req.params.id}.zip"`);
@@ -348,13 +420,12 @@ app.get("/pedidos/:id/zip", auth, (req, res) => {
 
 // Atualizar status
 app.post("/pedidos/:id/status", auth, (req, res) => {
-
   const whatsapp = req.user.whatsapp;
-  const mesAtual = nowYYYYMM();
-  const base = path.join(PEDIDOS_DIR, whatsapp, mesAtual, req.params.id);
+  const base = getPedidoBase(whatsapp, req.params.id);
 
-  if (!fs.existsSync(base))
+  if (!base) {
     return res.status(404).json({ ok: false, error: "Pedido não encontrado" });
+  }
 
   const { status } = req.body || {};
 
@@ -367,6 +438,6 @@ app.post("/pedidos/:id/status", auth, (req, res) => {
   return res.json({ ok: true });
 });
 
-app.listen(PORT, () =>
-  console.log("API rodando na porta", PORT)
-);
+app.listen(PORT, () => {
+  console.log("API rodando na porta", PORT);
+});
