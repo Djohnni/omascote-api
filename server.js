@@ -6,6 +6,7 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const multer = require("multer");
 const archiver = require("archiver");
+const uploadResultado = multer({ storage });
 
 const app = express();
 
@@ -481,6 +482,43 @@ app.get("/pedidos/:id/preview", auth, (req, res) => {
 
   return res.sendFile(previewPath);
 });
+app.post(
+  "/pedidos/:id/upload-resultado",
+  auth,
+  uploadResultado.single("resultado"),
+  (req, res) => {
+    const whatsapp = req.user.whatsapp;
+    const mesAtual = nowYYYYMM();
+    const base = path.join(PEDIDOS_DIR, whatsapp, mesAtual, req.params.id);
+
+    if (!fs.existsSync(base)) {
+      return res.status(404).json({ ok: false, error: "Pedido não encontrado" });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({ ok: false, error: "Arquivo resultado não enviado" });
+    }
+
+    const dest = path.join(base, "resultado_final.png");
+
+    try {
+      if (fs.existsSync(dest)) fs.unlinkSync(dest);
+      fs.renameSync(req.file.path, dest);
+
+      fs.writeFileSync(path.join(base, "status.txt"), "pronto", "utf8");
+
+      return res.json({
+        ok: true,
+        arquivo: "resultado_final.png"
+      });
+    } catch (e) {
+      return res.status(500).json({
+        ok: false,
+        error: "Falha ao salvar resultado"
+      });
+    }
+  }
+);
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
