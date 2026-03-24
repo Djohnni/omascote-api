@@ -380,20 +380,41 @@ app.get("/pedidos/:id/info", auth, (req, res) => {
 
 // ===== PREVIEW DA IMAGEM FINAL =====
 app.get("/pedidos/:id/preview", (req, res) => {
-  const whatsapp = req.user.whatsapp;
-  const base = getPedidoBase(whatsapp, req.params.id);
+  const pedidoId = req.params.id;
+
+  function procurarPedidoPorId() {
+    if (!fs.existsSync(PEDIDOS_DIR)) return null;
+
+    const whatsapps = fs.readdirSync(PEDIDOS_DIR);
+
+    for (const whatsapp of whatsapps) {
+      const pastaWhatsapp = path.join(PEDIDOS_DIR, whatsapp);
+      if (!fs.statSync(pastaWhatsapp).isDirectory()) continue;
+
+      const meses = fs.readdirSync(pastaWhatsapp);
+
+      for (const mes of meses) {
+        const base = path.join(pastaWhatsapp, mes, pedidoId);
+        if (fs.existsSync(base)) return base;
+      }
+    }
+
+    return null;
+  }
+
+  const base = procurarPedidoPorId();
 
   if (!base) {
     return res.status(404).json({ ok: false, error: "Pedido não encontrado" });
   }
 
-  const resultadoFinalPath = path.join(base, "resultado_final.png");
+  const previewPath = path.join(base, "resultado_final.png");
 
-  if (!fs.existsSync(resultadoFinalPath)) {
-    return res.status(404).json({ ok: false, error: "Imagem final ainda não disponível" });
+  if (!fs.existsSync(previewPath)) {
+    return res.status(404).json({ ok: false, error: "Imagem ainda não ficou pronta" });
   }
 
-  return res.sendFile(resultadoFinalPath);
+  return res.sendFile(previewPath);
 });
 
 // ===== BAIXAR ZIP =====
