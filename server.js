@@ -256,10 +256,10 @@ function criarPedidoHandler(categoria) {
     });
 
    const pedido = {
-      time_principal: timePrincipal || "",
-      gols_time_principal: Number(golsTime) || 0,
-      gols_adversario: Number(golsAdv) || 0,
-      time_adversario: timeAdv || "",
+      time_principal: time_principal || "",
+      gols_time_principal: Number(gols_time_principal) || 0,
+      gols_adversario: Number(gols_adversario) || 0,
+      time_adversario: time_adversario || "",
     
       artilheiros: artilheiros ? JSON.parse(artilheiros) : [],
     
