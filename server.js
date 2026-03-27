@@ -210,8 +210,19 @@ function criarPedidoHandler(categoria) {
       });
     }
 
-    const { rodada, data, hora, arena, mascote_tipo, flyer_tipo } = req.body || {};
-
+    const {
+  rodada,
+  data,
+  hora,
+  arena,
+  mascote_tipo,
+  flyer_tipo,
+  artilheiros,
+  time_principal,
+  gols_time_principal,
+  gols_adversario,
+  time_adversario
+} = req.body || {};
     if (!rodada || !data) {
       return res.status(400).json({
         ok: false,
@@ -244,7 +255,14 @@ function criarPedidoHandler(categoria) {
       fs.renameSync(f.path, dest);
     });
 
-    const pedido = {
+   const pedido = {
+      time_principal: timePrincipal || "",
+      gols_time_principal: Number(golsTime) || 0,
+      gols_adversario: Number(golsAdv) || 0,
+      time_adversario: timeAdv || "",
+    
+      artilheiros: artilheiros ? JSON.parse(artilheiros) : [],
+    
       categoria: (categoria === "pedido" && flyer_tipo)
         ? flyer_tipo.replace("zz1", "").toUpperCase()
         : categoria,
