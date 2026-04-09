@@ -321,9 +321,7 @@ function criarPedidoHandler(categoria) {
     
       artilheiros: artilheiros ? JSON.parse(artilheiros) : [],
     
-      categoria: (categoria === "pedido" && flyer_tipo)
-        ? flyer_tipo.replace("zz1", "").toUpperCase()
-        : categoria,
+      categoria: categoria,
       id,
       whatsapp,
       mes: mesAtual,
@@ -367,7 +365,16 @@ app.post(
     { name: "mascote", maxCount: 1 },
     { name: "patrocinadores", maxCount: 20 }
   ]),
-  criarPedidoHandler("pedido")
+  (req, res) => {
+    const flyer_tipo = (req.body?.flyer_tipo || "").toLowerCase();
+
+    if (flyer_tipo === "zz1fs") return criarPedidoHandler("escalacao")(req, res);
+    if (flyer_tipo === "zz1fm") return criarPedidoHandler("contratacao")(req, res);
+    if (flyer_tipo === "zz1ft") return criarPedidoHandler("proximo_jogo")(req, res);
+    if (flyer_tipo === "zz1fj") return criarPedidoHandler("patrocinador")(req, res);
+
+    return criarPedidoHandler("pedido")(req, res);
+  }
 );
 
 app.post(
@@ -625,5 +632,6 @@ app.post(
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
 
