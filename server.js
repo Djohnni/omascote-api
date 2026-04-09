@@ -446,6 +446,26 @@ app.get("/meus-pedidos", auth, (req, res) => {
   return res.json({ ok: true, pedidos });
 });
 
+app.get("/pedidos/:id/download-resultado", auth, (req, res) => {
+  const whatsapp = req.user.whatsapp;
+  const base = getPedidoBase(whatsapp, req.params.id);
+
+  if (!base) {
+    return res.status(404).json({ ok: false, error: "Pedido não encontrado" });
+  }
+
+  const arquivo = path.join(base, "resultado_final.png");
+
+  if (!fs.existsSync(arquivo)) {
+    return res.status(404).json({ ok: false, error: "Resultado final não encontrado" });
+  }
+
+  res.setHeader("Content-Type", "image/png");
+  res.setHeader("Content-Disposition", `attachment; filename="${req.params.id}_resultado.png"`);
+
+  return res.sendFile(arquivo);
+});
+
 // ===== INFO DO PEDIDO =====
 app.get("/pedidos/:id/info", auth, (req, res) => {
   const whatsapp = req.user.whatsapp;
@@ -605,4 +625,5 @@ app.post(
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
