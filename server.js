@@ -86,6 +86,64 @@ function getPedidoBase(whatsapp, pedidoId) {
   return null;
 }
 
+function safeReadJson(filePath) {
+  try {
+    return JSON.parse(fs.readFileSync(filePath, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function listPedidoBasesByWhatsapp(whatsapp) {
+  const pastaWhatsapp = path.join(PEDIDOS_DIR, whatsapp);
+
+  if (!fs.existsSync(pastaWhatsapp)) return [];
+
+  const meses = fs.readdirSync(pastaWhatsapp);
+  const pedidos = [];
+
+  for (const mes of meses) {
+    const pastaMes = path.join(pastaWhatsapp, mes);
+    if (!fs.existsSync(pastaMes) || !fs.statSync(pastaMes).isDirectory()) continue;
+
+    const ids = fs.readdirSync(pastaMes);
+
+    for (const id of ids) {
+      const base = path.join(pastaMes, id);
+      if (!fs.existsSync(base) || !fs.statSync(base).isDirectory()) continue;
+
+      const pedidoPath = path.join(base, "pedido.json");
+      const pedido = safeReadJson(pedidoPath) || {};
+      const criadoEm = pedido.criado_em || new Date(fs.statSync(base).mtimeMs).toISOString();
+
+      pedidos.push({
+        id,
+        base,
+        mes,
+        pedido,
+        criado_em: criadoEm
+      });
+    }
+  }
+
+  pedidos.sort((a, b) => new Date(b.criado_em) - new Date(a.criado_em));
+  return pedidos;
+}
+
+function removeOldPedidos(whatsapp, maxKeep = 15) {
+  const pedidos = listPedidoBasesByWhatsapp(whatsapp);
+
+  if (pedidos.length <= maxKeep) return;
+
+  const excedentes = pedidos.slice(maxKeep);
+
+  for (const item of excedentes) {
+    try {
+      fs.rmSync(item.base, { recursive: true, force: true });
+    } catch {}
+  }
+}
+
 function auth(req, res, next) {
   const h = req.headers.authorization || "";
   const token = h.startsWith("Bearer ") ? h.slice(7) : "";
@@ -293,6 +351,8 @@ function criarPedidoHandler(categoria) {
     clientes[whatsapp] = c;
     writeClientes(clientes);
 
+    removeOldPedidos(whatsapp, 15);
+
     return res.json({ ok: true, pedido_id: id });
   };
 }
@@ -354,6 +414,34 @@ app.get("/pedidos/novos", auth, (req, res) => {
       pedidos.push({ id });
     }
   }
+
+  return res.json({ ok: true, pedidos });
+});
+
+app.get("/meus-pedidos", auth, (req, res) => {
+  const whatsapp = req.user.whatsapp;
+  const itens = listPedidoBasesByWhatsapp(whatsapp).slice(0, 15);
+
+  const pedidos = itens.map((item) => {
+    const statusPath = path.join(item.base, "status.txt");
+    const resultadoFinalPath = path.join(item.base, "resultado_final.png");
+    const status = fs.existsSync(statusPath)
+      ? fs.readFileSync(statusPath, "utf8").trim()
+      : (item.pedido.status || "novo");
+    const imagemPronta = fs.existsSync(resultadoFinalPath);
+
+    return {
+      id: item.id,
+      tipo: item.pedido.categoria || "",
+      status,
+      data: item.pedido.data || item.criado_em,
+      criado_em: item.criado_em,
+      imagem_url: imagemPronta
+        ? `${req.protocol}://${req.get("host")}/pedidos/${item.id}/preview`
+        : null,
+      imagem_pronta: imagemPronta
+    };
+  });
 
   return res.json({ ok: true, pedidos });
 });
@@ -517,3 +605,4 @@ app.post(
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
