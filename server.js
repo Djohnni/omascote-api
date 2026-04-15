@@ -321,6 +321,10 @@ function criarPedidoHandler(categoria) {
     
       artilheiros: artilheiros ? JSON.parse(artilheiros) : [],
     
+      escudo_principal: files["escudo1"]?.[0] ? "escudo1.png" : "",
+      escudo_adversario: files["escudo2"]?.[0] ? "escudo2.png" : "",
+      foto_jogo: files["mascote"]?.[0] ? "mascote.png" : "",
+    
       categoria: categoria,
       id,
       whatsapp,
@@ -632,6 +636,7 @@ app.post(
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
 
 
