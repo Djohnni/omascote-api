@@ -279,8 +279,7 @@ function criarPedidoHandler(categoria) {
   time_principal,
   gols_time_principal,
   gols_adversario,
-  time_adversario,
-  escudo_meu_time
+  time_adversario
 } = req.body || {};
     if (!rodada || !data) {
       return res.status(400).json({
@@ -324,7 +323,6 @@ function criarPedidoHandler(categoria) {
     
       escudo_principal: files["escudo1"]?.[0] ? "escudo1.png" : "",
       escudo_adversario: files["escudo2"]?.[0] ? "escudo2.png" : "",
-      escudo_meu_time: escudo_meu_time || "",
       foto_jogo: files["mascote"]?.[0] ? "mascote.png" : "",
     
       categoria: categoria,
@@ -638,7 +636,6 @@ app.post(
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
-
 
 
 
