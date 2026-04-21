@@ -276,6 +276,8 @@ function criarPedidoHandler(categoria) {
   mascote_tipo,
   flyer_tipo,
   artilheiros,
+  jogadores_json,
+  jogadores_texto,
   time_principal,
   gols_time_principal,
   gols_adversario,
@@ -320,6 +322,8 @@ function criarPedidoHandler(categoria) {
       time_adversario: time_adversario || "",
     
       artilheiros: artilheiros ? JSON.parse(artilheiros) : [],
+      jogadores: jogadores_json ? JSON.parse(jogadores_json) : [],
+      jogadores_texto: jogadores_texto || "",
     
       escudo_principal: files["escudo1"]?.[0] ? "escudo1.png" : "",
       escudo_adversario: files["escudo2"]?.[0] ? "escudo2.png" : "",
@@ -636,6 +640,7 @@ app.post(
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
 
 
