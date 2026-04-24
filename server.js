@@ -201,6 +201,8 @@ app.post("/auth/register", (req, res) => {
     nome_time,
     senha_hash,
     plano: 4,
+    saldo_mensal: 29.90,
+    saldo_extra: 0,
     usados_no_ciclo: 0,
     ciclo_mes: nowYYYYMM(),
     ativo: true
@@ -258,6 +260,9 @@ app.post("/auth/login", (req, res) => {
     token,
     nome_time: c.nome_time,
     plano: c.plano,
+    saldo_mensal: Number(c.saldo_mensal || 0),
+    saldo_extra: Number(c.saldo_extra || 0),
+    saldo: Number(c.saldo_mensal || 0) + Number(c.saldo_extra || 0),
     usados_no_ciclo: c.usados_no_ciclo
   });
 });
@@ -275,6 +280,9 @@ app.get("/me", auth, (req, res) => {
     ok: true,
     nome_time: c.nome_time,
     plano: c.plano,
+    saldo_mensal: Number(c.saldo_mensal || 0),
+    saldo_extra: Number(c.saldo_extra || 0),
+    saldo: Number(c.saldo_mensal || 0) + Number(c.saldo_extra || 0),
     usados_no_ciclo: c.usados_no_ciclo,
     ativo: c.ativo
   });
@@ -678,6 +686,7 @@ app.post(
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
 
 
