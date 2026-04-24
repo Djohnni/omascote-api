@@ -422,6 +422,7 @@ app.post(
   (req, res) => {
     const flyer_tipo = (req.body?.flyer_tipo || "").toLowerCase();
 
+    if (flyer_tipo === "escudo3d") return criarPedidoHandler("escudo3d")(req, res);
     if (flyer_tipo === "zz1fs") return criarPedidoHandler("escalacao")(req, res);
     if (flyer_tipo === "zz1fm") return criarPedidoHandler("contratacao")(req, res);
     if (flyer_tipo === "zz1ft") return criarPedidoHandler("proximo_jogo")(req, res);
@@ -686,6 +687,7 @@ app.post(
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
 
 
