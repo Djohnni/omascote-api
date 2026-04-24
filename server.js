@@ -182,7 +182,46 @@ app.get("/", (req, res) => {
 });
 
 // Login
+app.post("/auth/register", (req, res) => {
+  const { nome_time, whatsapp, senha } = req.body || {};
+
+  if (!nome_time || !whatsapp || !senha) {
+    return res.status(400).json({ ok: false, error: "nome_time, whatsapp e senha obrigatórios" });
+  }
+
+  const clientes = readClientes();
+
+  if (clientes[whatsapp]) {
+    return res.status(400).json({ ok: false, error: "Cliente já existe" });
+  }
+
+  const senha_hash = bcrypt.hashSync(senha, 8);
+
+  const novo = {
+    nome_time,
+    senha_hash,
+    plano: 4,
+    usados_no_ciclo: 0,
+    ciclo_mes: nowYYYYMM(),
+    ativo: true
+  };
+
+  clientes[whatsapp] = novo;
+  writeClientes(clientes);
+
+  const token = jwt.sign({ whatsapp }, JWT_SECRET, { expiresIn: "7d" });
+
+  return res.json({
+    ok: true,
+    token,
+    nome_time: novo.nome_time,
+    plano: novo.plano,
+    usados_no_ciclo: novo.usados_no_ciclo
+  });
+});
+
 app.post("/auth/login", (req, res) => {
+---
   const { whatsapp, senha } = req.body || {};
 
   if (!whatsapp || !senha) {
@@ -640,6 +679,7 @@ app.post(
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
 
 
