@@ -221,7 +221,6 @@ app.post("/auth/register", (req, res) => {
 });
 
 app.post("/auth/login", (req, res) => {
----
   const { whatsapp, senha } = req.body || {};
 
   if (!whatsapp || !senha) {
