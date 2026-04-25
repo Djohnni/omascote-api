@@ -22,6 +22,8 @@ const DATA_DIR = isRender
 
 const PEDIDOS_DIR = path.join(DATA_DIR, "pedidos");
 const CLIENTES_FILE = path.join(DATA_DIR, "clientes.json");
+const MP_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN || "";
+const MP_PROCESSADOS_FILE = path.join(DATA_DIR, "mp_processados.json");
 
 // CORS: permite seu site chamar a API
 app.use(cors({
@@ -44,6 +46,10 @@ if (!fs.existsSync(CLIENTES_FILE)) {
   fs.writeFileSync(CLIENTES_FILE, JSON.stringify({}, null, 2), "utf8");
 }
 
+if (!fs.existsSync(MP_PROCESSADOS_FILE)) {
+  fs.writeFileSync(MP_PROCESSADOS_FILE, JSON.stringify({}, null, 2), "utf8");
+}
+
 // ===== HELPERS =====
 function readClientes() {
   return JSON.parse(fs.readFileSync(CLIENTES_FILE, "utf8") || "{}");
@@ -51,6 +57,14 @@ function readClientes() {
 
 function writeClientes(obj) {
   fs.writeFileSync(CLIENTES_FILE, JSON.stringify(obj, null, 2), "utf8");
+}
+
+function readMpProcessados() {
+  return JSON.parse(fs.readFileSync(MP_PROCESSADOS_FILE, "utf8") || "{}");
+}
+
+function writeMpProcessados(obj) {
+  fs.writeFileSync(MP_PROCESSADOS_FILE, JSON.stringify(obj, null, 2), "utf8");
 }
 
 function nowYYYYMM() {
@@ -286,6 +300,139 @@ app.get("/me", auth, (req, res) => {
     usados_no_ciclo: c.usados_no_ciclo,
     ativo: c.ativo
   });
+});
+
+// ===== MERCADO PAGO =====
+app.post("/comprar-creditos", auth, async (req, res) => {
+  try {
+    if (!MP_ACCESS_TOKEN) {
+      return res.status(500).json({ ok: false, error: "MP_ACCESS_TOKEN não configurado" });
+    }
+
+    const { pacote } = req.body || {};
+    const whatsapp = req.user.whatsapp;
+
+    const pacotes = {
+      mensal_1990: { titulo: "Plano mensal IA4Tube", valor_pago: 19.90, credito: 29.90 },
+      saldo_2990: { titulo: "Créditos IA4Tube", valor_pago: 29.90, credito: 29.90 },
+      saldo_5000: { titulo: "Créditos IA4Tube", valor_pago: 50.00, credito: 50.00 }
+    };
+
+    const p = pacotes[pacote];
+
+    if (!p) {
+      return res.status(400).json({ ok: false, error: "Pacote inválido" });
+    }
+
+    const preference = {
+      items: [{
+        title: p.titulo,
+        quantity: 1,
+        currency_id: "BRL",
+        unit_price: Number(p.valor_pago)
+      }],
+      external_reference: `${whatsapp}|${pacote}|${Date.now()}`,
+      metadata: {
+        whatsapp,
+        pacote,
+        credito: Number(p.credito)
+      },
+      back_urls: {
+        success: "https://omascote.com.br/app.html",
+        failure: "https://omascote.com.br/app.html",
+        pending: "https://omascote.com.br/app.html"
+      },
+      notification_url: "https://api.omascote.com.br/webhook/mercadopago",
+      auto_return: "approved"
+    };
+
+    const r = await fetch("https://api.mercadopago.com/checkout/preferences", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${MP_ACCESS_TOKEN}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(preference)
+    });
+
+    const data = await r.json();
+
+    if (!r.ok) {
+      return res.status(500).json({ ok: false, error: "Erro ao criar checkout", detalhe: data });
+    }
+
+    return res.json({
+      ok: true,
+      init_point: data.init_point,
+      sandbox_init_point: data.sandbox_init_point
+    });
+
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: "Erro interno ao criar compra" });
+  }
+});
+
+app.post("/webhook/mercadopago", async (req, res) => {
+  try {
+    const body = req.body || {};
+    const paymentId = body?.data?.id || body?.id || req.query?.id;
+
+    if (!paymentId) {
+      return res.json({ ok: true });
+    }
+
+    const processados = readMpProcessados();
+    if (processados[paymentId]) {
+      return res.json({ ok: true, duplicado: true });
+    }
+
+    const r = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
+      headers: {
+        "Authorization": `Bearer ${MP_ACCESS_TOKEN}`
+      }
+    });
+
+    const pagamento = await r.json();
+
+    if (!r.ok || pagamento.status !== "approved") {
+      return res.json({ ok: true, status: pagamento.status || "ignorado" });
+    }
+
+    const external = String(pagamento.external_reference || "");
+    const whatsapp = pagamento.metadata?.whatsapp || external.split("|")[0];
+    const credito = Number(pagamento.metadata?.credito || 0);
+
+    if (!whatsapp || !credito) {
+      return res.json({ ok: true, error: "sem whatsapp ou credito" });
+    }
+
+    const clientes = readClientes();
+    const c = clientes[whatsapp];
+
+    if (!c) {
+      return res.json({ ok: true, error: "cliente não encontrado" });
+    }
+
+    c.saldo_extra = Number(c.saldo_extra || 0) + credito;
+    c.ativo = true;
+
+    clientes[whatsapp] = c;
+    writeClientes(clientes);
+
+    processados[paymentId] = {
+      whatsapp,
+      credito,
+      status: pagamento.status,
+      criado_em: new Date().toISOString()
+    };
+
+    writeMpProcessados(processados);
+
+    return res.json({ ok: true });
+
+  } catch (e) {
+    return res.json({ ok: true });
+  }
 });
 
 // ===== CRIA PEDIDO =====
@@ -687,6 +834,7 @@ app.post(
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
 
 
