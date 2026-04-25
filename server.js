@@ -22,6 +22,7 @@ const DATA_DIR = isRender
 
 const PEDIDOS_DIR = path.join(DATA_DIR, "pedidos");
 const CLIENTES_FILE = path.join(DATA_DIR, "clientes.json");
+const BOT_ADMIN_WHATSAPP = process.env.BOT_ADMIN_WHATSAPP || "15991120599";
 const MP_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN || "";
 const MP_PROCESSADOS_FILE = path.join(DATA_DIR, "mp_processados.json");
 
@@ -106,6 +107,30 @@ function safeReadJson(filePath) {
   } catch {
     return null;
   }
+}
+
+function isBotAdmin(req) {
+  return req.user && req.user.whatsapp === BOT_ADMIN_WHATSAPP;
+}
+
+function getPedidoBaseGlobal(pedidoId) {
+  if (!fs.existsSync(PEDIDOS_DIR)) return null;
+
+  const whatsapps = fs.readdirSync(PEDIDOS_DIR);
+
+  for (const whatsapp of whatsapps) {
+    const pastaWhatsapp = path.join(PEDIDOS_DIR, whatsapp);
+    if (!fs.existsSync(pastaWhatsapp) || !fs.statSync(pastaWhatsapp).isDirectory()) continue;
+
+    const meses = fs.readdirSync(pastaWhatsapp);
+
+    for (const mes of meses) {
+      const base = path.join(pastaWhatsapp, mes, pedidoId);
+      if (fs.existsSync(base)) return base;
+    }
+  }
+
+  return null;
 }
 
 function listPedidoBasesByWhatsapp(whatsapp) {
@@ -603,6 +628,91 @@ app.post(
   criarPedidoHandler("resultado")
 );
 
+// ===== BOT ADMIN: LISTAR NOVOS DE TODOS OS CLIENTES =====
+app.get("/bot/pedidos/novos", auth, (req, res) => {
+  if (!isBotAdmin(req)) {
+    return res.status(403).json({ ok: false, error: "Acesso negado" });
+  }
+
+  const pedidos = [];
+
+  if (!fs.existsSync(PEDIDOS_DIR)) {
+    return res.json({ ok: true, pedidos: [] });
+  }
+
+  const whatsapps = fs.readdirSync(PEDIDOS_DIR);
+
+  for (const whatsapp of whatsapps) {
+    const pastaWhatsapp = path.join(PEDIDOS_DIR, whatsapp);
+    if (!fs.existsSync(pastaWhatsapp) || !fs.statSync(pastaWhatsapp).isDirectory()) continue;
+
+    const meses = fs.readdirSync(pastaWhatsapp);
+
+    for (const mes of meses) {
+      const pastaMes = path.join(pastaWhatsapp, mes);
+      if (!fs.existsSync(pastaMes) || !fs.statSync(pastaMes).isDirectory()) continue;
+
+      const ids = fs.readdirSync(pastaMes);
+
+      for (const id of ids) {
+        const base = path.join(pastaMes, id);
+        const st = path.join(base, "status.txt");
+
+        if (fs.existsSync(st) && fs.readFileSync(st, "utf8").trim() === "novo") {
+          pedidos.push({ id, whatsapp, mes });
+        }
+      }
+    }
+  }
+
+  return res.json({ ok: true, pedidos });
+});
+
+app.get("/bot/pedidos/:id/zip", auth, (req, res) => {
+  if (!isBotAdmin(req)) {
+    return res.status(403).json({ ok: false, error: "Acesso negado" });
+  }
+
+  const base = getPedidoBaseGlobal(req.params.id);
+
+  if (!base) {
+    return res.status(404).json({ ok: false, error: "Pedido não encontrado" });
+  }
+
+  res.setHeader("Content-Type", "application/zip");
+  res.setHeader("Content-Disposition", `attachment; filename="${req.params.id}.zip"`);
+
+  const archive = archiver("zip", { zlib: { level: 9 } });
+
+  archive.on("error", err => res.status(500).end(String(err)));
+
+  archive.pipe(res);
+  archive.directory(base, false);
+  archive.finalize();
+});
+
+app.post("/bot/pedidos/:id/status", auth, (req, res) => {
+  if (!isBotAdmin(req)) {
+    return res.status(403).json({ ok: false, error: "Acesso negado" });
+  }
+
+  const base = getPedidoBaseGlobal(req.params.id);
+
+  if (!base) {
+    return res.status(404).json({ ok: false, error: "Pedido não encontrado" });
+  }
+
+  const { status } = req.body || {};
+
+  if (!["novo", "em_producao", "pronto"].includes(status)) {
+    return res.status(400).json({ ok: false, error: "status inválido" });
+  }
+
+  fs.writeFileSync(path.join(base, "status.txt"), status, "utf8");
+
+  return res.json({ ok: true });
+});
+
 // ===== LISTAR NOVOS =====
 app.get("/pedidos/novos", auth, (req, res) => {
   const whatsapp = req.user.whatsapp;
@@ -834,6 +944,7 @@ app.post(
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
 
 
