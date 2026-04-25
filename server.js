@@ -905,12 +905,15 @@ app.post("/pedidos/:id/status", auth, (req, res) => {
 
 // ===== UPLOAD DO RESULTADO FINAL =====
 app.post(
-  "/pedidos/:id/upload-resultado",
+  "/bot/pedidos/:id/upload-resultado",
   auth,
   uploadResultado.single("resultado"),
   (req, res) => {
-    const whatsapp = req.user.whatsapp;
-    const base = getPedidoBase(whatsapp, req.params.id);
+    if (!isBotAdmin(req)) {
+      return res.status(403).json({ ok: false, error: "Acesso negado" });
+    }
+
+    const base = getPedidoBaseGlobal(req.params.id);
 
     if (!base) {
       return res.status(404).json({ ok: false, error: "Pedido não encontrado" });
@@ -944,6 +947,7 @@ app.post(
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
 
 
