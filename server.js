@@ -68,6 +68,14 @@ function writeMpProcessados(obj) {
   fs.writeFileSync(MP_PROCESSADOS_FILE, JSON.stringify(obj, null, 2), "utf8");
 }
 
+function getCustoPedido(categoria, cliente) {
+  if (categoria === "escudo3d") {
+    return Number(cliente.usados_no_ciclo || 0) <= 0 ? 4 : 18;
+  }
+
+  return 1;
+}
+
 function nowYYYYMM() {
   const d = new Date();
   const y = d.getFullYear();
@@ -477,12 +485,15 @@ function criarPedidoHandler(categoria) {
       c.usados_no_ciclo = 0;
     }
 
-    if (c.usados_no_ciclo >= c.plano) {
+    const custoPedido = getCustoPedido(categoria, c);
+    const saldoTotal = Number(c.saldo_mensal || 0) + Number(c.saldo_extra || 0);
+
+    if (saldoTotal < custoPedido) {
       clientes[whatsapp] = c;
       writeClientes(clientes);
       return res.status(403).json({
         ok: false,
-        error: `Limite mensal atingido (${c.plano})`
+        error: `Saldo insuficiente. Este pedido custa R$ ${custoPedido.toFixed(2).replace(".", ",")}`
       });
     }
 
@@ -568,6 +579,18 @@ function criarPedidoHandler(categoria) {
     );
 
     fs.writeFileSync(path.join(base, "status.txt"), "novo", "utf8");
+
+    let restante = custoPedido;
+
+    const saldoExtraAtual = Number(c.saldo_extra || 0);
+    const descontoExtra = Math.min(saldoExtraAtual, restante);
+    c.saldo_extra = Number((saldoExtraAtual - descontoExtra).toFixed(2));
+    restante = Number((restante - descontoExtra).toFixed(2));
+
+    if (restante > 0) {
+      const saldoMensalAtual = Number(c.saldo_mensal || 0);
+      c.saldo_mensal = Number(Math.max(0, saldoMensalAtual - restante).toFixed(2));
+    }
 
     c.usados_no_ciclo = (c.usados_no_ciclo || 0) + 1;
     c.ciclo_mes = mesAtual;
@@ -947,6 +970,7 @@ app.post(
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
 
 
