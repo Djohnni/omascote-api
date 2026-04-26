@@ -533,11 +533,16 @@ function criarPedidoHandler(categoria) {
       fs.renameSync(f.path, dest);
     }
 
-    moveOne("escudo1", "escudo1.png");
-    moveOne("escudo2", "escudo2.png");
-    moveOne("mascote", "mascote.png");
+    const podeUsarEscudo1 = ["resultado", "escalacao", "contratacao", "proximo_jogo", "patrocinador", "escudo3d"].includes(categoria);
+    const podeUsarEscudo2 = ["resultado", "contratacao", "proximo_jogo"].includes(categoria);
+    const podeUsarMascote = ["resultado", "escalacao"].includes(categoria);
+    const podeUsarPatrocinadores = categoria === "patrocinador";
 
-    const pats = files["patrocinadores"] || [];
+    if (podeUsarEscudo1) moveOne("escudo1", "escudo1.png");
+    if (podeUsarEscudo2) moveOne("escudo2", "escudo2.png");
+    if (podeUsarMascote) moveOne("mascote", "mascote.png");
+
+    const pats = podeUsarPatrocinadores ? (files["patrocinadores"] || []) : [];
 
     pats.forEach((f, i) => {
       const dest = path.join(base, `pat${String(i + 1).padStart(2, "0")}.png`);
@@ -545,18 +550,18 @@ function criarPedidoHandler(categoria) {
     });
 
    const pedido = {
-      time_principal: time_principal || "",
-      gols_time_principal: Number(gols_time_principal) || 0,
-      gols_adversario: Number(gols_adversario) || 0,
-      time_adversario: time_adversario || "",
+      time_principal: ["resultado", "proximo_jogo"].includes(categoria) ? (time_principal || "") : "",
+      gols_time_principal: categoria === "resultado" ? (Number(gols_time_principal) || 0) : 0,
+      gols_adversario: categoria === "resultado" ? (Number(gols_adversario) || 0) : 0,
+      time_adversario: ["resultado", "proximo_jogo"].includes(categoria) ? (time_adversario || "") : "",
     
-      artilheiros: artilheiros ? JSON.parse(artilheiros) : [],
-      jogadores: jogadores_json ? JSON.parse(jogadores_json) : [],
-      jogadores_texto: jogadores_texto || "",
+      artilheiros: categoria === "resultado" && artilheiros ? JSON.parse(artilheiros) : [],
+      jogadores: categoria === "escalacao" && jogadores_json ? JSON.parse(jogadores_json) : [],
+      jogadores_texto: categoria === "escalacao" ? (jogadores_texto || "") : "",
     
-      escudo_principal: files["escudo1"]?.[0] ? "escudo1.png" : "",
-      escudo_adversario: files["escudo2"]?.[0] ? "escudo2.png" : "",
-      foto_jogo: files["mascote"]?.[0] ? "mascote.png" : "",
+      escudo_principal: podeUsarEscudo1 && files["escudo1"]?.[0] ? "escudo1.png" : "",
+      escudo_adversario: podeUsarEscudo2 && files["escudo2"]?.[0] ? "escudo2.png" : "",
+      foto_jogo: podeUsarMascote && files["mascote"]?.[0] ? "mascote.png" : "",
     
       categoria: categoria,
       id,
@@ -564,8 +569,8 @@ function criarPedidoHandler(categoria) {
       mes: mesAtual,
       rodada,
       data,
-      hora,
-      arena,
+      hora: ["resultado", "contratacao", "proximo_jogo"].includes(categoria) ? (hora || "") : "",
+      arena: categoria === "proximo_jogo" ? (arena || "") : "",
       mascote_tipo: mascote_tipo || "",
       patrocinadores_qtd: pats.length,
       status: "novo",
@@ -970,6 +975,7 @@ app.post(
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
 
 
