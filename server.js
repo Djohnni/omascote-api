@@ -569,6 +569,7 @@ function criarPedidoHandler(categoria) {
       arena: categoria === "proximo_jogo" ? (arena || "") : "",
       mascote_tipo: mascote_tipo || "",
       patrocinadores_qtd: pats.length,
+      descricao_instagram: "",
       status: "novo",
       criado_em: new Date().toISOString()
     };
@@ -782,7 +783,8 @@ app.get("/meus-pedidos", auth, (req, res) => {
       imagem_url: imagemPronta
         ? `${req.protocol}://${req.get("host")}/pedidos/${item.id}/preview`
         : null,
-      imagem_pronta: imagemPronta
+      imagem_pronta: imagemPronta,
+      descricao_instagram: item.pedido.descricao_instagram || ""
     };
   });
 
@@ -971,17 +973,5 @@ app.post(
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
-
-
-
-
-
-
-
-
-
-
-
-
 
 
