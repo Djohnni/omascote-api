@@ -782,7 +782,8 @@ app.get("/meus-pedidos", auth, (req, res) => {
       imagem_url: imagemPronta
         ? `${req.protocol}://${req.get("host")}/pedidos/${item.id}/preview`
         : null,
-      imagem_pronta: imagemPronta
+      imagem_pronta: imagemPronta,
+      descricao_instagram: item.pedido.descricao_instagram || ""
     };
   });
 
@@ -982,6 +983,7 @@ app.post(
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
 
 
