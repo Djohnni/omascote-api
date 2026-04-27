@@ -569,7 +569,6 @@ function criarPedidoHandler(categoria) {
       arena: categoria === "proximo_jogo" ? (arena || "") : "",
       mascote_tipo: mascote_tipo || "",
       patrocinadores_qtd: pats.length,
-      descricao_instagram: "",
       status: "novo",
       criado_em: new Date().toISOString()
     };
@@ -783,8 +782,7 @@ app.get("/meus-pedidos", auth, (req, res) => {
       imagem_url: imagemPronta
         ? `${req.protocol}://${req.get("host")}/pedidos/${item.id}/preview`
         : null,
-      imagem_pronta: imagemPronta,
-      descricao_instagram: item.pedido.descricao_instagram || ""
+      imagem_pronta: imagemPronta
     };
   });
 
@@ -935,6 +933,8 @@ app.post(
   auth,
   uploadResultado.single("resultado"),
   (req, res) => {
+
+    const descricao_instagram = req.body?.descricao_instagram || "";
     if (!isBotAdmin(req)) {
       return res.status(403).json({ ok: false, error: "Acesso negado" });
     }
@@ -957,6 +957,15 @@ app.post(
 
       fs.writeFileSync(path.join(base, "status.txt"), "pronto", "utf8");
 
+      try {
+        const pedidoPath = path.join(base, "pedido.json");
+        if (fs.existsSync(pedidoPath)) {
+          const pedidoData = JSON.parse(fs.readFileSync(pedidoPath, "utf8"));
+          pedidoData.descricao_instagram = descricao_instagram || "";
+          fs.writeFileSync(pedidoPath, JSON.stringify(pedidoData, null, 2), "utf8");
+        }
+      } catch (e) {}
+
       return res.json({
         ok: true,
         arquivo: "resultado_final.png"
@@ -973,5 +982,18 @@ app.post(
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
