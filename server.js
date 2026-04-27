@@ -69,11 +69,7 @@ function writeMpProcessados(obj) {
 }
 
 function getCustoPedido(categoria, cliente) {
-  if (categoria === "escudo3d") {
-    return Number(cliente.usados_no_ciclo || 0) <= 0 ? 4 : 18;
-  }
-
-  return 1;
+  return 0;
 }
 
 function nowYYYYMM() {
@@ -975,6 +971,7 @@ app.post(
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
 
 
