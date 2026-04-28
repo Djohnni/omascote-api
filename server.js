@@ -336,9 +336,9 @@ ativo: c.ativo
 app.get("/me-antigo", auth, (req, res) => {
 -------------------------------------------
 
-PROCURE ISSO:
+
 // ===== MERCADO PAGO =====
-TROQUE POR ISSO:
+
 // ===== MERCADO PAGO NOVO =====
 app.post("/comprar-creditos", auth, async (req, res) => {
 try {
@@ -404,11 +404,11 @@ const preference = {
   external_reference: `${whatsapp}|${compra.tipo}|${Date.now()}`,
 ---------------------------------------------------------------
 
-PROCURE ISSO:
+
 const credito = Number(pagamento.metadata?.credito || 0);
 const tipo = pagamento.metadata?.tipo || "";
 const mes = pagamento.metadata?.mes || nowYYYYMM();
-TROQUE POR ISSO:
+
 const tipo = pagamento.metadata?.tipo || "";
 const mes = pagamento.metadata?.mes || nowYYYYMM();
 
