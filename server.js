@@ -372,7 +372,7 @@ const preference = {
     currency_id: "BRL",
     unit_price: Number(compra.valor_pago)
   }],
-  external_reference: `${whatsapp}|${compra.tipo}|${Date.now()}`,
+  external_reference: ${whatsapp}|${compra.tipo}|${Date.now()},
   metadata: {
     whatsapp,
     tipo: compra.tipo,
