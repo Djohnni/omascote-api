@@ -342,9 +342,10 @@ app.post("/comprar-creditos", auth, async (req, res) => {
     const whatsapp = req.user.whatsapp;
 
     const pacotes = {
-      mensal_1990: { titulo: "Plano mensal IA4Tube", valor_pago: 19.90, credito: 29.90 },
-      saldo_2990: { titulo: "Créditos IA4Tube", valor_pago: 29.90, credito: 29.90 },
-      saldo_5000: { titulo: "Créditos IA4Tube", valor_pago: 50.00, credito: 50.00 }
+      saldo_800: { titulo: "Saldo IA4Tube - R$8", valor_pago: 8.00, credito: 8.00 },
+      saldo_1800: { titulo: "Saldo IA4Tube - R$18", valor_pago: 18.00, credito: 18.00 },
+      saldo_2800: { titulo: "Saldo IA4Tube - R$28", valor_pago: 28.00, credito: 28.00 },
+      saldo_4800: { titulo: "Saldo IA4Tube - R$48", valor_pago: 48.00, credito: 48.00 }
     };
 
     const p = pacotes[pacote];
@@ -983,4 +984,5 @@ app.post(
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
