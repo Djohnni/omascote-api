@@ -187,6 +187,47 @@ function removeOldPedidos(whatsapp, maxKeep = 15) {
   }
 }
 
+function readJsonArraySafe(filePath) {
+  try {
+    if (!fs.existsSync(filePath)) return [];
+    const data = JSON.parse(fs.readFileSync(filePath, "utf8") || "[]");
+    return Array.isArray(data) ? data : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeJsonSafe(filePath, data) {
+  fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf8");
+}
+
+function salvarMensagemSuporteAberta(whatsapp, mensagemCliente, respostaIA) {
+  const abertasPath = path.join(DATA_DIR, "suporte_conversas_abertas.json");
+  const abertas = readJsonArraySafe(abertasPath);
+
+  let conversa = abertas.find(c => c.whatsapp === whatsapp && !c.finalizada);
+
+  if (!conversa) {
+    conversa = {
+      id: `${whatsapp}_${Date.now()}`,
+      whatsapp,
+      inicio: new Date().toISOString(),
+      finalizada: false,
+      mensagens: []
+    };
+    abertas.push(conversa);
+  }
+
+  conversa.ultima_atualizacao = new Date().toISOString();
+  conversa.mensagens.push({
+    data: new Date().toISOString(),
+    cliente: String(mensagemCliente || "").trim(),
+    ia: String(respostaIA || "").trim()
+  });
+
+  writeJsonSafe(abertasPath, abertas);
+}
+
 function auth(req, res, next) {
   const h = req.headers.authorization || "";
   const token = h.startsWith("Bearer ") ? h.slice(7) : "";
@@ -1063,10 +1104,13 @@ ${String(mensagem).trim()}
     }
 
     const resposta = data.choices?.[0]?.message?.content?.trim();
+    const respostaFinal = resposta || "Não consegui responder agora. Vou encaminhar para o suporte.";
+
+    salvarMensagemSuporteAberta(whatsapp, mensagem, respostaFinal);
 
     return res.json({
       ok: true,
-      resposta: resposta || "Não consegui responder agora. Vou encaminhar para o suporte."
+      resposta: respostaFinal
     });
 
   } catch (e) {
@@ -1077,9 +1121,44 @@ ${String(mensagem).trim()}
   }
 });
 
+app.post("/suporte/finalizar", auth, (req, res) => {
+  try {
+    const whatsapp = req.user.whatsapp;
+    const { motivo } = req.body || {};
+
+    const abertasPath = path.join(DATA_DIR, "suporte_conversas_abertas.json");
+    const finalizadasPath = path.join(DATA_DIR, "suporte_conversas_finalizadas.json");
+
+    const abertas = readJsonArraySafe(abertasPath);
+    const finalizadas = readJsonArraySafe(finalizadasPath);
+
+    const idx = abertas.findIndex(c => c.whatsapp === whatsapp && !c.finalizada);
+
+    if (idx === -1) {
+      return res.json({ ok: true, sem_conversa_aberta: true });
+    }
+
+    const conversa = abertas[idx];
+    conversa.finalizada = true;
+    conversa.fim = new Date().toISOString();
+    conversa.motivo_finalizacao = motivo || "cliente_fechou_chat";
+
+    finalizadas.push(conversa);
+    abertas.splice(idx, 1);
+
+    writeJsonSafe(abertasPath, abertas);
+    writeJsonSafe(finalizadasPath, finalizadas);
+
+    return res.json({ ok: true });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: "Erro ao finalizar suporte" });
+  }
+});
+
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
 
 
