@@ -1197,11 +1197,45 @@ app.post("/suporte/finalizar", auth, (req, res) => {
   }
 });
 
+app.get("/bot/suporte/finalizadas", auth, (req, res) => {
+  try {
+    if (!isBotAdmin(req)) {
+      return res.status(403).json({ ok: false, error: "Acesso negado" });
+    }
+
+    const finalizadasPath = path.join(DATA_DIR, "suporte_conversas_finalizadas.json");
+    const conversas = readJsonArraySafe(finalizadasPath);
+
+    return res.json({
+      ok: true,
+      conversas
+    });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: "Erro ao listar suporte finalizado" });
+  }
+});
+
+app.post("/bot/suporte/limpar-finalizadas", auth, (req, res) => {
+  try {
+    if (!isBotAdmin(req)) {
+      return res.status(403).json({ ok: false, error: "Acesso negado" });
+    }
+
+    const finalizadasPath = path.join(DATA_DIR, "suporte_conversas_finalizadas.json");
+    writeJsonSafe(finalizadasPath, []);
+
+    return res.json({ ok: true });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: "Erro ao limpar suporte finalizado" });
+  }
+});
+
 setInterval(finalizarConversasSuporteInativas, 60 * 1000);
 
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
 
 
