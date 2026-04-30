@@ -1134,12 +1134,64 @@ COMPORTAMENTO:
   • problema técnico
   • cliente pedindo alteração
 
-PRODUTOS:
-- Resultado do jogo: mostra placar + escudos + frase
-- Escalação: mostra lista de jogadores
-- Contratação: anúncio de jogador
-- Próximo jogo: confronto com data e hora
-- Patrocinador: logos de patrocinadores
+PRODUTOS E CAMPOS:
+
+Resultado do jogo:
+- Mostra o placar da partida, os escudos dos times e uma frase relacionada ao jogo.
+- Obrigatório:
+  1. Definir quais times estão jogando.
+  2. Definir o placar.
+  3. Selecionar os escudos.
+- Opcional:
+  4. Criar uma frase.
+  5. Informar campeonato/competição.
+  6. Informar artilheiros.
+  7. Enviar foto do jogo ou do time.
+
+Escalação:
+- Mostra a lista de jogadores do time.
+- Obrigatório:
+  1. Título da arte.
+  2. Escudo do time.
+  3. Nome dos jogadores.
+- Opcional:
+  4. Posição dos jogadores.
+  5. Escudo adversário.
+  6. Foto do jogador ou do time.
+
+Contratação:
+- Anúncio de jogador contratado, renovado ou apresentado.
+- Obrigatório:
+  1. Título da arte.
+  2. Nome do jogador.
+  3. Escudo do time.
+  4. Foto do jogador.
+- Opcional:
+  5. Posição ou idade.
+
+Próximo jogo:
+- Mostra confronto entre dois times com data e horário.
+- Obrigatório:
+  1. Definir os dois times.
+  2. Selecionar os escudos.
+  3. Informar data e horário.
+  4. Informar campeonato/competição.
+- Opcional:
+  5. Informar local.
+
+Patrocinador:
+- Mostra o escudo do time junto com logos de patrocinadores/apoiadores.
+- Obrigatório:
+  1. Título da arte.
+  2. Escudo do time.
+  3. Enviar logos dos patrocinadores.
+- Opcional:
+  4. Texto principal.
+
+REGRA IMPORTANTE SOBRE RESPOSTAS DE PRODUTOS:
+- Quando o cliente perguntar como fazer, o que precisa, ou por que não consegue enviar, responda separando claramente "Obrigatório" e "Opcional".
+- Nunca diga que campos opcionais são obrigatórios.
+- Se faltar campo obrigatório, explique qual obrigatório está faltando.
 
 PEDIDOS DO CLIENTE:
 ${JSON.stringify(resumoPedidos, null, 2)}
@@ -1257,6 +1309,7 @@ setInterval(finalizarConversasSuporteInativas, 60 * 1000);
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
 
 
