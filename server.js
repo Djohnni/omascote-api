@@ -340,7 +340,7 @@ app.post("/auth/register", (req, res) => {
     nome_time,
     senha_hash,
     plano: 4,
-    saldo_mensal: 29.90,
+    saldo_mensal: 0,
     saldo_extra: 0,
     usados_no_ciclo: 0,
     ciclo_mes: nowYYYYMM(),
