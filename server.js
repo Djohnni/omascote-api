@@ -1035,16 +1035,20 @@ MENSAGEM DO CLIENTE:
 ${String(mensagem).trim()}
 `;
 
-    const response = await fetch("https://api.openai.com/v1/responses", {
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
         "Authorization": "Bearer " + process.env.OPENAI_API_KEY,
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
-        model: "gpt-5-mini",
-        input: prompt,
-        max_output_tokens: 200
+        model: "gpt-4o-mini",
+        messages: [
+          { role: "system", content: "Você é o suporte automático da IA4Tube. Responda curto, claro e em português do Brasil." },
+          { role: "user", content: prompt }
+        ],
+        max_tokens: 220,
+        temperature: 0.3
       })
     });
 
@@ -1058,9 +1062,11 @@ ${String(mensagem).trim()}
       });
     }
 
+    const resposta = data.choices?.[0]?.message?.content?.trim();
+
     return res.json({
       ok: true,
-      resposta: data.output?.[0]?.content?.[0]?.text || data.output_text || "Não consegui responder agora. Vou encaminhar para o suporte."
+      resposta: resposta || "Não consegui responder agora. Vou encaminhar para o suporte."
     });
 
   } catch (e) {
@@ -1074,6 +1080,7 @@ ${String(mensagem).trim()}
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
 
 
