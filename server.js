@@ -25,6 +25,7 @@ const CLIENTES_FILE = path.join(DATA_DIR, "clientes.json");
 const BOT_ADMIN_WHATSAPP = process.env.BOT_ADMIN_WHATSAPP || "15991120599";
 const MP_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN || "";
 const MP_PROCESSADOS_FILE = path.join(DATA_DIR, "mp_processados.json");
+const TEMPO_ESTIMADO_FILE = path.join(DATA_DIR, "tempo_estimado.json");
 
 // CORS: permite seu site chamar a API
 app.use(cors({
@@ -51,6 +52,17 @@ if (!fs.existsSync(MP_PROCESSADOS_FILE)) {
   fs.writeFileSync(MP_PROCESSADOS_FILE, JSON.stringify({}, null, 2), "utf8");
 }
 
+if (!fs.existsSync(TEMPO_ESTIMADO_FILE)) {
+  fs.writeFileSync(TEMPO_ESTIMADO_FILE, JSON.stringify({
+    tempo_medio_segundos: 135,
+    tempo_estimado_segundos: 135,
+    pedidos_na_fila: 0,
+    lotes: 1,
+    max_processos: 5,
+    atualizado_em: new Date().toISOString()
+  }, null, 2), "utf8");
+}
+
 // ===== HELPERS =====
 function readClientes() {
   return JSON.parse(fs.readFileSync(CLIENTES_FILE, "utf8") || "{}");
@@ -66,6 +78,25 @@ function readMpProcessados() {
 
 function writeMpProcessados(obj) {
   fs.writeFileSync(MP_PROCESSADOS_FILE, JSON.stringify(obj, null, 2), "utf8");
+}
+
+function readTempoEstimado() {
+  try {
+    return JSON.parse(fs.readFileSync(TEMPO_ESTIMADO_FILE, "utf8") || "{}");
+  } catch {
+    return {
+      tempo_medio_segundos: 135,
+      tempo_estimado_segundos: 135,
+      pedidos_na_fila: 0,
+      lotes: 1,
+      max_processos: 5,
+      atualizado_em: new Date().toISOString()
+    };
+  }
+}
+
+function writeTempoEstimado(obj) {
+  fs.writeFileSync(TEMPO_ESTIMADO_FILE, JSON.stringify(obj, null, 2), "utf8");
 }
 
 function getCustoPedido(categoria, cliente) {
@@ -318,6 +349,34 @@ const uploadResultado = multer({ storage });
 // Health check
 app.get("/", (req, res) => {
   res.json({ ok: true, msg: "omascote-api online" });
+});
+
+app.get("/tempo-estimado", (req, res) => {
+  return res.json({
+    ok: true,
+    ...readTempoEstimado()
+  });
+});
+
+app.post("/bot/tempo-estimado", auth, (req, res) => {
+  if (!isBotAdmin(req)) {
+    return res.status(403).json({ ok: false, error: "Acesso negado" });
+  }
+
+  const payload = req.body || {};
+
+  const tempo = {
+    tempo_medio_segundos: Number(payload.tempo_medio_segundos || 135),
+    tempo_estimado_segundos: Number(payload.tempo_estimado_segundos || 135),
+    pedidos_na_fila: Number(payload.pedidos_na_fila || 0),
+    lotes: Number(payload.lotes || 1),
+    max_processos: Number(payload.max_processos || 5),
+    atualizado_em: payload.atualizado_em || new Date().toISOString()
+  };
+
+  writeTempoEstimado(tempo);
+
+  return res.json({ ok: true });
 });
 
 // Login
@@ -1377,6 +1436,7 @@ setInterval(finalizarConversasSuporteInativas, 60 * 1000);
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
 
 
