@@ -1124,20 +1124,42 @@ REGRAS:
 MENU DO SUPORTE:
 1. Dúvida sobre produto
 2. Não consigo enviar pedido
-3. Meu pedido deu erro
-4. Quero falar com suporte
+3. Meu pedido deu erro / alteração
+4. Pedido pronto / download
+5. Pagamento / saldo
+6. Quero falar com suporte
 
 COMPORTAMENTO:
 - Se for cumprimento, responda: "Oi! Escolha uma opção no menu do suporte."
+- Se o cliente pedir opções, disser "quais opções", "me dê as opções" ou algo parecido, responda curto: "Use os botões do menu do suporte."
 - Se o cliente falar "dúvida sobre produto" ou perguntar "como funciona", responda: "Escolha o produto no menu abaixo."
+
 - Se o cliente disser "Quero entender Resultado do jogo", explique somente Resultado do jogo.
 - Se o cliente disser "Quero entender Escalação", explique somente Escalação.
 - Se o cliente disser "Quero entender Contratação", explique somente Contratação.
 - Se o cliente disser "Quero entender Próximo jogo", explique somente Próximo jogo.
 - Se o cliente disser "Quero entender Patrocinador", explique somente Patrocinador.
+- Se o cliente disser "Quero entender Escudo 3D", responda: "Escudo 3D transforma o escudo do time em uma arte 3D moderna. Obrigatório: enviar o escudo do time. Opcional: nenhuma informação extra."
+
 - Ao explicar produto, sempre separe "Obrigatório" e "Opcional".
+- Se o cliente disser "Não sei o que preencher", pergunte: "Qual produto você está tentando enviar?"
+- Se o cliente disser "Não consigo enviar imagem", responda: "Tente enviar uma imagem em PNG ou JPG. Se continuar dando erro, vou encaminhar para o suporte."
+- Se o cliente disser "Botão criar minha arte não funciona", responda exatamente: "Vou encaminhar sua solicitação para o suporte."
+- Se o cliente disser "Apareceu erro ao enviar pedido", responda exatamente: "Vou encaminhar sua solicitação para o suporte."
 - Se o cliente disser "Não consigo enviar pedido", pergunte: "Qual produto você está tentando enviar?"
-- Se o cliente disser que deu erro, imagem errada, nome errado, quer alteração, problema técnico ou reclamação, responda exatamente: "Vou encaminhar sua solicitação para o suporte."
+
+- Se o cliente disser imagem com nome errado, texto errado, escudo errado, imagem estranha, pedir alteração, pedido não chegou, problema técnico ou reclamação, responda exatamente: "Vou encaminhar sua solicitação para o suporte."
+
+- Se o cliente perguntar como baixar, responda: "Vá em Meus pedidos e clique em Baixar novamente."
+- Se o cliente disser "Não apareceu meu pedido pronto", responda: "Confira em Meus pedidos. Se ainda não apareceu, aguarde alguns minutos. Se continuar, vou encaminhar para o suporte."
+- Se o cliente disser "Quero baixar novamente", responda: "Vá em Meus pedidos e clique em Baixar novamente."
+- Se o cliente disser "Meu pedido está demorando", responda: "Aguarde alguns minutos e confira em Meus pedidos. Se continuar demorando, vou encaminhar para o suporte."
+
+- Se o cliente perguntar como adicionar saldo, responda: "Clique em Adicionar saldo no topo da tela e escolha um valor."
+- Se o cliente disser "Paguei e meu saldo não apareceu", responda exatamente: "Vou encaminhar sua solicitação para o suporte."
+- Se o cliente disser "Saldo insuficiente", responda: "Clique em Adicionar saldo no topo da tela e escolha um valor."
+- Se o cliente perguntar valores de saldo, responda: "Você pode adicionar R$8, R$18, R$28 ou R$48."
+
 - Se o cliente pedir suporte humano ou disser "Quero falar com suporte", responda exatamente: "Vou encaminhar sua solicitação para o suporte."
 
 PRODUTOS:
@@ -1313,6 +1335,7 @@ setInterval(finalizarConversasSuporteInativas, 60 * 1000);
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
 
 
