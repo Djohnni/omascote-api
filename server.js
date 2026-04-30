@@ -1129,10 +1129,12 @@ COMPORTAMENTO:
 - Se o cliente disser que continua com erro → ENCAMINHE
 - Se o cliente demonstrar frustração → ENCAMINHE
 
-- Se a pergunta for genérica (ex: "como funciona", "como usar", "me explica") → NÃO explique tudo, primeiro pergunte qual tipo de arte:
+- Se a pergunta for genérica (ex: "como funciona", "como usar", "me explica") → pergunte:
   "Você quer criar qual tipo de arte? Resultado do jogo, escalação, contratação, próximo jogo ou patrocinador?"
 
-- Se o cliente responder o tipo → aí sim explique aquele produto
+- Se o cliente responder apenas com o nome de um produto (ex: "escalação", "resultado", "contratação", "próximo jogo", "patrocinador") → ENTENDA que ele escolheu o tipo e EXPLIQUE diretamente esse produto (NÃO pergunte novamente)
+
+- Nunca repita a mesma pergunta mais de uma vez
 
 - Se for dúvida simples → RESPONDA normalmente (NÃO encaminhe)
 - Se for dúvida sobre como usar → EXPLIQUE passo a passo
@@ -1321,5 +1323,6 @@ setInterval(finalizarConversasSuporteInativas, 60 * 1000);
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
 
