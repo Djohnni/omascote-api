@@ -1043,7 +1043,8 @@ ${String(mensagem).trim()}
       },
       body: JSON.stringify({
         model: "gpt-5-mini",
-        input: prompt
+        input: prompt,
+        max_output_tokens: 200
       })
     });
 
