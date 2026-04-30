@@ -1091,7 +1091,49 @@ app.post("/suporte/chat", auth, async (req, res) => {
       return res.status(500).json({ ok: false, error: "OPENAI_API_KEY não configurada" });
     }
 
-    const pedidos = listPedidoBasesByWhatsapp(whatsapp).slice(0, 5);
+    const msg = String(mensagem || "").toLowerCase();
+
+// ===== RESPOSTAS GRÁTIS (SEM IA) =====
+if(msg.includes("resultado do jogo") && msg.includes("entender")){
+  return res.json({
+    ok:true,
+    resposta:`Resultado do jogo mostra placar e escudos.\n\nObrigatório:\n- Times\n- Placar\n- Escudos\n\nOpcional:\n- Frase\n- Artilheiros\n- Foto`
+  });
+}
+
+if(msg.includes("como baixar") || msg.includes("baixar novamente")){
+  return res.json({
+    ok:true,
+    resposta:"Vá em Meus pedidos e clique em Baixar novamente."
+  });
+}
+
+if(msg.includes("saldo") && msg.includes("como")){
+  return res.json({
+    ok:true,
+    resposta:"Clique em Adicionar saldo no topo da tela."
+  });
+}
+
+// ===== SUPORTE DIRETO (SEM IA) =====
+if(
+  msg.includes("erro") ||
+  msg.includes("não chegou") ||
+  msg.includes("nao chegou") ||
+  msg.includes("errado") ||
+  msg.includes("alteração") ||
+  msg.includes("suporte")
+){
+  finalizarConversaSuporte(whatsapp, "cliente_pediu_suporte");
+
+  return res.json({
+    ok:true,
+    resposta:"Vou encaminhar sua solicitação para o suporte."
+  });
+}
+
+// ===== SE NÃO CAIU EM NADA → USA IA =====
+const pedidos = listPedidoBasesByWhatsapp(whatsapp).slice(0, 5);
 
     const resumoPedidos = pedidos.map((p) => {
       const statusPath = path.join(p.base, "status.txt");
@@ -1335,6 +1377,7 @@ setInterval(finalizarConversasSuporteInativas, 60 * 1000);
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
 
 
