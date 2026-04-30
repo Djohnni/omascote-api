@@ -1125,14 +1125,18 @@ REGRAS:
 - Use apenas os pedidos reais enviados abaixo.
 
 COMPORTAMENTO:
+- Se o cliente pedir suporte, disser "suporte", "me envie pro suporte" ou algo parecido → ENCAMINHE IMEDIATAMENTE
+- Se o cliente disser que continua com erro → ENCAMINHE
+- Se o cliente demonstrar frustração → ENCAMINHE
+
 - Se for dúvida simples → RESPONDA normalmente (NÃO encaminhe)
 - Se for dúvida sobre como usar → EXPLIQUE passo a passo
 - Se for sobre produtos → EXPLIQUE cada produto
-- Só encaminhe para suporte humano se for:
-  • erro na imagem
-  • nome errado
-  • problema técnico
-  • cliente pedindo alteração
+
+- Só NÃO encaminhe quando for dúvida simples
+
+- Sempre que encaminhar, responda exatamente:
+"Vou encaminhar sua solicitação para o suporte."
 
 PRODUTOS E CAMPOS:
 
@@ -1235,8 +1239,11 @@ ${String(mensagem).trim()}
     const respostaLower = respostaFinal.toLowerCase();
 
     if (
-      respostaLower.includes("encaminhar") &&
-      respostaLower.includes("suporte")
+      (respostaLower.includes("encaminhar") && respostaLower.includes("suporte")) ||
+      respostaLower.includes("suporte humano") ||
+      respostaLower.includes("falar com suporte") ||
+      respostaLower.includes("entrar em contato com o suporte") ||
+      respostaLower.includes("recomendo que você entre em contato")
     ) {
       finalizarConversaSuporte(whatsapp, "ia_encaminhou_para_suporte");
     }
@@ -1309,6 +1316,7 @@ setInterval(finalizarConversasSuporteInativas, 60 * 1000);
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
 
 
