@@ -366,8 +366,8 @@ app.post("/bot/tempo-estimado", auth, (req, res) => {
   const payload = req.body || {};
 
   const tempo = {
-    tempo_medio_segundos: Number(payload.tempo_medio_segundos || 135),
-    tempo_estimado_segundos: Number(payload.tempo_estimado_segundos || 135),
+    tempo_medio_segundos: Number(payload.tempo_medio_segundos ?? 0),
+    tempo_estimado_segundos: Number(payload.tempo_estimado_segundos ?? 0),
     pedidos_na_fila: Number(payload.pedidos_na_fila || 0),
     lotes: Number(payload.lotes || 1),
     max_processos: Number(payload.max_processos || 5),
