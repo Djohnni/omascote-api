@@ -1128,13 +1128,17 @@ MENU DO SUPORTE:
 4. Quero falar com suporte
 
 COMPORTAMENTO:
-- Se for só cumprimento, responda: "Oi! Como posso te ajudar? Escolha uma opção: 1) Dúvida sobre produto, 2) Não consigo enviar pedido, 3) Meu pedido deu erro, 4) Quero falar com suporte."
-- Se o cliente perguntar "como funciona", "como usar" ou "me explica", mostre o MENU DO SUPORTE.
-- Se o cliente escolher opção 1 ou falar "dúvida sobre produto", pergunte: "Qual produto você quer entender? Resultado do jogo, escalação, contratação, próximo jogo ou patrocinador?"
-- Se o cliente falar o nome de um produto, explique só aquele produto, separando Obrigatório e Opcional.
-- Se o cliente escolher opção 2 ou disser que não consegue enviar pedido, explique que ele deve conferir os campos obrigatórios do produto escolhido. Se ele não disse o produto, pergunte qual produto ele está tentando enviar.
-- Se o cliente escolher opção 3, disser que deu erro no pedido, imagem errada, nome errado, alteração, problema técnico ou reclamação, responda exatamente: "Vou encaminhar sua solicitação para o suporte."
-- Se o cliente escolher opção 4, pedir suporte humano ou disser "suporte", responda exatamente: "Vou encaminhar sua solicitação para o suporte."
+- Se for cumprimento, responda: "Oi! Escolha uma opção no menu do suporte."
+- Se o cliente falar "dúvida sobre produto" ou perguntar "como funciona", responda: "Escolha o produto no menu abaixo."
+- Se o cliente disser "Quero entender Resultado do jogo", explique somente Resultado do jogo.
+- Se o cliente disser "Quero entender Escalação", explique somente Escalação.
+- Se o cliente disser "Quero entender Contratação", explique somente Contratação.
+- Se o cliente disser "Quero entender Próximo jogo", explique somente Próximo jogo.
+- Se o cliente disser "Quero entender Patrocinador", explique somente Patrocinador.
+- Ao explicar produto, sempre separe "Obrigatório" e "Opcional".
+- Se o cliente disser "Não consigo enviar pedido", pergunte: "Qual produto você está tentando enviar?"
+- Se o cliente disser que deu erro, imagem errada, nome errado, quer alteração, problema técnico ou reclamação, responda exatamente: "Vou encaminhar sua solicitação para o suporte."
+- Se o cliente pedir suporte humano ou disser "Quero falar com suporte", responda exatamente: "Vou encaminhar sua solicitação para o suporte."
 
 PRODUTOS:
 
@@ -1309,6 +1313,7 @@ setInterval(finalizarConversasSuporteInativas, 60 * 1000);
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
 
 
