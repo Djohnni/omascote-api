@@ -228,6 +228,61 @@ function salvarMensagemSuporteAberta(whatsapp, mensagemCliente, respostaIA) {
   writeJsonSafe(abertasPath, abertas);
 }
 
+function finalizarConversaSuporte(whatsapp, motivo) {
+  const abertasPath = path.join(DATA_DIR, "suporte_conversas_abertas.json");
+  const finalizadasPath = path.join(DATA_DIR, "suporte_conversas_finalizadas.json");
+
+  const abertas = readJsonArraySafe(abertasPath);
+  const finalizadas = readJsonArraySafe(finalizadasPath);
+
+  const idx = abertas.findIndex(c => c.whatsapp === whatsapp && !c.finalizada);
+
+  if (idx === -1) return false;
+
+  const conversa = abertas[idx];
+  conversa.finalizada = true;
+  conversa.fim = new Date().toISOString();
+  conversa.motivo_finalizacao = motivo || "finalizacao_automatica";
+
+  finalizadas.push(conversa);
+  abertas.splice(idx, 1);
+
+  writeJsonSafe(abertasPath, abertas);
+  writeJsonSafe(finalizadasPath, finalizadas);
+
+  return true;
+}
+
+function finalizarConversasSuporteInativas() {
+  const abertasPath = path.join(DATA_DIR, "suporte_conversas_abertas.json");
+  const finalizadasPath = path.join(DATA_DIR, "suporte_conversas_finalizadas.json");
+
+  const abertas = readJsonArraySafe(abertasPath);
+  if (abertas.length === 0) return;
+
+  const finalizadas = readJsonArraySafe(finalizadasPath);
+  const agora = Date.now();
+  const limiteMs = 10 * 60 * 1000;
+
+  const aindaAbertas = [];
+
+  for (const conversa of abertas) {
+    const ultima = new Date(conversa.ultima_atualizacao || conversa.inicio || 0).getTime();
+
+    if (ultima && agora - ultima >= limiteMs) {
+      conversa.finalizada = true;
+      conversa.fim = new Date().toISOString();
+      conversa.motivo_finalizacao = "inatividade_10_minutos";
+      finalizadas.push(conversa);
+    } else {
+      aindaAbertas.push(conversa);
+    }
+  }
+
+  writeJsonSafe(abertasPath, aindaAbertas);
+  writeJsonSafe(finalizadasPath, finalizadas);
+}
+
 function auth(req, res, next) {
   const h = req.headers.authorization || "";
   const token = h.startsWith("Bearer ") ? h.slice(7) : "";
@@ -1108,6 +1163,10 @@ ${String(mensagem).trim()}
 
     salvarMensagemSuporteAberta(whatsapp, mensagem, respostaFinal);
 
+    if (respostaFinal.includes("Vou encaminhar para o suporte") || respostaFinal.includes("vou encaminhar para o suporte")) {
+      finalizarConversaSuporte(whatsapp, "ia_encaminhou_para_suporte");
+    }
+
     return res.json({
       ok: true,
       resposta: respostaFinal
@@ -1126,28 +1185,11 @@ app.post("/suporte/finalizar", auth, (req, res) => {
     const whatsapp = req.user.whatsapp;
     const { motivo } = req.body || {};
 
-    const abertasPath = path.join(DATA_DIR, "suporte_conversas_abertas.json");
-    const finalizadasPath = path.join(DATA_DIR, "suporte_conversas_finalizadas.json");
+    const finalizou = finalizarConversaSuporte(whatsapp, motivo || "cliente_fechou_chat");
 
-    const abertas = readJsonArraySafe(abertasPath);
-    const finalizadas = readJsonArraySafe(finalizadasPath);
-
-    const idx = abertas.findIndex(c => c.whatsapp === whatsapp && !c.finalizada);
-
-    if (idx === -1) {
+    if (!finalizou) {
       return res.json({ ok: true, sem_conversa_aberta: true });
     }
-
-    const conversa = abertas[idx];
-    conversa.finalizada = true;
-    conversa.fim = new Date().toISOString();
-    conversa.motivo_finalizacao = motivo || "cliente_fechou_chat";
-
-    finalizadas.push(conversa);
-    abertas.splice(idx, 1);
-
-    writeJsonSafe(abertasPath, abertas);
-    writeJsonSafe(finalizadasPath, finalizadas);
 
     return res.json({ ok: true });
   } catch (e) {
@@ -1155,9 +1197,12 @@ app.post("/suporte/finalizar", auth, (req, res) => {
   }
 });
 
+setInterval(finalizarConversasSuporteInativas, 60 * 1000);
+
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
 
 
