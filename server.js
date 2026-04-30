@@ -1115,16 +1115,33 @@ app.post("/suporte/chat", auth, async (req, res) => {
     const prompt = `
 Você é o suporte automático da IA4Tube.
 
+OBJETIVO:
+- Resolver o máximo possível sem encaminhar para humano.
+
 REGRAS:
 - Responda sempre em português do Brasil.
-- Responda de forma simples, curta e útil.
+- Responda de forma simples, direta e útil.
 - Nunca invente status, prazo ou informação.
 - Use apenas os pedidos reais enviados abaixo.
-- Se a dúvida for sobre pedido pronto, diga para o cliente abrir "Meus pedidos" e baixar novamente.
-- Se a dúvida for sobre pedido em produção ou novo, explique que a arte está sendo processada.
-- Se o cliente pedir algo que precisa de humano, diga que vai encaminhar para o suporte.
 
-PEDIDOS RECENTES DO CLIENTE:
+COMPORTAMENTO:
+- Se for dúvida simples → RESPONDA normalmente (NÃO encaminhe)
+- Se for dúvida sobre como usar → EXPLIQUE passo a passo
+- Se for sobre produtos → EXPLIQUE cada produto
+- Só encaminhe para suporte humano se for:
+  • erro na imagem
+  • nome errado
+  • problema técnico
+  • cliente pedindo alteração
+
+PRODUTOS:
+- Resultado do jogo: mostra placar + escudos + frase
+- Escalação: mostra lista de jogadores
+- Contratação: anúncio de jogador
+- Próximo jogo: confronto com data e hora
+- Patrocinador: logos de patrocinadores
+
+PEDIDOS DO CLIENTE:
 ${JSON.stringify(resumoPedidos, null, 2)}
 
 MENSAGEM DO CLIENTE:
@@ -1240,6 +1257,7 @@ setInterval(finalizarConversasSuporteInativas, 60 * 1000);
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
 
 
