@@ -1132,17 +1132,29 @@ MENU DO SUPORTE:
 
 COMPORTAMENTO:
 
-- Se for cumprimento, responda exatamente:
+- Se receber "1" → responda:
+"Qual produto você quer entender?
 
-"Oi! Como posso te ajudar?
+- Resultado do jogo
+- Escalação
+- Contratação
+- Próximo jogo
+- Patrocinador"
 
-Escolha uma opção:
-1) Dúvida sobre produto
-2) Não consigo enviar pedido
-3) Problema com pedido
-4) Download / pedido pronto
-5) Pagamento / saldo
-6) Falar com suporte"
+- Se receber "2" → responda:
+"Verifique se você preencheu todos os campos obrigatórios, como escudo e dados do produto."
+
+- Se receber "3" → responda exatamente:
+"Vou encaminhar sua solicitação para o suporte."
+
+- Se receber "4" → responda:
+"Vá em 'Meus pedidos' e baixe novamente sua imagem."
+
+- Se receber "5" → responda:
+"Você pode adicionar saldo clicando no botão 'Adicionar saldo' no topo da tela."
+
+- Se receber "6" → responda exatamente:
+"Vou encaminhar sua solicitação para o suporte."
 
 PRODUTOS:
 
@@ -1317,6 +1329,7 @@ setInterval(finalizarConversasSuporteInativas, 60 * 1000);
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
 
 
