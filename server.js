@@ -981,8 +981,98 @@ app.post(
   }
 );
 
+// ===== SUPORTE CHAT =====
+app.post("/suporte/chat", auth, async (req, res) => {
+  try {
+    const { mensagem } = req.body || {};
+    const whatsapp = req.user.whatsapp;
+
+    if (!mensagem || !String(mensagem).trim()) {
+      return res.status(400).json({ ok: false, error: "Mensagem vazia" });
+    }
+
+    if (!process.env.OPENAI_API_KEY) {
+      return res.status(500).json({ ok: false, error: "OPENAI_API_KEY não configurada" });
+    }
+
+    const pedidos = listPedidoBasesByWhatsapp(whatsapp).slice(0, 5);
+
+    const resumoPedidos = pedidos.map((p) => {
+      const statusPath = path.join(p.base, "status.txt");
+      const resultadoFinalPath = path.join(p.base, "resultado_final.png");
+
+      const status = fs.existsSync(statusPath)
+        ? fs.readFileSync(statusPath, "utf8").trim()
+        : (p.pedido.status || "novo");
+
+      return {
+        id: p.id,
+        status,
+        categoria: p.pedido.categoria || "",
+        rodada: p.pedido.rodada || "",
+        data: p.pedido.data || "",
+        criado_em: p.criado_em,
+        imagem_pronta: fs.existsSync(resultadoFinalPath)
+      };
+    });
+
+    const prompt = `
+Você é o suporte automático da IA4Tube.
+
+REGRAS:
+- Responda sempre em português do Brasil.
+- Responda de forma simples, curta e útil.
+- Nunca invente status, prazo ou informação.
+- Use apenas os pedidos reais enviados abaixo.
+- Se a dúvida for sobre pedido pronto, diga para o cliente abrir "Meus pedidos" e baixar novamente.
+- Se a dúvida for sobre pedido em produção ou novo, explique que a arte está sendo processada.
+- Se o cliente pedir algo que precisa de humano, diga que vai encaminhar para o suporte.
+
+PEDIDOS RECENTES DO CLIENTE:
+${JSON.stringify(resumoPedidos, null, 2)}
+
+MENSAGEM DO CLIENTE:
+${String(mensagem).trim()}
+`;
+
+    const response = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        "Authorization": "Bearer " + process.env.OPENAI_API_KEY,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model: "gpt-5-mini",
+        input: prompt
+      })
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      return res.status(500).json({
+        ok: false,
+        error: "Erro ao chamar IA",
+        detalhe: data?.error?.message || ""
+      });
+    }
+
+    return res.json({
+      ok: true,
+      resposta: data.output_text || "Não consegui responder agora. Vou encaminhar para o suporte."
+    });
+
+  } catch (e) {
+    return res.status(500).json({
+      ok: false,
+      error: "Erro no suporte"
+    });
+  }
+});
+
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
 
