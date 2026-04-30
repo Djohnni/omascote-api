@@ -1059,7 +1059,7 @@ ${String(mensagem).trim()}
 
     return res.json({
       ok: true,
-      resposta: data.output_text || "Não consegui responder agora. Vou encaminhar para o suporte."
+      resposta: data.output?.[0]?.content?.[0]?.text || data.output_text || "Não consegui responder agora. Vou encaminhar para o suporte."
     });
 
   } catch (e) {
