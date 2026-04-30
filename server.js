@@ -1163,7 +1163,12 @@ ${String(mensagem).trim()}
 
     salvarMensagemSuporteAberta(whatsapp, mensagem, respostaFinal);
 
-    if (respostaFinal.includes("Vou encaminhar para o suporte") || respostaFinal.includes("vou encaminhar para o suporte")) {
+    const respostaLower = respostaFinal.toLowerCase();
+
+    if (
+      respostaLower.includes("encaminhar") &&
+      respostaLower.includes("suporte")
+    ) {
       finalizarConversaSuporte(whatsapp, "ia_encaminhou_para_suporte");
     }
 
@@ -1235,6 +1240,7 @@ setInterval(finalizarConversasSuporteInativas, 60 * 1000);
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
 
 
