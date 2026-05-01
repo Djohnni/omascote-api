@@ -100,8 +100,20 @@ function writeTempoEstimado(obj) {
 }
 
 function getCustoPedido(categoria, cliente) {
-  return 0;
+if (categoria === "resultado") return 8.00;
+if (categoria === "escalacao") return 8.00;
+if (categoria === "contratacao") return 7.00;
+if (categoria === "proximo_jogo") return 7.00;
+if (categoria === "patrocinador") return 8.00;
+if (categoria === "escudo3d") return 4.00;
+
+if (categoria === "proximo_jogo_jogador") return 7.00;
+if (categoria === "resultado_jogo_jogador") return 8.00;
+if (categoria === "jogador_escudo") return 6.00;
+
+return 0;
 }
+
 
 function nomeCategoriaPedido(categoria) {
   const nomes = {
