@@ -414,9 +414,9 @@ app.post("/auth/register", (req, res) => {
   const novo = {
     nome_time,
     senha_hash,
-    plano: 4,
+    plano: 0,
     saldo_mensal: 0,
-    saldo_extra: 0,
+    saldo_extra: 18,
     usados_no_ciclo: 0,
     ciclo_mes: nowYYYYMM(),
     ativo: true
