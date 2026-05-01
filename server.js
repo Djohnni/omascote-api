@@ -103,6 +103,22 @@ function getCustoPedido(categoria, cliente) {
   return 0;
 }
 
+function nomeCategoriaPedido(categoria) {
+  const nomes = {
+    resultado: "Resultado do jogo",
+    escalacao: "Escalação",
+    contratacao: "Contratação",
+    proximo_jogo: "Próximo jogo",
+    patrocinador: "Patrocinador / Apoio",
+    escudo3d: "Escudo 3D",
+    proximo_jogo_jogador: "Próximo jogo jogador",
+    resultado_jogo_jogador: "Resultado jogador",
+    jogador_escudo: "Jogador + escudo"
+  };
+
+  return nomes[categoria] || categoria || "";
+}
+
 function nowYYYYMM() {
   const d = new Date();
   const y = d.getFullYear();
@@ -685,13 +701,15 @@ function criarPedidoHandler(categoria) {
       fs.renameSync(f.path, dest);
     }
 
-    const podeUsarEscudo1 = ["resultado", "escalacao", "contratacao", "proximo_jogo", "patrocinador", "escudo3d"].includes(categoria);
-    const podeUsarEscudo2 = ["resultado", "contratacao", "proximo_jogo"].includes(categoria);
-    const podeUsarMascote = ["resultado", "escalacao"].includes(categoria);
+    const podeUsarEscudo1 = ["resultado", "escalacao", "contratacao", "proximo_jogo", "patrocinador", "escudo3d", "proximo_jogo_jogador", "resultado_jogo_jogador", "jogador_escudo"].includes(categoria);
+    const podeUsarEscudo2 = ["resultado", "contratacao", "proximo_jogo", "resultado_jogo_jogador"].includes(categoria);
+    const escudo2EhFotoJogador = categoria === "proximo_jogo_jogador";
+    const podeUsarMascote = ["resultado", "escalacao", "resultado_jogo_jogador", "jogador_escudo"].includes(categoria);
     const podeUsarPatrocinadores = categoria === "patrocinador";
 
     if (podeUsarEscudo1) moveOne("escudo1", "escudo1.png");
     if (podeUsarEscudo2) moveOne("escudo2", "escudo2.png");
+    if (escudo2EhFotoJogador) moveOne("escudo2", "mascote.png");
     if (podeUsarMascote) moveOne("mascote", "mascote.png");
 
     const pats = podeUsarPatrocinadores ? (files["patrocinadores"] || []) : [];
@@ -702,18 +720,18 @@ function criarPedidoHandler(categoria) {
     });
 
    const pedido = {
-      time_principal: ["resultado", "proximo_jogo"].includes(categoria) ? (time_principal || "") : "",
-      gols_time_principal: categoria === "resultado" ? (Number(gols_time_principal) || 0) : 0,
-      gols_adversario: categoria === "resultado" ? (Number(gols_adversario) || 0) : 0,
-      time_adversario: ["resultado", "proximo_jogo"].includes(categoria) ? (time_adversario || "") : "",
+      time_principal: ["resultado", "proximo_jogo", "proximo_jogo_jogador", "resultado_jogo_jogador"].includes(categoria) ? (time_principal || "") : "",
+      gols_time_principal: ["resultado", "resultado_jogo_jogador"].includes(categoria) ? (Number(gols_time_principal) || 0) : 0,
+      gols_adversario: ["resultado", "resultado_jogo_jogador"].includes(categoria) ? (Number(gols_adversario) || 0) : 0,
+      time_adversario: ["resultado", "proximo_jogo", "proximo_jogo_jogador", "resultado_jogo_jogador"].includes(categoria) ? (time_adversario || "") : "",
     
       artilheiros: categoria === "resultado" && artilheiros ? JSON.parse(artilheiros) : [],
-      jogadores: categoria === "escalacao" && jogadores_json ? JSON.parse(jogadores_json) : [],
-      jogadores_texto: categoria === "escalacao" ? (jogadores_texto || "") : "",
+      jogadores: ["escalacao", "jogador_escudo"].includes(categoria) && jogadores_json ? JSON.parse(jogadores_json) : [],
+      jogadores_texto: ["escalacao", "jogador_escudo"].includes(categoria) ? (jogadores_texto || "") : "",
     
       escudo_principal: podeUsarEscudo1 && files["escudo1"]?.[0] ? "escudo1.png" : "",
       escudo_adversario: podeUsarEscudo2 && files["escudo2"]?.[0] ? "escudo2.png" : "",
-      foto_jogo: podeUsarMascote && files["mascote"]?.[0] ? "mascote.png" : "",
+      foto_jogo: ((podeUsarMascote && files["mascote"]?.[0]) || (escudo2EhFotoJogador && files["escudo2"]?.[0])) ? "mascote.png" : "",
     
       categoria: categoria,
       id,
@@ -721,8 +739,8 @@ function criarPedidoHandler(categoria) {
       mes: mesAtual,
       rodada,
       data,
-      hora: ["resultado", "contratacao", "proximo_jogo"].includes(categoria) ? (hora || "") : "",
-      arena: categoria === "proximo_jogo" ? (arena || "") : "",
+      hora: ["resultado", "resultado_jogo_jogador", "contratacao", "proximo_jogo", "proximo_jogo_jogador"].includes(categoria) ? (hora || "") : "",
+      arena: ["proximo_jogo", "proximo_jogo_jogador"].includes(categoria) ? (arena || "") : "",
       mascote_tipo: mascote_tipo || "",
       patrocinadores_qtd: pats.length,
       status: "novo",
@@ -779,6 +797,9 @@ app.post(
     if (flyer_tipo === "zz1fm") return criarPedidoHandler("contratacao")(req, res);
     if (flyer_tipo === "zz1ft") return criarPedidoHandler("proximo_jogo")(req, res);
     if (flyer_tipo === "zz1fj") return criarPedidoHandler("patrocinador")(req, res);
+    if (flyer_tipo === "jog_proximo") return criarPedidoHandler("proximo_jogo_jogador")(req, res);
+    if (flyer_tipo === "jog_resultado") return criarPedidoHandler("resultado_jogo_jogador")(req, res);
+    if (flyer_tipo === "jog_escudo") return criarPedidoHandler("jogador_escudo")(req, res);
 
     return criarPedidoHandler("pedido")(req, res);
   }
@@ -931,7 +952,7 @@ app.get("/meus-pedidos", auth, (req, res) => {
 
     return {
       id: item.id,
-      tipo: item.pedido.categoria || "",
+      tipo: nomeCategoriaPedido(item.pedido.categoria || ""),
       status,
       data: item.pedido.data || item.criado_em,
       criado_em: item.criado_em,
@@ -1160,6 +1181,27 @@ if(msg.includes("resultado do jogo") && msg.includes("entender")){
   });
 }
 
+if(msg.includes("próximo jogo jogador") || msg.includes("proximo jogo jogador")){
+  return res.json({
+    ok:true,
+    resposta:`Próximo jogo jogador cria uma arte focada em um jogador para divulgar a próxima partida.\n\nObrigatório:\n- Time A e Time B\n- Escudo do time\n- Foto do jogador\n- Data e horário\n- Campeonato/competição\n\nOpcional:\n- Local`
+  });
+}
+
+if(msg.includes("resultado jogador")){
+  return res.json({
+    ok:true,
+    resposta:`Resultado jogador cria uma arte de resultado com foco no jogador.\n\nObrigatório:\n- Times\n- Placar\n- Escudos\n- Foto do jogador\n\nOpcional:\n- Frase\n- Campeonato/competição`
+  });
+}
+
+if(msg.includes("jogador + escudo") || msg.includes("jogador e escudo")){
+  return res.json({
+    ok:true,
+    resposta:`Jogador + escudo cria uma arte simples e forte com o jogador e o escudo do time.\n\nObrigatório:\n- Nome do jogador\n- Escudo do time\n- Foto do jogador\n\nOpcional:\n- Nenhum`
+  });
+}
+
 if(msg.includes("como baixar") || msg.includes("baixar novamente")){
   return res.json({
     ok:true,
@@ -1241,6 +1283,9 @@ COMPORTAMENTO:
 - Se o cliente disser "Quero entender Próximo jogo", explique somente Próximo jogo.
 - Se o cliente disser "Quero entender Patrocinador", explique somente Patrocinador.
 - Se o cliente disser "Quero entender Escudo 3D", responda: "Escudo 3D transforma o escudo do time em uma arte 3D moderna. Obrigatório: enviar o escudo do time. Opcional: nenhuma informação extra."
+- Se o cliente disser "Quero entender Próximo jogo jogador", explique somente Próximo jogo jogador.
+- Se o cliente disser "Quero entender Resultado jogador", explique somente Resultado jogador.
+- Se o cliente disser "Quero entender Jogador + escudo", explique somente Jogador + escudo.
 
 - Ao explicar produto, sempre separe "Obrigatório" e "Opcional".
 - Se o cliente disser "Não sei o que preencher", pergunte: "Qual produto você está tentando enviar?"
@@ -1316,6 +1361,37 @@ Patrocinador:
   3. Enviar logos dos patrocinadores.
 - Opcional:
   4. Texto principal.
+
+Próximo jogo jogador:
+- Arte de próximo jogo com foco em um jogador.
+- Obrigatório:
+  1. Definir os dois times.
+  2. Escudo do time.
+  3. Foto do jogador.
+  4. Data e horário.
+  5. Campeonato/competição.
+- Opcional:
+  6. Local.
+
+Resultado jogador:
+- Arte de resultado com foco no jogador.
+- Obrigatório:
+  1. Definir os times.
+  2. Definir o placar.
+  3. Selecionar os escudos.
+  4. Enviar foto do jogador.
+- Opcional:
+  5. Frase.
+  6. Campeonato/competição.
+
+Jogador + escudo:
+- Arte simples com jogador e escudo do time.
+- Obrigatório:
+  1. Nome do jogador.
+  2. Escudo do time.
+  3. Foto do jogador.
+- Opcional:
+  Nenhum.
 
 PEDIDOS DO CLIENTE:
 ${JSON.stringify(resumoPedidos, null, 2)}
@@ -1436,6 +1512,7 @@ setInterval(finalizarConversasSuporteInativas, 60 * 1000);
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
 
 
