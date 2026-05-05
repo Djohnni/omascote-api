@@ -714,9 +714,9 @@ function criarPedidoHandler(categoria) {
     }
 
     const podeUsarEscudo1 = ["resultado", "escalacao", "contratacao", "proximo_jogo", "patrocinador", "escudo3d", "proximo_jogo_jogador", "resultado_jogo_jogador", "jogador_escudo"].includes(categoria);
-    const podeUsarEscudo2 = ["resultado", "contratacao", "proximo_jogo", "resultado_jogo_jogador"].includes(categoria);
-    const escudo2EhFotoJogador = categoria === "proximo_jogo_jogador";
-    const podeUsarMascote = ["resultado", "escalacao", "resultado_jogo_jogador", "jogador_escudo"].includes(categoria);
+    const podeUsarEscudo2 = ["resultado", "contratacao", "proximo_jogo", "proximo_jogo_jogador", "resultado_jogo_jogador"].includes(categoria);
+    const escudo2EhFotoJogador = false;
+    const podeUsarMascote = ["resultado", "escalacao", "proximo_jogo_jogador", "resultado_jogo_jogador", "jogador_escudo"].includes(categoria);
     const podeUsarPatrocinadores = categoria === "patrocinador";
 
     if (podeUsarEscudo1) moveOne("escudo1", "escudo1.png");
@@ -1524,6 +1524,7 @@ setInterval(finalizarConversasSuporteInativas, 60 * 1000);
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
 
 
