@@ -35,6 +35,8 @@ app.use(cors({
 
 app.use(express.json({ limit: "2mb" }));
 
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "";
+
 // ===== GARANTE PASTAS =====
 function ensureDir(p) {
   if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true });
@@ -405,6 +407,94 @@ app.post("/bot/tempo-estimado", auth, (req, res) => {
   writeTempoEstimado(tempo);
 
   return res.json({ ok: true });
+});
+
+async function verificarGoogleIdToken(id_token) {
+  if (!GOOGLE_CLIENT_ID) {
+    throw new Error("GOOGLE_CLIENT_ID não configurado");
+  }
+
+  const r = await fetch("https://oauth2.googleapis.com/tokeninfo?id_token=" + encodeURIComponent(id_token));
+  const data = await r.json();
+
+  if (!r.ok || data.aud !== GOOGLE_CLIENT_ID || !data.sub) {
+    throw new Error("Token Google inválido");
+  }
+
+  return data;
+}
+
+app.get("/auth/google-config", (req, res) => {
+  return res.json({
+    ok: true,
+    client_id: GOOGLE_CLIENT_ID
+  });
+});
+
+app.post("/auth/google", async (req, res) => {
+  try {
+    const { id_token } = req.body || {};
+
+    if (!id_token) {
+      return res.status(400).json({ ok: false, error: "id_token obrigatório" });
+    }
+
+    const google = await verificarGoogleIdToken(id_token);
+    const clientes = readClientes();
+
+    const chaveCliente = "google_" + String(google.sub).replace(/[^\w\-]+/g, "");
+    const nomeGoogle = google.name || google.given_name || "Meu time";
+    const emailGoogle = google.email || "";
+
+    let c = clientes[chaveCliente];
+
+    if (!c) {
+      c = {
+        nome_time: nomeGoogle,
+        senha_hash: "",
+        login_tipo: "google",
+        google_id: google.sub,
+        email: emailGoogle,
+        foto_google: google.picture || "",
+        plano: 0,
+        saldo_mensal: 0,
+        saldo_extra: 18,
+        usados_no_ciclo: 0,
+        ciclo_mes: nowYYYYMM(),
+        ativo: true
+      };
+
+      clientes[chaveCliente] = c;
+      writeClientes(clientes);
+    }
+
+    const mesAtual = nowYYYYMM();
+    if (c.ciclo_mes !== mesAtual) {
+      c.ciclo_mes = mesAtual;
+      c.usados_no_ciclo = 0;
+      clientes[chaveCliente] = c;
+      writeClientes(clientes);
+    }
+
+    const token = jwt.sign({ whatsapp: chaveCliente }, JWT_SECRET, { expiresIn: "7d" });
+
+    return res.json({
+      ok: true,
+      token,
+      nome_time: c.nome_time,
+      plano: c.plano,
+      saldo_mensal: Number(c.saldo_mensal || 0),
+      saldo_extra: Number(c.saldo_extra || 0),
+      saldo: Number(c.saldo_mensal || 0) + Number(c.saldo_extra || 0),
+      usados_no_ciclo: c.usados_no_ciclo
+    });
+
+  } catch (e) {
+    return res.status(401).json({
+      ok: false,
+      error: e.message || "Erro ao entrar com Google"
+    });
+  }
 });
 
 // Login
@@ -1524,6 +1614,7 @@ setInterval(finalizarConversasSuporteInativas, 60 * 1000);
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
 
 
