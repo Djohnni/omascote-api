@@ -458,7 +458,7 @@ app.post("/auth/google", async (req, res) => {
         foto_google: google.picture || "",
         plano: 0,
         saldo_mensal: 0,
-        saldo_extra: 18,
+        saldo_extra: 0,
         usados_no_ciclo: 0,
         ciclo_mes: nowYYYYMM(),
         ativo: true
@@ -518,7 +518,7 @@ app.post("/auth/register", (req, res) => {
     senha_hash,
     plano: 0,
     saldo_mensal: 0,
-    saldo_extra: 18,
+    saldo_extra: 0,
     usados_no_ciclo: 0,
     ciclo_mes: nowYYYYMM(),
     ativo: true
