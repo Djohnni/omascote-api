@@ -37,7 +37,8 @@ app.use(cors({
   credentials: false
 }));
 
-app.use(express.json({ limit: "2mb" }));
+app.use(express.json({ limit: "50mb" }));
+app.use(express.static("public"));
 
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "";
 
