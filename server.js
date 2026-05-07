@@ -293,8 +293,9 @@ function salvarEventosCliente(req, eventos = []) {
 
     eventos.forEach(ev => {
       const payload = ev.p || {};
+      const pedidoId = String(payload.pedido_id || ev.pedido_id || "").trim();
 
-      atuais.push({
+      const item = {
         data: agora,
         cliente_id: cliente?.cliente_id || "",
         nome_time: cliente?.nome_time || "",
@@ -303,6 +304,7 @@ function salvarEventosCliente(req, eventos = []) {
         evento: ev.e || "",
         produto: ev.produto || "",
         categoria: ev.categoria || "",
+        pedido_id: pedidoId,
         pagina: ev.url || "",
         logado: !!ev.logado,
 
@@ -311,10 +313,30 @@ function salvarEventosCliente(req, eventos = []) {
         tempo_inativo_ms: Number(payload.tempo_inativo_ms || 0),
 
         payload
-      });
+      };
+
+      atuais.push(item);
+
+      if (pedidoId) {
+        try {
+          const basePedido = getPedidoBaseGlobal(pedidoId);
+          if (basePedido) {
+            const eventosPedidoFile = path.join(basePedido, "eventos_cliente.json");
+            const eventosPedido = readJsonArraySafe(eventosPedidoFile);
+            eventosPedido.push(item);
+
+            const limitePedido = 500;
+            if (eventosPedido.length > limitePedido) {
+              eventosPedido.splice(0, eventosPedido.length - limitePedido);
+            }
+
+            writeJsonSafe(eventosPedidoFile, eventosPedido);
+          }
+        } catch {}
+      }
     });
 
-    const limite = 30000;
+    const limite = 50000;
 
     if (atuais.length > limite) {
       atuais.splice(0, atuais.length - limite);
@@ -1828,6 +1850,51 @@ app.get("/suporte/minhas-mensagens", auth, (req, res) => {
   }
 });
 
+app.get("/bot/eventos-clientes", auth, (req, res) => {
+  try {
+    if (!isBotAdmin(req)) {
+      return res.status(403).json({ ok: false, error: "Acesso negado" });
+    }
+
+    const limite = Math.min(Number(req.query.limite || 1000), 5000);
+    const eventos = readJsonArraySafe(EVENTOS_CLIENTES_FILE).slice(-limite);
+
+    return res.json({
+      ok: true,
+      total: eventos.length,
+      eventos
+    });
+  } catch {
+    return res.status(500).json({ ok:false, error:"erro_eventos_clientes" });
+  }
+});
+
+app.get("/bot/eventos-pedido/:id", auth, (req, res) => {
+  try {
+    if (!isBotAdmin(req)) {
+      return res.status(403).json({ ok: false, error: "Acesso negado" });
+    }
+
+    const basePedido = getPedidoBaseGlobal(req.params.id);
+
+    if (!basePedido) {
+      return res.status(404).json({ ok:false, error:"Pedido não encontrado" });
+    }
+
+    const eventosPedidoFile = path.join(basePedido, "eventos_cliente.json");
+    const eventos = readJsonArraySafe(eventosPedidoFile);
+
+    return res.json({
+      ok:true,
+      pedido_id:req.params.id,
+      total:eventos.length,
+      eventos
+    });
+  } catch {
+    return res.status(500).json({ ok:false, error:"erro_eventos_pedido" });
+  }
+});
+
 app.get("/bot/online", auth, (req, res) => {
   try {
     if (!isBotAdmin(req)) {
@@ -1982,6 +2049,7 @@ setInterval(finalizarConversasSuporteInativas, 60 * 1000);
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
 
 
