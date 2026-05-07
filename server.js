@@ -26,6 +26,9 @@ const BOT_ADMIN_WHATSAPP = process.env.BOT_ADMIN_WHATSAPP || "15991120599";
 const MP_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN || "";
 const MP_PROCESSADOS_FILE = path.join(DATA_DIR, "mp_processados.json");
 const TEMPO_ESTIMADO_FILE = path.join(DATA_DIR, "tempo_estimado.json");
+const ONLINE_FILE = path.join(DATA_DIR, "usuarios_online.json");
+const SUPORTE_ABERTAS_FILE = path.join(DATA_DIR, "suporte_conversas_abertas.json");
+const SUPORTE_FINALIZADAS_FILE = path.join(DATA_DIR, "suporte_conversas_finalizadas.json");
 
 // CORS: permite seu site chamar a API
 app.use(cors({
@@ -63,6 +66,18 @@ if (!fs.existsSync(TEMPO_ESTIMADO_FILE)) {
     max_processos: 5,
     atualizado_em: new Date().toISOString()
   }, null, 2), "utf8");
+}
+
+if (!fs.existsSync(ONLINE_FILE)) {
+  fs.writeFileSync(ONLINE_FILE, JSON.stringify({}, null, 2), "utf8");
+}
+
+if (!fs.existsSync(SUPORTE_ABERTAS_FILE)) {
+  fs.writeFileSync(SUPORTE_ABERTAS_FILE, JSON.stringify([], null, 2), "utf8");
+}
+
+if (!fs.existsSync(SUPORTE_FINALIZADAS_FILE)) {
+  fs.writeFileSync(SUPORTE_FINALIZADAS_FILE, JSON.stringify([], null, 2), "utf8");
 }
 
 // ===== HELPERS =====
@@ -262,9 +277,60 @@ function writeJsonSafe(filePath, data) {
   fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf8");
 }
 
-function salvarMensagemSuporteAberta(whatsapp, mensagemCliente, respostaIA) {
-  const abertasPath = path.join(DATA_DIR, "suporte_conversas_abertas.json");
-  const abertas = readJsonArraySafe(abertasPath);
+function getClienteResumo(whatsapp) {
+  const clientes = readClientes();
+  const c = clientes[whatsapp] || {};
+
+  return {
+    whatsapp,
+    cliente_id: whatsapp,
+    nome_time: c.nome_time || "",
+    login_tipo: c.login_tipo || "whatsapp",
+    email: c.email || "",
+    foto_google: c.foto_google || "",
+    saldo: Number(c.saldo_mensal || 0) + Number(c.saldo_extra || 0),
+    usados_no_ciclo: Number(c.usados_no_ciclo || 0)
+  };
+}
+
+function registrarOnline(req, extra = {}) {
+  try {
+    if (!req.user || !req.user.whatsapp) return;
+
+    const online = safeReadJson(ONLINE_FILE) || {};
+    const whatsapp = req.user.whatsapp;
+    const cliente = getClienteResumo(whatsapp);
+
+    online[whatsapp] = {
+      ...cliente,
+      online: true,
+      ultima_atividade: new Date().toISOString(),
+      pagina_atual: extra.pagina_atual || req.headers["x-ia4-page"] || "",
+      produto_atual: extra.produto_atual || req.headers["x-ia4-product"] || "",
+      chat_aberto: String(extra.chat_aberto ?? req.headers["x-ia4-chat"] ?? "") === "true",
+      ultima_acao: extra.ultima_acao || req.headers["x-ia4-action"] || ""
+    };
+
+    fs.writeFileSync(ONLINE_FILE, JSON.stringify(online, null, 2), "utf8");
+  } catch {}
+}
+
+function listarOnlineRecentes() {
+  const online = safeReadJson(ONLINE_FILE) || {};
+  const agora = Date.now();
+  const limiteMs = 2 * 60 * 1000;
+
+  return Object.values(online)
+    .filter(u => {
+      const t = new Date(u.ultima_atividade || 0).getTime();
+      return t && agora - t <= limiteMs;
+    })
+    .sort((a, b) => new Date(b.ultima_atividade) - new Date(a.ultima_atividade));
+}
+
+function salvarMensagemSuporteAberta(whatsapp, mensagemCliente, respostaIA, origem = "ia") {
+  const abertas = readJsonArraySafe(SUPORTE_ABERTAS_FILE);
+  const cliente = getClienteResumo(whatsapp);
 
   let conversa = abertas.find(c => c.whatsapp === whatsapp && !c.finalizada);
 
@@ -272,26 +338,44 @@ function salvarMensagemSuporteAberta(whatsapp, mensagemCliente, respostaIA) {
     conversa = {
       id: `${whatsapp}_${Date.now()}`,
       whatsapp,
+      cliente,
       inicio: new Date().toISOString(),
       finalizada: false,
+      status: "aberta",
+      precisa_humano: false,
       mensagens: []
     };
     abertas.push(conversa);
   }
 
+  conversa.cliente = cliente;
   conversa.ultima_atualizacao = new Date().toISOString();
-  conversa.mensagens.push({
-    data: new Date().toISOString(),
-    cliente: String(mensagemCliente || "").trim(),
-    ia: String(respostaIA || "").trim()
-  });
 
-  writeJsonSafe(abertasPath, abertas);
+  if (mensagemCliente && String(mensagemCliente).trim()) {
+    conversa.mensagens.push({
+      id: `${Date.now()}_cliente`,
+      data: new Date().toISOString(),
+      autor: "cliente",
+      texto: String(mensagemCliente || "").trim()
+    });
+  }
+
+  if (respostaIA && String(respostaIA).trim()) {
+    conversa.mensagens.push({
+      id: `${Date.now()}_${origem}`,
+      data: new Date().toISOString(),
+      autor: origem,
+      texto: String(respostaIA || "").trim()
+    });
+  }
+
+  writeJsonSafe(SUPORTE_ABERTAS_FILE, abertas);
+  return conversa;
 }
 
 function finalizarConversaSuporte(whatsapp, motivo) {
-  const abertasPath = path.join(DATA_DIR, "suporte_conversas_abertas.json");
-  const finalizadasPath = path.join(DATA_DIR, "suporte_conversas_finalizadas.json");
+  const abertasPath = SUPORTE_ABERTAS_FILE;
+  const finalizadasPath = SUPORTE_FINALIZADAS_FILE;
 
   const abertas = readJsonArraySafe(abertasPath);
   const finalizadas = readJsonArraySafe(finalizadasPath);
@@ -315,8 +399,8 @@ function finalizarConversaSuporte(whatsapp, motivo) {
 }
 
 function finalizarConversasSuporteInativas() {
-  const abertasPath = path.join(DATA_DIR, "suporte_conversas_abertas.json");
-  const finalizadasPath = path.join(DATA_DIR, "suporte_conversas_finalizadas.json");
+  const abertasPath = SUPORTE_ABERTAS_FILE;
+  const finalizadasPath = SUPORTE_FINALIZADAS_FILE;
 
   const abertas = readJsonArraySafe(abertasPath);
   if (abertas.length === 0) return;
@@ -585,6 +669,8 @@ app.post("/auth/login", (req, res) => {
 
 // Perfil
 app.get("/me", auth, (req, res) => {
+  registrarOnline(req, { ultima_acao: "perfil" });
+
   const clientes = readClientes();
   const c = clientes[req.user.whatsapp];
 
@@ -1041,6 +1127,8 @@ app.get("/pedidos/novos", auth, (req, res) => {
 });
 
 app.get("/meus-pedidos", auth, (req, res) => {
+  registrarOnline(req, { ultima_acao: "meus_pedidos" });
+
   const whatsapp = req.user.whatsapp;
   const itens = listPedidoBasesByWhatsapp(whatsapp).slice(0, 15);
 
@@ -1327,10 +1415,22 @@ if(
   msg.includes("alteração") ||
   msg.includes("suporte")
 ){
-  finalizarConversaSuporte(whatsapp, "cliente_pediu_suporte");
+  const conversa = salvarMensagemSuporteAberta(whatsapp, mensagem, "Vou encaminhar sua solicitação para o suporte.", "sistema");
+  conversa.precisa_humano = true;
+  conversa.status = "aguardando_suporte";
+  conversa.ultima_atualizacao = new Date().toISOString();
+
+  const abertas = readJsonArraySafe(SUPORTE_ABERTAS_FILE);
+  const idx = abertas.findIndex(c => c.id === conversa.id);
+  if(idx >= 0){
+    abertas[idx] = conversa;
+    writeJsonSafe(SUPORTE_ABERTAS_FILE, abertas);
+  }
 
   return res.json({
     ok:true,
+    modo_humano:true,
+    conversa_id: conversa.id,
     resposta:"Vou encaminhar sua solicitação para o suporte."
   });
 }
@@ -1532,7 +1632,7 @@ ${String(mensagem).trim()}
     const resposta = data.choices?.[0]?.message?.content?.trim();
     const respostaFinal = resposta || "Não consegui responder agora. Vou encaminhar para o suporte.";
 
-    salvarMensagemSuporteAberta(whatsapp, mensagem, respostaFinal);
+    const conversa = salvarMensagemSuporteAberta(whatsapp, mensagem, respostaFinal, "ia");
 
     const respostaLower = respostaFinal.toLowerCase();
 
@@ -1543,11 +1643,21 @@ ${String(mensagem).trim()}
       respostaLower.includes("entrar em contato com o suporte") ||
       respostaLower.includes("recomendo que você entre em contato")
     ) {
-      finalizarConversaSuporte(whatsapp, "ia_encaminhou_para_suporte");
+      conversa.precisa_humano = true;
+      conversa.status = "aguardando_suporte";
+
+      const abertas = readJsonArraySafe(SUPORTE_ABERTAS_FILE);
+      const idx = abertas.findIndex(c => c.id === conversa.id);
+      if(idx >= 0){
+        abertas[idx] = conversa;
+        writeJsonSafe(SUPORTE_ABERTAS_FILE, abertas);
+      }
     }
 
     return res.json({
       ok: true,
+      conversa_id: conversa.id,
+      modo_humano: !!conversa.precisa_humano,
       resposta: respostaFinal
     });
 
@@ -1556,6 +1666,103 @@ ${String(mensagem).trim()}
       ok: false,
       error: "Erro no suporte"
     });
+  }
+});
+
+app.get("/suporte/minhas-mensagens", auth, (req, res) => {
+  try {
+    registrarOnline(req, { chat_aberto: true, ultima_acao: "suporte_poll" });
+
+    const whatsapp = req.user.whatsapp;
+    const abertas = readJsonArraySafe(SUPORTE_ABERTAS_FILE);
+    const conversa = abertas.find(c => c.whatsapp === whatsapp && !c.finalizada);
+
+    if (!conversa) {
+      return res.json({ ok: true, conversa: null, mensagens: [] });
+    }
+
+    return res.json({
+      ok: true,
+      conversa_id: conversa.id,
+      conversa,
+      mensagens: conversa.mensagens || []
+    });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: "Erro ao buscar mensagens" });
+  }
+});
+
+app.get("/bot/online", auth, (req, res) => {
+  try {
+    if (!isBotAdmin(req)) {
+      return res.status(403).json({ ok: false, error: "Acesso negado" });
+    }
+
+    return res.json({
+      ok: true,
+      usuarios: listarOnlineRecentes()
+    });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: "Erro ao listar online" });
+  }
+});
+
+app.get("/bot/suporte/abertas", auth, (req, res) => {
+  try {
+    if (!isBotAdmin(req)) {
+      return res.status(403).json({ ok: false, error: "Acesso negado" });
+    }
+
+    const conversas = readJsonArraySafe(SUPORTE_ABERTAS_FILE)
+      .filter(c => !c.finalizada)
+      .sort((a, b) => new Date(b.ultima_atualizacao || b.inicio) - new Date(a.ultima_atualizacao || a.inicio));
+
+    return res.json({
+      ok: true,
+      conversas
+    });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: "Erro ao listar suporte aberto" });
+  }
+});
+
+app.post("/bot/suporte/:id/responder", auth, (req, res) => {
+  try {
+    if (!isBotAdmin(req)) {
+      return res.status(403).json({ ok: false, error: "Acesso negado" });
+    }
+
+    const { mensagem } = req.body || {};
+    const texto = String(mensagem || "").trim();
+
+    if (!texto) {
+      return res.status(400).json({ ok: false, error: "Mensagem vazia" });
+    }
+
+    const abertas = readJsonArraySafe(SUPORTE_ABERTAS_FILE);
+    const idx = abertas.findIndex(c => c.id === req.params.id && !c.finalizada);
+
+    if (idx === -1) {
+      return res.status(404).json({ ok: false, error: "Conversa não encontrada" });
+    }
+
+    abertas[idx].mensagens = abertas[idx].mensagens || [];
+    abertas[idx].mensagens.push({
+      id: `${Date.now()}_humano`,
+      data: new Date().toISOString(),
+      autor: "humano",
+      texto
+    });
+
+    abertas[idx].status = "respondida";
+    abertas[idx].precisa_humano = false;
+    abertas[idx].ultima_atualizacao = new Date().toISOString();
+
+    writeJsonSafe(SUPORTE_ABERTAS_FILE, abertas);
+
+    return res.json({ ok: true, conversa: abertas[idx] });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: "Erro ao responder suporte" });
   }
 });
 
@@ -1614,6 +1821,8 @@ setInterval(finalizarConversasSuporteInativas, 60 * 1000);
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
+
 
 
 
