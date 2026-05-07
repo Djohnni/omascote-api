@@ -29,6 +29,7 @@ const TEMPO_ESTIMADO_FILE = path.join(DATA_DIR, "tempo_estimado.json");
 const ONLINE_FILE = path.join(DATA_DIR, "usuarios_online.json");
 const SUPORTE_ABERTAS_FILE = path.join(DATA_DIR, "suporte_conversas_abertas.json");
 const SUPORTE_FINALIZADAS_FILE = path.join(DATA_DIR, "suporte_conversas_finalizadas.json");
+const EVENTOS_CLIENTES_FILE = path.join(DATA_DIR, "eventos_clientes.json");
 
 // CORS: permite seu site chamar a API
 app.use(cors({
@@ -78,6 +79,10 @@ if (!fs.existsSync(SUPORTE_ABERTAS_FILE)) {
 
 if (!fs.existsSync(SUPORTE_FINALIZADAS_FILE)) {
   fs.writeFileSync(SUPORTE_FINALIZADAS_FILE, JSON.stringify([], null, 2), "utf8");
+}
+
+if (!fs.existsSync(EVENTOS_CLIENTES_FILE)) {
+  fs.writeFileSync(EVENTOS_CLIENTES_FILE, JSON.stringify([], null, 2), "utf8");
 }
 
 // ===== HELPERS =====
@@ -277,6 +282,41 @@ function writeJsonSafe(filePath, data) {
   fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf8");
 }
 
+function salvarEventosCliente(req, eventos = []) {
+  try {
+    if (!Array.isArray(eventos) || eventos.length === 0) return;
+
+    const atuais = readJsonArraySafe(EVENTOS_CLIENTES_FILE);
+    const agora = new Date().toISOString();
+
+    const cliente = req.user ? getClienteResumo(req.user.whatsapp) : null;
+
+    eventos.forEach(ev => {
+      atuais.push({
+        data: agora,
+        cliente_id: cliente?.cliente_id || "",
+        nome_time: cliente?.nome_time || "",
+        whatsapp: cliente?.whatsapp || "",
+        sessao: ev.sessao || "",
+        evento: ev.e || "",
+        produto: ev.produto || "",
+        categoria: ev.categoria || "",
+        pagina: ev.url || "",
+        logado: !!ev.logado,
+        payload: ev.p || {}
+      });
+    });
+
+    const limite = 15000;
+
+    if (atuais.length > limite) {
+      atuais.splice(0, atuais.length - limite);
+    }
+
+    writeJsonSafe(EVENTOS_CLIENTES_FILE, atuais);
+  } catch {}
+}
+
 function getClienteResumo(whatsapp) {
   const clientes = readClientes();
   const c = clientes[whatsapp] || {};
@@ -470,6 +510,37 @@ app.get("/tempo-estimado", (req, res) => {
     ok: true,
     ...readTempoEstimado()
   });
+});
+
+app.post("/evento", (req, res) => {
+  try {
+    const eventos = Array.isArray(req.body?.eventos)
+      ? req.body.eventos
+      : [];
+
+    let clienteFake = null;
+
+    try {
+      const h = req.headers.authorization || "";
+      const token = h.startsWith("Bearer ") ? h.slice(7) : "";
+
+      if (token) {
+        clienteFake = jwt.verify(token, JWT_SECRET);
+      }
+    } catch {}
+
+    salvarEventosCliente(
+      { user: clienteFake },
+      eventos
+    );
+
+    return res.json({ ok:true });
+  } catch {
+    return res.status(500).json({
+      ok:false,
+      error:"erro_eventos"
+    });
+  }
 });
 
 app.post("/bot/tempo-estimado", auth, (req, res) => {
@@ -1821,6 +1892,7 @@ setInterval(finalizarConversasSuporteInativas, 60 * 1000);
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
 
 
