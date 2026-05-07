@@ -394,6 +394,8 @@ function listarOnlineRecentes() {
 }
 
 function salvarMensagemSuporteAberta(whatsapp, mensagemCliente, respostaIA, origem = "ia") {
+  finalizarConversasSuporteInativas();
+
   const abertas = readJsonArraySafe(SUPORTE_ABERTAS_FILE);
   const cliente = getClienteResumo(whatsapp);
 
@@ -1758,7 +1760,8 @@ ${String(mensagem).trim()}
     }
 
     const resposta = data.choices?.[0]?.message?.content?.trim();
-    const respostaFinal = resposta || "Não consegui responder agora. Vou encaminhar para o suporte.";
+    const respostaFinal = (resposta || "Não consegui responder agora.").trim()
+      + "\n\nQuer continuar conversando com o robô ou prefere falar com humano?";
 
     const conversa = salvarMensagemSuporteAberta(whatsapp, mensagem, respostaFinal, "ia");
 
@@ -1786,7 +1789,12 @@ ${String(mensagem).trim()}
       ok: true,
       conversa_id: conversa.id,
       modo_humano: !!conversa.precisa_humano,
-      resposta: respostaFinal
+      resposta: respostaFinal,
+      mostrar_opcoes_pos_ia: true,
+      opcoes_pos_ia: [
+        { texto: "Continuar com robô", valor: "continuar_robo" },
+        { texto: "Falar com humano", valor: "falar_humano" }
+      ]
     });
 
   } catch (e) {
@@ -1974,6 +1982,7 @@ setInterval(finalizarConversasSuporteInativas, 60 * 1000);
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
 
 
