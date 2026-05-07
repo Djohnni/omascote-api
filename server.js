@@ -29,7 +29,14 @@ const TEMPO_ESTIMADO_FILE = path.join(DATA_DIR, "tempo_estimado.json");
 const ONLINE_FILE = path.join(DATA_DIR, "usuarios_online.json");
 const SUPORTE_ABERTAS_FILE = path.join(DATA_DIR, "suporte_conversas_abertas.json");
 const SUPORTE_FINALIZADAS_FILE = path.join(DATA_DIR, "suporte_conversas_finalizadas.json");
+const ANALYTICS_DIR = path.join(DATA_DIR, "analytics");
 const EVENTOS_CLIENTES_FILE = path.join(DATA_DIR, "eventos_clientes.json");
+
+const CLIENTES_TESTE = [
+  "Los Hermanos",
+  "TESTE",
+  "admin"
+];
 
 // CORS: permite seu site chamar a API
 app.use(cors({
@@ -50,6 +57,7 @@ function ensureDir(p) {
 ensureDir(DATA_DIR);
 ensureDir(PEDIDOS_DIR);
 ensureDir(path.join(DATA_DIR, "tmp_uploads"));
+ensureDir(ANALYTICS_DIR);
 
 if (!fs.existsSync(CLIENTES_FILE)) {
   fs.writeFileSync(CLIENTES_FILE, JSON.stringify({}, null, 2), "utf8");
@@ -287,17 +295,42 @@ function salvarEventosCliente(req, eventos = []) {
   try {
     if (!Array.isArray(eventos) || eventos.length === 0) return;
 
-    const atuais = readJsonArraySafe(EVENTOS_CLIENTES_FILE);
-    const agora = new Date().toISOString();
+    const agora = new Date();
+    const agoraIso = agora.toISOString();
+
+    const yyyy = agora.getFullYear();
+    const mm = String(agora.getMonth() + 1).padStart(2, "0");
+    const dd = String(agora.getDate()).padStart(2, "0");
+
+    const analyticsDiaFile = path.join(
+      ANALYTICS_DIR,
+      `${yyyy}-${mm}-${dd}.json`
+    );
+
+    const atuais = readJsonArraySafe(analyticsDiaFile);
 
     const cliente = req.user ? getClienteResumo(req.user.whatsapp) : null;
+
+    if (
+      cliente?.nome_time &&
+      CLIENTES_TESTE.includes(cliente.nome_time)
+    ) {
+      return;
+    }
+
+    const ultimoEventoPorSessao = {};
+
+    atuais.slice(-300).forEach(ev => {
+      if (!ev?.sessao) return;
+      ultimoEventoPorSessao[ev.sessao] = ev;
+    });
 
     eventos.forEach(ev => {
       const payload = ev.p || {};
       const pedidoId = String(payload.pedido_id || ev.pedido_id || "").trim();
 
       const item = {
-        data: agora,
+        data: agoraIso,
         cliente_id: cliente?.cliente_id || "",
         nome_time: cliente?.nome_time || "",
         whatsapp: cliente?.whatsapp || "",
@@ -316,17 +349,64 @@ function salvarEventosCliente(req, eventos = []) {
         payload
       };
 
+      const ultimo = ultimoEventoPorSessao[item.sessao];
+
+      if (
+        item.evento === "campo_foco" &&
+        ultimo &&
+        ultimo.evento === "campo_foco" &&
+        ultimo.campo_atual === item.campo_atual
+      ) {
+        return;
+      }
+
+      if (
+        item.evento === "click_interface" &&
+        ultimo &&
+        ultimo.evento === "click_interface" &&
+        ultimo.campo_atual === item.campo_atual &&
+        (new Date(item.data).getTime() - new Date(ultimo.data).getTime()) < 2000
+      ) {
+        return;
+      }
+
+      if (
+        item.evento === "usuario_inativo"
+      ) {
+        const tempo = Number(item.tempo_inativo_ms || 0);
+
+        const faixa =
+          tempo >= 900000 ? "15m" :
+          tempo >= 300000 ? "5m" :
+          tempo >= 60000 ? "1m" :
+          "0";
+
+        item.faixa_inatividade = faixa;
+
+        if (
+          ultimo &&
+          ultimo.evento === "usuario_inativo" &&
+          ultimo.faixa_inatividade === faixa
+        ) {
+          return;
+        }
+      }
+
       atuais.push(item);
+      ultimoEventoPorSessao[item.sessao] = item;
 
       if (pedidoId) {
         try {
           const basePedido = getPedidoBaseGlobal(pedidoId);
+
           if (basePedido) {
             const eventosPedidoFile = path.join(basePedido, "eventos_cliente.json");
             const eventosPedido = readJsonArraySafe(eventosPedidoFile);
+
             eventosPedido.push(item);
 
             const limitePedido = 500;
+
             if (eventosPedido.length > limitePedido) {
               eventosPedido.splice(0, eventosPedido.length - limitePedido);
             }
@@ -343,7 +423,23 @@ function salvarEventosCliente(req, eventos = []) {
       atuais.splice(0, atuais.length - limite);
     }
 
-    writeJsonSafe(EVENTOS_CLIENTES_FILE, atuais);
+    writeJsonSafe(analyticsDiaFile, atuais);
+
+    const resumo = {
+      atualizado_em: agoraIso,
+      total_eventos: atuais.length,
+      visitas: atuais.filter(e => e.evento === "pagina_aberta").length,
+      pedidos_concluidos: atuais.filter(e => e.evento === "pedido_concluido").length,
+      downloads: atuais.filter(e => e.evento === "baixou_imagem").length,
+      suporte: atuais.filter(e => e.evento === "abriu_suporte").length,
+      erros: atuais.filter(e => String(e.evento || "").includes("erro")).length
+    };
+
+    writeJsonSafe(
+      path.join(ANALYTICS_DIR, "analytics_resumo.json"),
+      resumo
+    );
+
   } catch {}
 }
 
@@ -2050,6 +2146,7 @@ setInterval(finalizarConversasSuporteInativas, 60 * 1000);
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
 
 
