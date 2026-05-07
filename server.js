@@ -292,6 +292,8 @@ function salvarEventosCliente(req, eventos = []) {
     const cliente = req.user ? getClienteResumo(req.user.whatsapp) : null;
 
     eventos.forEach(ev => {
+      const payload = ev.p || {};
+
       atuais.push({
         data: agora,
         cliente_id: cliente?.cliente_id || "",
@@ -303,11 +305,16 @@ function salvarEventosCliente(req, eventos = []) {
         categoria: ev.categoria || "",
         pagina: ev.url || "",
         logado: !!ev.logado,
-        payload: ev.p || {}
+
+        campo_atual: payload.campo_atual || "",
+        ultima_acao: payload.ultima_acao || "",
+        tempo_inativo_ms: Number(payload.tempo_inativo_ms || 0),
+
+        payload
       });
     });
 
-    const limite = 15000;
+    const limite = 30000;
 
     if (atuais.length > limite) {
       atuais.splice(0, atuais.length - limite);
@@ -357,15 +364,33 @@ function registrarOnline(req, extra = {}) {
 
 function listarOnlineRecentes() {
   const online = safeReadJson(ONLINE_FILE) || {};
+  const eventos = readJsonArraySafe(EVENTOS_CLIENTES_FILE);
+
   const agora = Date.now();
   const limiteMs = 2 * 60 * 1000;
 
-  return Object.values(online)
+  const usuarios = Object.values(online)
     .filter(u => {
       const t = new Date(u.ultima_atividade || 0).getTime();
       return t && agora - t <= limiteMs;
     })
     .sort((a, b) => new Date(b.ultima_atividade) - new Date(a.ultima_atividade));
+
+  return usuarios.map(u => {
+    const ultimos = eventos
+      .filter(ev => ev.whatsapp === u.whatsapp)
+      .slice(-30);
+
+    const ultimo = ultimos[ultimos.length - 1] || {};
+
+    return {
+      ...u,
+      campo_atual: ultimo.campo_atual || "",
+      ultima_acao_evento: ultimo.ultima_acao || "",
+      tempo_inativo_ms: Number(ultimo.tempo_inativo_ms || 0),
+      ultimo_evento: ultimo.evento || ""
+    };
+  });
 }
 
 function salvarMensagemSuporteAberta(whatsapp, mensagemCliente, respostaIA, origem = "ia") {
@@ -1892,6 +1917,7 @@ setInterval(finalizarConversasSuporteInativas, 60 * 1000);
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
 
 
