@@ -1449,6 +1449,38 @@ app.post("/suporte/chat", auth, async (req, res) => {
     const { mensagem } = req.body || {};
     const whatsapp = req.user.whatsapp;
 
+    const abertasHumanas = readJsonArraySafe(SUPORTE_ABERTAS_FILE);
+    const conversaHumana = abertasHumanas.find(c =>
+      c.whatsapp === whatsapp &&
+      !c.finalizada &&
+      (
+        c.status === "humano_assumiu" ||
+        c.precisa_humano === true
+      )
+    );
+
+    if (conversaHumana) {
+      conversaHumana.mensagens = conversaHumana.mensagens || [];
+
+      conversaHumana.mensagens.push({
+        id: `${Date.now()}_cliente`,
+        data: new Date().toISOString(),
+        autor: "cliente",
+        texto: String(mensagem || "").trim()
+      });
+
+      conversaHumana.ultima_atualizacao = new Date().toISOString();
+
+      writeJsonSafe(SUPORTE_ABERTAS_FILE, abertasHumanas);
+
+      return res.json({
+        ok:true,
+        modo_humano:true,
+        conversa_id: conversaHumana.id,
+        resposta:null
+      });
+    }
+
     if (!mensagem || !String(mensagem).trim()) {
       return res.status(400).json({ ok: false, error: "Mensagem vazia" });
     }
@@ -1822,6 +1854,31 @@ app.get("/bot/suporte/abertas", auth, (req, res) => {
   }
 });
 
+app.post("/bot/suporte/:id/assumir", auth, (req, res) => {
+  try {
+    if (!isBotAdmin(req)) {
+      return res.status(403).json({ ok:false, error:"Acesso negado" });
+    }
+
+    const abertas = readJsonArraySafe(SUPORTE_ABERTAS_FILE);
+    const idx = abertas.findIndex(c => c.id === req.params.id && !c.finalizada);
+
+    if (idx === -1) {
+      return res.status(404).json({ ok:false, error:"Conversa não encontrada" });
+    }
+
+    abertas[idx].status = "humano_assumiu";
+    abertas[idx].precisa_humano = true;
+    abertas[idx].ultima_atualizacao = new Date().toISOString();
+
+    writeJsonSafe(SUPORTE_ABERTAS_FILE, abertas);
+
+    return res.json({ ok:true });
+  } catch {
+    return res.status(500).json({ ok:false, error:"erro_assumir" });
+  }
+});
+
 app.post("/bot/suporte/:id/responder", auth, (req, res) => {
   try {
     if (!isBotAdmin(req)) {
@@ -1850,8 +1907,8 @@ app.post("/bot/suporte/:id/responder", auth, (req, res) => {
       texto
     });
 
-    abertas[idx].status = "respondida";
-    abertas[idx].precisa_humano = false;
+    abertas[idx].status = "humano_assumiu";
+    abertas[idx].precisa_humano = true;
     abertas[idx].ultima_atualizacao = new Date().toISOString();
 
     writeJsonSafe(SUPORTE_ABERTAS_FILE, abertas);
@@ -1917,6 +1974,7 @@ setInterval(finalizarConversasSuporteInativas, 60 * 1000);
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
 
 
