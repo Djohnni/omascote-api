@@ -759,7 +759,7 @@ app.post("/auth/google", async (req, res) => {
         foto_google: google.picture || "",
         plano: 0,
         saldo_mensal: 0,
-        saldo_extra: 0,
+        saldo_extra: 8,
         usados_no_ciclo: 0,
         ciclo_mes: nowYYYYMM(),
         ativo: true
@@ -819,7 +819,7 @@ app.post("/auth/register", (req, res) => {
     senha_hash,
     plano: 0,
     saldo_mensal: 0,
-    saldo_extra: 0,
+    saldo_extra: 8,
     usados_no_ciclo: 0,
     ciclo_mes: nowYYYYMM(),
     ativo: true
@@ -1954,7 +1954,18 @@ app.get("/bot/eventos-clientes", auth, (req, res) => {
     }
 
     const limite = Math.min(Number(req.query.limite || 1000), 5000);
-    const eventos = readJsonArraySafe(EVENTOS_CLIENTES_FILE).slice(-limite);
+
+    const agora = new Date();
+    const yyyy = agora.getFullYear();
+    const mm = String(agora.getMonth() + 1).padStart(2, "0");
+    const dd = String(agora.getDate()).padStart(2, "0");
+
+    const analyticsDiaFile = path.join(
+      ANALYTICS_DIR,
+      `${yyyy}-${mm}-${dd}.json`
+    );
+
+    const eventos = readJsonArraySafe(analyticsDiaFile).slice(-limite);
 
     return res.json({
       ok: true,
@@ -2146,6 +2157,7 @@ setInterval(finalizarConversasSuporteInativas, 60 * 1000);
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
 
 
