@@ -1275,6 +1275,7 @@ app.get("/bot/pedidos/novos", auth, (req, res) => {
             pedidos.push({ id, whatsapp, mes, status: statusPedido });
           }
         }
+      }
     }
   }
 
@@ -2318,6 +2319,7 @@ setInterval(finalizarConversasSuporteInativas, 60 * 1000);
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
 
 
