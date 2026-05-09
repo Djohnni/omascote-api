@@ -1149,6 +1149,10 @@ function criarPedidoHandler(categoria) {
       mascote_tipo: mascote_tipo || "",
       patrocinadores_qtd: pats.length,
       status: "novo",
+      aprovado_cliente: false,
+      baixado_cliente: false,
+      ajuste_automatico_usado: false,
+      motivo_ajuste: "",
       criado_em: new Date().toISOString()
     };
 
@@ -1310,7 +1314,7 @@ app.post("/bot/pedidos/:id/status", auth, (req, res) => {
 
   const { status } = req.body || {};
 
-  if (!["novo", "em_producao", "pronto"].includes(status)) {
+  if (!["novo", "em_producao", "pronto", "ajuste_pendente"].includes(status)) {
     return res.status(400).json({ ok: false, error: "status inválido" });
   }
 
@@ -1356,6 +1360,8 @@ app.get("/meus-pedidos", auth, (req, res) => {
       ? fs.readFileSync(statusPath, "utf8").trim()
       : (item.pedido.status || "novo");
     const imagemPronta = fs.existsSync(resultadoFinalPath);
+    const aprovadoCliente = item.pedido.aprovado_cliente === true;
+    const ajusteUsado = item.pedido.ajuste_automatico_usado === true;
 
     return {
       id: item.id,
@@ -1367,11 +1373,109 @@ app.get("/meus-pedidos", auth, (req, res) => {
         ? `${req.protocol}://${req.get("host")}/pedidos/${item.id}/preview`
         : null,
       imagem_pronta: imagemPronta,
-      descricao_instagram: item.pedido.descricao_instagram || ""
+      descricao_instagram: item.pedido.descricao_instagram || "",
+      aprovado_cliente: aprovadoCliente,
+      ajuste_automatico_usado: ajusteUsado,
+      motivo_ajuste: item.pedido.motivo_ajuste || "",
+      pode_baixar: imagemPronta && aprovadoCliente,
+      pode_pedir_ajuste: imagemPronta && !aprovadoCliente && !ajusteUsado && status === "pronto"
     };
   });
 
   return res.json({ ok: true, pedidos });
+});
+
+app.post("/pedidos/:id/aprovar", auth, (req, res) => {
+  const whatsapp = req.user.whatsapp;
+  const base = getPedidoBase(whatsapp, req.params.id);
+
+  if (!base) {
+    return res.status(404).json({ ok: false, error: "Pedido não encontrado" });
+  }
+
+  const pedidoPath = path.join(base, "pedido.json");
+  const pedido = safeReadJson(pedidoPath) || {};
+
+  pedido.aprovado_cliente = true;
+  pedido.baixado_cliente = false;
+  pedido.aprovado_em = new Date().toISOString();
+
+  fs.writeFileSync(pedidoPath, JSON.stringify(pedido, null, 2), "utf8");
+
+  return res.json({
+    ok: true,
+    aprovado_cliente: true,
+    pode_baixar: true
+  });
+});
+
+app.post("/pedidos/:id/solicitar-ajuste", auth, (req, res) => {
+  const whatsapp = req.user.whatsapp;
+  const base = getPedidoBase(whatsapp, req.params.id);
+
+  if (!base) {
+    return res.status(404).json({ ok: false, error: "Pedido não encontrado" });
+  }
+
+  const motivo = String(req.body?.motivo_ajuste || req.body?.motivo || "").trim();
+
+  if (!motivo || motivo.length < 5) {
+    return res.status(400).json({ ok: false, error: "Descreva melhor o ajuste." });
+  }
+
+  const pedidoPath = path.join(base, "pedido.json");
+  const pedido = safeReadJson(pedidoPath) || {};
+
+  if (pedido.ajuste_automatico_usado === true) {
+    const conversa = salvarMensagemSuporteAberta(
+      whatsapp,
+      `Pedido ${req.params.id}: ${motivo}`,
+      "Esse pedido já usou o ajuste automático. Vou encaminhar para o suporte.",
+      "sistema"
+    );
+
+    conversa.precisa_humano = true;
+    conversa.status = "aguardando_suporte";
+    conversa.ultima_atualizacao = new Date().toISOString();
+
+    const abertas = readJsonArraySafe(SUPORTE_ABERTAS_FILE);
+    const idx = abertas.findIndex(c => c.id === conversa.id);
+    if (idx >= 0) {
+      abertas[idx] = conversa;
+      writeJsonSafe(SUPORTE_ABERTAS_FILE, abertas);
+    }
+
+    return res.json({
+      ok: true,
+      modo_humano: true,
+      conversa_id: conversa.id
+    });
+  }
+
+  const resultadoAtual = path.join(base, "resultado_final.png");
+  const resultadoBackup = path.join(base, "resultado_final_anterior.png");
+
+  try {
+    if (fs.existsSync(resultadoAtual)) {
+      fs.copyFileSync(resultadoAtual, resultadoBackup);
+    }
+  } catch {}
+
+  pedido.ajuste_automatico_usado = true;
+  pedido.motivo_ajuste = motivo;
+  pedido.aprovado_cliente = false;
+  pedido.status = "ajuste_pendente";
+  pedido.ajuste_solicitado_em = new Date().toISOString();
+
+  fs.writeFileSync(pedidoPath, JSON.stringify(pedido, null, 2), "utf8");
+  fs.writeFileSync(path.join(base, "status.txt"), "ajuste_pendente", "utf8");
+  fs.writeFileSync(path.join(base, "ajuste_pendente.txt"), motivo, "utf8");
+
+  return res.json({
+    ok: true,
+    modo_humano: false,
+    status: "ajuste_pendente"
+  });
 });
 
 app.get("/pedidos/:id/download-resultado", auth, (req, res) => {
@@ -1382,11 +1486,28 @@ app.get("/pedidos/:id/download-resultado", auth, (req, res) => {
     return res.status(404).json({ ok: false, error: "Pedido não encontrado" });
   }
 
+  const pedidoPath = path.join(base, "pedido.json");
+  const pedido = safeReadJson(pedidoPath) || {};
+
+  if (pedido.aprovado_cliente !== true) {
+    return res.status(403).json({
+      ok: false,
+      error: "Aprove a prévia antes de baixar a imagem em alta qualidade."
+    });
+  }
+
   const arquivo = path.join(base, "resultado_final.png");
 
   if (!fs.existsSync(arquivo)) {
     return res.status(404).json({ ok: false, error: "Resultado final não encontrado" });
   }
+
+  pedido.baixado_cliente = true;
+  pedido.baixado_em = new Date().toISOString();
+
+  try {
+    fs.writeFileSync(pedidoPath, JSON.stringify(pedido, null, 2), "utf8");
+  } catch {}
 
   res.setHeader("Content-Type", "image/png");
   res.setHeader("Content-Disposition", `attachment; filename="${req.params.id}_resultado.png"`);
@@ -1428,7 +1549,12 @@ app.get("/pedidos/:id/info", auth, (req, res) => {
     imagem_pronta,
     preview_url: imagem_pronta
       ? `${req.protocol}://${req.get("host")}/pedidos/${req.params.id}/preview`
-      : null
+      : null,
+    aprovado_cliente: pedido.aprovado_cliente === true,
+    ajuste_automatico_usado: pedido.ajuste_automatico_usado === true,
+    motivo_ajuste: pedido.motivo_ajuste || "",
+    pode_baixar: imagem_pronta && pedido.aprovado_cliente === true,
+    pode_pedir_ajuste: imagem_pronta && pedido.aprovado_cliente !== true && pedido.ajuste_automatico_usado !== true && status === "pronto"
   });
 });
 
@@ -1462,10 +1588,20 @@ app.get("/pedidos/:id/preview", (req, res) => {
     return res.status(404).json({ ok: false, error: "Pedido não encontrado" });
   }
 
-  const previewPath = path.join(base, "resultado_final.png");
+  const previewProtegidaPath = path.join(base, "preview_ia4tube.jpg");
+  const resultadoFinalPath = path.join(base, "resultado_final.png");
+  const previewPath = fs.existsSync(previewProtegidaPath)
+    ? previewProtegidaPath
+    : resultadoFinalPath;
 
   if (!fs.existsSync(previewPath)) {
     return res.status(404).json({ ok: false, error: "Imagem ainda não ficou pronta" });
+  }
+
+  if (previewPath.endsWith(".jpg") || previewPath.endsWith(".jpeg")) {
+    res.setHeader("Content-Type", "image/jpeg");
+  } else {
+    res.setHeader("Content-Type", "image/png");
   }
 
   return res.sendFile(previewPath);
@@ -1503,7 +1639,7 @@ app.post("/pedidos/:id/status", auth, (req, res) => {
 
   const { status } = req.body || {};
 
-  if (!["novo", "em_producao", "pronto"].includes(status)) {
+  if (!["novo", "em_producao", "pronto", "ajuste_pendente"].includes(status)) {
     return res.status(400).json({ ok: false, error: "status inválido" });
   }
 
@@ -1516,7 +1652,10 @@ app.post("/pedidos/:id/status", auth, (req, res) => {
 app.post(
   "/bot/pedidos/:id/upload-resultado",
   auth,
-  uploadResultado.single("resultado"),
+  uploadResultado.fields([
+    { name: "resultado", maxCount: 1 },
+    { name: "preview", maxCount: 1 }
+  ]),
   (req, res) => {
 
     const descricao_instagram = req.body?.descricao_instagram || "";
@@ -1530,30 +1669,49 @@ app.post(
       return res.status(404).json({ ok: false, error: "Pedido não encontrado" });
     }
 
-    if (!req.file) {
+    const resultadoFile = req.files?.resultado?.[0] || null;
+    const previewFile = req.files?.preview?.[0] || null;
+
+    if (!resultadoFile) {
       return res.status(400).json({ ok: false, error: "Arquivo resultado não enviado" });
     }
 
     const dest = path.join(base, "resultado_final.png");
+    const previewDest = path.join(base, "preview_ia4tube.jpg");
 
     try {
       if (fs.existsSync(dest)) fs.unlinkSync(dest);
-      fs.renameSync(req.file.path, dest);
+      fs.renameSync(resultadoFile.path, dest);
+
+      if (previewFile) {
+        if (fs.existsSync(previewDest)) fs.unlinkSync(previewDest);
+        fs.renameSync(previewFile.path, previewDest);
+      }
 
       fs.writeFileSync(path.join(base, "status.txt"), "pronto", "utf8");
+
+      try {
+        const ajustePendentePath = path.join(base, "ajuste_pendente.txt");
+        if (fs.existsSync(ajustePendentePath)) fs.unlinkSync(ajustePendentePath);
+      } catch {}
 
       try {
         const pedidoPath = path.join(base, "pedido.json");
         if (fs.existsSync(pedidoPath)) {
           const pedidoData = JSON.parse(fs.readFileSync(pedidoPath, "utf8"));
           pedidoData.descricao_instagram = descricao_instagram || "";
+          pedidoData.status = "pronto";
+          pedidoData.aprovado_cliente = false;
+          pedidoData.baixado_cliente = false;
+          pedidoData.resultado_enviado_em = new Date().toISOString();
           fs.writeFileSync(pedidoPath, JSON.stringify(pedidoData, null, 2), "utf8");
         }
       } catch (e) {}
 
       return res.json({
         ok: true,
-        arquivo: "resultado_final.png"
+        arquivo: "resultado_final.png",
+        preview: previewFile ? "preview_ia4tube.jpg" : ""
       });
     } catch (e) {
       return res.status(500).json({
@@ -2157,6 +2315,7 @@ setInterval(finalizarConversasSuporteInativas, 60 * 1000);
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
 
 
