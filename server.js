@@ -1268,10 +1268,13 @@ app.get("/bot/pedidos/novos", auth, (req, res) => {
         const base = path.join(pastaMes, id);
         const st = path.join(base, "status.txt");
 
-        if (fs.existsSync(st) && fs.readFileSync(st, "utf8").trim() === "novo") {
-          pedidos.push({ id, whatsapp, mes });
+        if (fs.existsSync(st)) {
+          const statusPedido = fs.readFileSync(st, "utf8").trim();
+
+          if (statusPedido === "novo" || statusPedido === "ajuste_pendente") {
+            pedidos.push({ id, whatsapp, mes, status: statusPedido });
+          }
         }
-      }
     }
   }
 
