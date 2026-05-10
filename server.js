@@ -2232,7 +2232,7 @@ app.post("/bot/suporte/erro-pedido", auth, (req, res) => {
     const conversa = salvarMensagemSuporteAberta(
       whatsapp,
       "",
-      `⚠️ Seu pedido entrou em análise.\n\nA imagem enviada não pôde ser processada automaticamente pela IA4Tube.\n\nNossa equipe vai verificar o caso. Se necessário, o valor será devolvido em saldo na sua conta.\n\n📲 Se preferir, deixe seu WhatsApp que também podemos continuar o atendimento por lá.`,
+      `⚠️ Seu pedido ${pedido_id} entrou em análise.\n\nA imagem enviada não pôde ser processada automaticamente pela IA4Tube.\n\nNossa equipe vai verificar o caso. Se necessário, o valor será devolvido em saldo na sua conta.\n\n📲 Se preferir, deixe seu WhatsApp que também podemos continuar o atendimento por lá.`,
       "sistema"
     );
 
