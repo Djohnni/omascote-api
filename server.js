@@ -2120,7 +2120,9 @@ app.get("/suporte/minhas-mensagens", auth, (req, res) => {
       return res.json({ ok: true, conversa: null, mensagens: [] });
     }
 
-    conversa.cliente_leu = true;
+    const temMensagemNova = conversa.cliente_leu === false;
+
+conversa.cliente_leu = true;
 
 writeJsonSafe(SUPORTE_ABERTAS_FILE, abertas);
 
@@ -2129,7 +2131,7 @@ return res.json({
       conversa_id: conversa.id,
       conversa,
       mensagens: conversa.mensagens || [],
-      tem_mensagem_nova: conversa.cliente_leu === false
+      tem_mensagem_nova: temMensagemNova
     });
   } catch (e) {
     return res.status(500).json({ ok: false, error: "Erro ao buscar mensagens" });
@@ -2346,6 +2348,7 @@ setInterval(finalizarConversasSuporteInativas, 60 * 1000);
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
 
 
