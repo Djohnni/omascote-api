@@ -2209,6 +2209,48 @@ app.get("/bot/online", auth, (req, res) => {
   }
 });
 
+app.post("/bot/suporte/erro-pedido", auth, (req, res) => {
+  try {
+    if (!isBotAdmin(req)) {
+      return res.status(403).json({ ok:false, error:"Acesso negado" });
+    }
+
+    const { pedido_id, whatsapp, motivo } = req.body || {};
+
+    if (!pedido_id || !whatsapp) {
+      return res.status(400).json({ ok:false, error:"pedido_id e whatsapp obrigatórios" });
+    }
+
+    const conversa = salvarMensagemSuporteAberta(
+      whatsapp,
+      "",
+      `⚠️ Seu pedido ${pedido_id} entrou em análise.\n\nA imagem enviada não pôde ser processada automaticamente pela IA4Tube.\n\nNossa equipe vai analisar o caso. Se for confirmado que não conseguimos gerar a arte corretamente, o valor usado será devolvido em saldo na sua conta.`,
+      "sistema"
+    );
+
+    conversa.precisa_humano = true;
+    conversa.status = "aguardando_suporte";
+    conversa.motivo = motivo || "erro_pipeline";
+    conversa.ultima_atualizacao = new Date().toISOString();
+    conversa.cliente_leu = false;
+
+    const abertas = readJsonArraySafe(SUPORTE_ABERTAS_FILE);
+    const idx = abertas.findIndex(c => c.id === conversa.id);
+
+    if (idx >= 0) {
+      abertas[idx] = conversa;
+      writeJsonSafe(SUPORTE_ABERTAS_FILE, abertas);
+    }
+
+    return res.json({
+      ok:true,
+      conversa_id: conversa.id
+    });
+  } catch (e) {
+    return res.status(500).json({ ok:false, error:"erro_avisar_suporte" });
+  }
+});
+
 app.get("/bot/suporte/abertas", auth, (req, res) => {
   try {
     if (!isBotAdmin(req)) {
@@ -2348,29 +2390,6 @@ setInterval(finalizarConversasSuporteInativas, 60 * 1000);
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
