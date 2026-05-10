@@ -2110,23 +2110,31 @@ ${String(mensagem).trim()}
 
 app.get("/suporte/minhas-mensagens", auth, (req, res) => {
   try {
-    registrarOnline(req, { chat_aberto: true, ultima_acao: "suporte_poll" });
+    const chatAberto = String(req.headers["x-ia4-chat"] || "") === "true";
+
+    registrarOnline(req, { chat_aberto: chatAberto, ultima_acao: "suporte_poll" });
 
     const whatsapp = req.user.whatsapp;
     const abertas = readJsonArraySafe(SUPORTE_ABERTAS_FILE);
     const conversa = abertas.find(c => c.whatsapp === whatsapp && !c.finalizada);
 
     if (!conversa) {
-      return res.json({ ok: true, conversa: null, mensagens: [] });
+      return res.json({
+        ok: true,
+        conversa: null,
+        mensagens: [],
+        tem_mensagem_nova: false
+      });
     }
 
     const temMensagemNova = conversa.cliente_leu === false;
 
-conversa.cliente_leu = true;
+    if (chatAberto) {
+      conversa.cliente_leu = true;
+      writeJsonSafe(SUPORTE_ABERTAS_FILE, abertas);
+    }
 
-writeJsonSafe(SUPORTE_ABERTAS_FILE, abertas);
-
-return res.json({
+    return res.json({
       ok: true,
       conversa_id: conversa.id,
       conversa,
@@ -2390,6 +2398,7 @@ setInterval(finalizarConversasSuporteInativas, 60 * 1000);
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
 
 
