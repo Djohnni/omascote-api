@@ -529,6 +529,7 @@ function salvarMensagemSuporteAberta(whatsapp, mensagemCliente, respostaIA, orig
       finalizada: false,
       status: "aberta",
       precisa_humano: false,
+      cliente_leu: false,
       mensagens: []
     };
     abertas.push(conversa);
@@ -544,6 +545,8 @@ function salvarMensagemSuporteAberta(whatsapp, mensagemCliente, respostaIA, orig
       autor: "cliente",
       texto: String(mensagemCliente || "").trim()
     });
+
+    conversa.cliente_leu = true;
   }
 
   if (respostaIA && String(respostaIA).trim()) {
@@ -553,6 +556,8 @@ function salvarMensagemSuporteAberta(whatsapp, mensagemCliente, respostaIA, orig
       autor: origem,
       texto: String(respostaIA || "").trim()
     });
+
+    conversa.cliente_leu = false;
   }
 
   writeJsonSafe(SUPORTE_ABERTAS_FILE, abertas);
@@ -2115,11 +2120,16 @@ app.get("/suporte/minhas-mensagens", auth, (req, res) => {
       return res.json({ ok: true, conversa: null, mensagens: [] });
     }
 
-    return res.json({
+    conversa.cliente_leu = true;
+
+writeJsonSafe(SUPORTE_ABERTAS_FILE, abertas);
+
+return res.json({
       ok: true,
       conversa_id: conversa.id,
       conversa,
-      mensagens: conversa.mensagens || []
+      mensagens: conversa.mensagens || [],
+      tem_mensagem_nova: conversa.cliente_leu === false
     });
   } catch (e) {
     return res.status(500).json({ ok: false, error: "Erro ao buscar mensagens" });
@@ -2336,6 +2346,7 @@ setInterval(finalizarConversasSuporteInativas, 60 * 1000);
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
 
 
