@@ -2233,7 +2233,6 @@ app.post("/bot/suporte/erro-pedido", auth, (req, res) => {
       whatsapp,
       "",
       `⚠️ Seu pedido entrou em análise.\n\nA imagem enviada não pôde ser processada automaticamente pela IA4Tube.\n\nNossa equipe vai verificar o caso. Se necessário, o valor será devolvido em saldo na sua conta.\n\n📲 Se preferir, deixe seu WhatsApp que também podemos continuar o atendimento por lá.`,
-      "sistema"edido ${pedido_id} entrou em análise.\n\nA imagem enviada não pôde ser processada automaticamente pela IA4Tube.\n\nNossa equipe vai analisar o caso. Se for confirmado que não conseguimos gerar a arte corretamente, o valor usado será devolvido em saldo na sua conta.`,
       "sistema"
     );
 
@@ -2400,6 +2399,7 @@ setInterval(finalizarConversasSuporteInativas, 60 * 1000);
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
 
 
