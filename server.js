@@ -641,7 +641,24 @@ const storage = multer.diskStorage({
   }
 });
 
-const upload = multer({ storage });
+const upload = multer({
+  storage,
+  fileFilter: (req, file, cb) => {
+    const permitidos = [
+      "image/png",
+      "image/jpeg",
+      "image/jpg",
+      "image/webp"
+    ];
+
+    if (!permitidos.includes(String(file.mimetype || "").toLowerCase())) {
+      return cb(new Error("Apenas imagens PNG, JPG e WEBP são permitidas."));
+    }
+
+    cb(null, true);
+  }
+});
+
 const uploadResultado = multer({ storage });
 
 // ===== ROTAS =====
@@ -2319,6 +2336,7 @@ setInterval(finalizarConversasSuporteInativas, 60 * 1000);
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
 
 
