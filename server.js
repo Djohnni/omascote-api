@@ -2293,6 +2293,7 @@ app.post("/bot/suporte/:id/assumir", auth, (req, res) => {
 
     abertas[idx].status = "humano_assumiu";
     abertas[idx].precisa_humano = true;
+    abertas[idx].cliente_leu = false;
     abertas[idx].ultima_atualizacao = new Date().toISOString();
 
     writeJsonSafe(SUPORTE_ABERTAS_FILE, abertas);
@@ -2398,6 +2399,7 @@ setInterval(finalizarConversasSuporteInativas, 60 * 1000);
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
 
 
