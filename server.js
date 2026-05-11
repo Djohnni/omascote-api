@@ -2281,6 +2281,96 @@ app.post("/bot/suporte/erro-pedido", auth, (req, res) => {
   }
 });
 
+function resolverWhatsappDestinoSuporte(destino) {
+  destino = String(destino || "").trim();
+
+  if (!destino) return "";
+
+  const abertas = readJsonArraySafe(SUPORTE_ABERTAS_FILE);
+  const conversa = abertas.find(c => c.id === destino && !c.finalizada);
+
+  if (conversa?.whatsapp) {
+    return conversa.whatsapp;
+  }
+
+  const clientes = readClientes();
+
+  if (clientes[destino]) {
+    return destino;
+  }
+
+  const basePedido = getPedidoBaseGlobal(destino);
+
+  if (basePedido) {
+    const pedidoPath = path.join(basePedido, "pedido.json");
+    const pedido = safeReadJson(pedidoPath) || {};
+
+    if (pedido.whatsapp) {
+      return pedido.whatsapp;
+    }
+  }
+
+  return "";
+}
+
+app.post("/bot/suporte/enviar-cliente", auth, (req, res) => {
+  try {
+    if (!isBotAdmin(req)) {
+      return res.status(403).json({ ok:false, error:"Acesso negado" });
+    }
+
+    const { destino, mensagem } = req.body || {};
+    const texto = String(mensagem || "").trim();
+
+    if (!destino || !texto) {
+      return res.status(400).json({
+        ok:false,
+        error:"destino e mensagem obrigatórios"
+      });
+    }
+
+    const whatsapp = resolverWhatsappDestinoSuporte(destino);
+
+    if (!whatsapp) {
+      return res.status(404).json({
+        ok:false,
+        error:"Cliente não encontrado por esse ID, WhatsApp ou pedido."
+      });
+    }
+
+    const conversa = salvarMensagemSuporteAberta(
+      whatsapp,
+      "",
+      texto,
+      "humano"
+    );
+
+    conversa.precisa_humano = true;
+    conversa.status = "humano_assumiu";
+    conversa.ultima_atualizacao = new Date().toISOString();
+    conversa.cliente_leu = false;
+
+    const abertas = readJsonArraySafe(SUPORTE_ABERTAS_FILE);
+    const idx = abertas.findIndex(c => c.id === conversa.id);
+
+    if (idx >= 0) {
+      abertas[idx] = conversa;
+      writeJsonSafe(SUPORTE_ABERTAS_FILE, abertas);
+    }
+
+    return res.json({
+      ok:true,
+      conversa_id: conversa.id,
+      whatsapp
+    });
+  } catch {
+    return res.status(500).json({
+      ok:false,
+      error:"erro_enviar_mensagem_cliente"
+    });
+  }
+});
+
 app.get("/bot/suporte/abertas", auth, (req, res) => {
   try {
     if (!isBotAdmin(req)) {
@@ -2421,6 +2511,7 @@ setInterval(finalizarConversasSuporteInativas, 60 * 1000);
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
 
 
