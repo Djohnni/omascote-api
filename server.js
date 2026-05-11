@@ -1340,7 +1340,7 @@ app.post("/bot/pedidos/:id/status", auth, (req, res) => {
 
   const { status } = req.body || {};
 
-  if (!["novo", "em_producao", "pronto", "ajuste_pendente"].includes(status)) {
+  if (!["novo", "em_producao", "pronto", "ajuste_pendente", "erro"].includes(status)) {
     return res.status(400).json({ ok: false, error: "status inválido" });
   }
 
@@ -1665,7 +1665,7 @@ app.post("/pedidos/:id/status", auth, (req, res) => {
 
   const { status } = req.body || {};
 
-  if (!["novo", "em_producao", "pronto", "ajuste_pendente"].includes(status)) {
+  if (!["novo", "em_producao", "pronto", "ajuste_pendente", "erro"].includes(status)) {
     return res.status(400).json({ ok: false, error: "status inválido" });
   }
 
@@ -2229,10 +2229,32 @@ app.post("/bot/suporte/erro-pedido", auth, (req, res) => {
       return res.status(400).json({ ok:false, error:"pedido_id e whatsapp obrigatórios" });
     }
 
+    const basePedido = getPedidoBaseGlobal(pedido_id);
+
+    if (basePedido) {
+      try {
+        fs.writeFileSync(path.join(basePedido, "status.txt"), "erro", "utf8");
+
+        const pedidoPath = path.join(basePedido, "pedido.json");
+        const pedidoData = safeReadJson(pedidoPath) || {};
+
+        pedidoData.status = "erro";
+        pedidoData.erro_cliente = true;
+        pedidoData.motivo_erro = motivo || "erro_pipeline";
+        pedidoData.erro_em = new Date().toISOString();
+
+        fs.writeFileSync(
+          pedidoPath,
+          JSON.stringify(pedidoData, null, 2),
+          "utf8"
+        );
+      } catch {}
+    }
+
     const conversa = salvarMensagemSuporteAberta(
       whatsapp,
       "",
-      `⚠️ Seu pedido ${pedido_id} entrou em análise.\n\nA imagem enviada não pôde ser processada automaticamente pela IA4Tube.\n\nNossa equipe vai verificar o caso. Se necessário, o valor será devolvido em saldo na sua conta.\n\n📲 Se preferir, deixe seu WhatsApp que também podemos continuar o atendimento por lá.`,
+      `⚠️ Seu pedido ${pedido_id} entrou em análise.\n\nSua imagem não passou na nossa política de privacidade ou ocorreu algum erro no processamento automático.\n\nVeja o SUPORTE abaixo para acompanhar o atendimento.\n\nNossa equipe vai verificar o caso. Se necessário, o valor será devolvido em saldo na sua conta.`,
       "sistema"
     );
 
@@ -2399,6 +2421,7 @@ setInterval(finalizarConversasSuporteInativas, 60 * 1000);
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
 
 
