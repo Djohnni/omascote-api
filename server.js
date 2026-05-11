@@ -2176,6 +2176,47 @@ app.get("/bot/eventos-clientes", auth, (req, res) => {
   }
 });
 
+app.get("/bot/analytics-dia/:data", auth, (req, res) => {
+  try {
+    if (!isBotAdmin(req)) {
+      return res.status(403).json({ ok: false, error: "Acesso negado" });
+    }
+
+    const data = String(req.params.data || "").trim();
+
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(data)) {
+      return res.status(400).json({
+        ok: false,
+        error: "Data inválida. Use YYYY-MM-DD."
+      });
+    }
+
+    const analyticsDiaFile = path.join(ANALYTICS_DIR, `${data}.json`);
+
+    if (!fs.existsSync(analyticsDiaFile)) {
+      return res.status(404).json({
+        ok: false,
+        error: "Arquivo de analytics não encontrado para esta data.",
+        data
+      });
+    }
+
+    const eventos = readJsonArraySafe(analyticsDiaFile);
+
+    return res.json({
+      ok: true,
+      data,
+      total: eventos.length,
+      eventos
+    });
+  } catch {
+    return res.status(500).json({
+      ok: false,
+      error: "erro_analytics_dia"
+    });
+  }
+});
+
 app.get("/bot/eventos-pedido/:id", auth, (req, res) => {
   try {
     if (!isBotAdmin(req)) {
@@ -2511,6 +2552,7 @@ setInterval(finalizarConversasSuporteInativas, 60 * 1000);
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
 
 
