@@ -781,7 +781,7 @@ app.post("/auth/google", async (req, res) => {
         foto_google: google.picture || "",
         plano: 0,
         saldo_mensal: 0,
-        saldo_extra: 0,
+        saldo_extra: 8,
         usados_no_ciclo: 0,
         ciclo_mes: nowYYYYMM(),
         ativo: true
