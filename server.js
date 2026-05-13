@@ -171,6 +171,28 @@ function normalizarLoginId(valor) {
     .replace(/[^a-z0-9._-]+/g, "");
 }
 
+function gerarSenhaAutomatica() {
+  return "ia4" + Math.random().toString(36).slice(2, 8);
+}
+
+function criarLoginAutomaticoUnico(base, clientes) {
+  let loginBase = normalizarLoginId(base);
+
+  if (!loginBase || loginBase.length < 3) {
+    loginBase = "jogador";
+  }
+
+  let login = loginBase;
+  let tentativas = 0;
+
+  while (clientes[login]) {
+    tentativas++;
+    login = `${loginBase}${Math.floor(100 + Math.random() * 900)}${tentativas}`;
+  }
+
+  return login;
+}
+
 function nowYYYYMM() {
   const d = new Date();
   const y = d.getFullYear();
@@ -825,6 +847,80 @@ app.post("/auth/google", async (req, res) => {
     return res.status(401).json({
       ok: false,
       error: e.message || "Erro ao entrar com Google"
+    });
+  }
+});
+
+// Login automático invisível
+app.post("/auth/auto-register", (req, res) => {
+  try {
+    const body = req.body || {};
+    const clientes = readClientes();
+
+    const nome_time = String(
+      body.nome_time ||
+      body.nome_jogador ||
+      body.login ||
+      "Jogador"
+    ).trim();
+
+    const login = criarLoginAutomaticoUnico(body.login || nome_time, clientes);
+    const senhaCliente = String(body.senha || gerarSenhaAutomatica()).trim();
+
+    if (!login || login.length < 3) {
+      return res.status(400).json({
+        ok: false,
+        error: "Não foi possível gerar login automático."
+      });
+    }
+
+    if (!senhaCliente || senhaCliente.length < 3) {
+      return res.status(400).json({
+        ok: false,
+        error: "Não foi possível gerar senha automática."
+      });
+    }
+
+    const senha_hash = bcrypt.hashSync(senhaCliente, 8);
+
+    const novo = {
+      nome_time: nome_time || login,
+      senha_hash,
+      login_tipo: "automatico",
+      cadastro_automatico: true,
+      produto_origem: String(body.produto || ""),
+      device_id: String(body.device_id || ""),
+      plano: 0,
+      saldo_mensal: 0,
+      saldo_extra: 8,
+      usados_no_ciclo: 0,
+      ciclo_mes: nowYYYYMM(),
+      ativo: true,
+      criado_em: new Date().toISOString()
+    };
+
+    clientes[login] = novo;
+    writeClientes(clientes);
+
+    const token = jwt.sign({ whatsapp: login }, JWT_SECRET, { expiresIn: "7d" });
+
+    return res.json({
+      ok: true,
+      token,
+      login,
+      whatsapp: login,
+      senha_cliente: senhaCliente,
+      nome_time: novo.nome_time,
+      plano: novo.plano,
+      saldo_mensal: Number(novo.saldo_mensal || 0),
+      saldo_extra: Number(novo.saldo_extra || 0),
+      saldo: Number(novo.saldo_mensal || 0) + Number(novo.saldo_extra || 0),
+      usados_no_ciclo: novo.usados_no_ciclo
+    });
+  } catch (e) {
+    return res.status(500).json({
+      ok: false,
+      error: "Erro ao criar conta automática."
     });
   }
 });
@@ -2582,6 +2678,7 @@ setInterval(finalizarConversasSuporteInativas, 60 * 1000);
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
 
 
