@@ -162,6 +162,15 @@ function nomeCategoriaPedido(categoria) {
   return nomes[categoria] || categoria || "";
 }
 
+function normalizarLoginId(valor) {
+  return String(valor || "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9._-]+/g, "");
+}
+
 function nowYYYYMM() {
   const d = new Date();
   const y = d.getFullYear();
@@ -822,16 +831,23 @@ app.post("/auth/google", async (req, res) => {
 
 // Login
 app.post("/auth/register", (req, res) => {
-  const { nome_time, whatsapp, senha } = req.body || {};
+  const body = req.body || {};
+  const whatsapp = normalizarLoginId(body.whatsapp);
+  const senha = body.senha || "";
+  const nome_time = String(body.nome_time || whatsapp || "").trim();
 
-  if (!nome_time || !whatsapp || !senha) {
-    return res.status(400).json({ ok: false, error: "nome_time, whatsapp e senha obrigatórios" });
+  if (!whatsapp || !senha) {
+    return res.status(400).json({ ok: false, error: "login e senha obrigatórios" });
+  }
+
+  if (whatsapp.length < 3) {
+    return res.status(400).json({ ok: false, error: "Login muito curto" });
   }
 
   const clientes = readClientes();
 
   if (clientes[whatsapp]) {
-    return res.status(400).json({ ok: false, error: "Cliente já existe" });
+    return res.status(400).json({ ok: false, error: "Login já existe" });
   }
 
   const senha_hash = bcrypt.hashSync(senha, 8);
@@ -862,17 +878,19 @@ app.post("/auth/register", (req, res) => {
 });
 
 app.post("/auth/login", (req, res) => {
-  const { whatsapp, senha } = req.body || {};
+  const body = req.body || {};
+  const whatsapp = normalizarLoginId(body.whatsapp);
+  const senha = body.senha || "";
 
   if (!whatsapp || !senha) {
-    return res.status(400).json({ ok: false, error: "whatsapp e senha obrigatórios" });
+    return res.status(400).json({ ok: false, error: "login e senha obrigatórios" });
   }
 
   const clientes = readClientes();
   const c = clientes[whatsapp];
 
   if (!c) {
-    return res.status(401).json({ ok: false, error: "Cliente não encontrado" });
+    return res.status(401).json({ ok: false, error: "Login não encontrado" });
   }
 
   if (!c.ativo) {
@@ -2552,6 +2570,7 @@ setInterval(finalizarConversasSuporteInativas, 60 * 1000);
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
 
 
