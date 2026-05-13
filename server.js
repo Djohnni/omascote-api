@@ -847,7 +847,10 @@ app.post("/auth/register", (req, res) => {
   const clientes = readClientes();
 
   if (clientes[whatsapp]) {
-    return res.status(400).json({ ok: false, error: "Login já existe" });
+    return res.status(400).json({
+      ok: false,
+      error: `Esse login já existe. Tente algo como: ${whatsapp}${Math.floor(Math.random()*99)}`
+    });
   }
 
   const senha_hash = bcrypt.hashSync(senha, 8);
@@ -2570,6 +2573,7 @@ setInterval(finalizarConversasSuporteInativas, 60 * 1000);
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
 
 
