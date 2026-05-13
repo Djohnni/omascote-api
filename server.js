@@ -896,6 +896,7 @@ app.post("/auth/auto-register", (req, res) => {
       usados_no_ciclo: 0,
       ciclo_mes: nowYYYYMM(),
       ativo: true,
+      conta_ativada: false,
       criado_em: new Date().toISOString()
     };
 
@@ -926,6 +927,37 @@ app.post("/auth/auto-register", (req, res) => {
 });
 
 // Login
+app.post("/auth/ativar-conta-auto", auth, (req, res) => {
+  try{
+    const clientes = readClientes();
+    const whatsapp = req.user.whatsapp;
+
+    const c = clientes[whatsapp];
+
+    if(!c){
+      return res.status(404).json({
+        ok:false,
+        error:"Conta não encontrada"
+      });
+    }
+
+    c.conta_ativada = true;
+
+    clientes[whatsapp] = c;
+    writeClientes(clientes);
+
+    return res.json({
+      ok:true
+    });
+
+  }catch(e){
+    return res.status(500).json({
+      ok:false,
+      error:"Erro ao ativar conta"
+    });
+  }
+});
+
 app.post("/auth/register", (req, res) => {
   const body = req.body || {};
   const whatsapp = normalizarLoginId(body.whatsapp);
@@ -1645,6 +1677,16 @@ app.get("/pedidos/:id/download-resultado", auth, (req, res) => {
     return res.status(403).json({
       ok: false,
       error: "Aprove a prévia antes de baixar a imagem em alta qualidade."
+    });
+  }
+
+  const clientes = readClientes();
+  const cliente = clientes[whatsapp];
+
+  if (cliente?.cadastro_automatico === true && cliente?.conta_ativada !== true) {
+    return res.status(403).json({
+      ok: false,
+      error: "Ative sua conta antes de baixar a imagem."
     });
   }
 
@@ -2678,6 +2720,7 @@ setInterval(finalizarConversasSuporteInativas, 60 * 1000);
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
 
 
