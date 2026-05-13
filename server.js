@@ -866,8 +866,17 @@ app.post("/auth/register", (req, res) => {
     ativo: true
   };
 
-  clientes[whatsapp] = novo;
-  writeClientes(clientes);
+  const clientesAtualizados = readClientes();
+
+  if (clientesAtualizados[whatsapp]) {
+    return res.status(400).json({
+      ok: false,
+      error: `Esse login já existe. Tente outro nome.`
+    });
+  }
+
+  clientesAtualizados[whatsapp] = novo;
+  writeClientes(clientesAtualizados);
 
   const token = jwt.sign({ whatsapp }, JWT_SECRET, { expiresIn: "7d" });
 
@@ -2573,6 +2582,7 @@ setInterval(finalizarConversasSuporteInativas, 60 * 1000);
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
 
 
