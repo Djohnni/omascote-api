@@ -1202,17 +1202,9 @@ app.post("/webhook/mercadopago", async (req, res) => {
     }
 
     const processados = readMpProcessados();
-
     if (processados[paymentId]) {
       return res.json({ ok: true, duplicado: true });
     }
-
-    processados[paymentId] = {
-      status: "processando",
-      criado_em: new Date().toISOString()
-    };
-
-    writeMpProcessados(processados);
 
     const r = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
       headers: {
@@ -1233,6 +1225,13 @@ app.post("/webhook/mercadopago", async (req, res) => {
     if (!whatsapp || !credito) {
       return res.json({ ok: true, error: "sem whatsapp ou credito" });
     }
+
+    processados[paymentId] = {
+      status: "processando",
+      criado_em: new Date().toISOString()
+    };
+
+    writeMpProcessados(processados);
 
     const clientes = readClientes();
     const c = clientes[whatsapp];
