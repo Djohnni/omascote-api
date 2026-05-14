@@ -1202,9 +1202,17 @@ app.post("/webhook/mercadopago", async (req, res) => {
     }
 
     const processados = readMpProcessados();
+
     if (processados[paymentId]) {
       return res.json({ ok: true, duplicado: true });
     }
+
+    processados[paymentId] = {
+      status: "processando",
+      criado_em: new Date().toISOString()
+    };
+
+    writeMpProcessados(processados);
 
     const r = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
       headers: {
@@ -2768,6 +2776,7 @@ setInterval(finalizarConversasSuporteInativas, 60 * 1000);
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
 
 
