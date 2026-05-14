@@ -1202,7 +1202,7 @@ app.post("/webhook/mercadopago", async (req, res) => {
     }
 
     const processados = readMpProcessados();
-    if (processados[paymentId]?.creditado === true) {
+    if (processados[paymentId]) {
       return res.json({ ok: true, duplicado: true });
     }
 
@@ -1226,23 +1226,6 @@ app.post("/webhook/mercadopago", async (req, res) => {
       return res.json({ ok: true, error: "sem whatsapp ou credito" });
     }
 
-    const processadosAntesCredito = readMpProcessados();
-
-    if (processadosAntesCredito[paymentId]?.creditado === true || processadosAntesCredito[paymentId]?.processando === true) {
-      return res.json({ ok: true, duplicado: true });
-    }
-
-    processadosAntesCredito[paymentId] = {
-      whatsapp,
-      credito,
-      status: pagamento.status,
-      processando: true,
-      creditado: false,
-      iniciado_em: new Date().toISOString()
-    };
-
-    writeMpProcessados(processadosAntesCredito);
-
     const clientes = readClientes();
     const c = clientes[whatsapp];
 
@@ -1262,18 +1245,14 @@ app.post("/webhook/mercadopago", async (req, res) => {
     clientes[whatsapp] = c;
     writeClientes(clientes);
 
-    const processadosFinal = readMpProcessados();
-
-    processadosFinal[paymentId] = {
+    processados[paymentId] = {
       whatsapp,
       credito,
       status: pagamento.status,
-      processando: false,
-      creditado: true,
       criado_em: new Date().toISOString()
     };
 
-    writeMpProcessados(processadosFinal);
+    writeMpProcessados(processados);
 
     return res.json({ ok: true });
 
@@ -2789,7 +2768,6 @@ setInterval(finalizarConversasSuporteInativas, 60 * 1000);
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
-
 
 
 
