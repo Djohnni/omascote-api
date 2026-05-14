@@ -1272,6 +1272,24 @@ app.post("/webhook/mercadopago", async (req, res) => {
     return res.json({ ok: true });
 
   } catch (e) {
+
+    try{
+      const body = req.body || {};
+      const paymentId = body?.data?.id || body?.id || req.query?.id;
+
+      if(paymentId){
+        const processados = readMpProcessados();
+
+        if(processados[paymentId]){
+          processados[paymentId].processando = false;
+          processados[paymentId].erro = true;
+          processados[paymentId].erro_em = new Date().toISOString();
+
+          writeMpProcessados(processados);
+        }
+      }
+    }catch{}
+
     return res.json({ ok: true });
   }
 });
@@ -2783,6 +2801,7 @@ setInterval(finalizarConversasSuporteInativas, 60 * 1000);
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
 
 
