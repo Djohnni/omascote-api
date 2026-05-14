@@ -1233,6 +1233,10 @@ app.post("/webhook/mercadopago", async (req, res) => {
       return res.json({ ok: true, error: "cliente não encontrado" });
     }
 
+    if (c.brinde_mascote_ja_liberado !== true) {
+      c.saldo_extra = 0; // remove qualquer sobra do saldo grátis inicial antes da primeira compra
+    }
+
     c.saldo_extra = Number(c.saldo_extra || 0) + credito;
     c.ativo = true;
 
@@ -2768,6 +2772,7 @@ setInterval(finalizarConversasSuporteInativas, 60 * 1000);
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
 
 
