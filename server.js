@@ -1202,22 +1202,9 @@ app.post("/webhook/mercadopago", async (req, res) => {
     }
 
     const processados = readMpProcessados();
-
     if (processados[paymentId]?.creditado === true) {
       return res.json({ ok: true, duplicado: true });
     }
-
-    if (processados[paymentId]?.processando === true) {
-      return res.json({ ok: true, duplicado: true, processando: true });
-    }
-
-    processados[paymentId] = {
-      processando: true,
-      creditado: false,
-      iniciado_em: new Date().toISOString()
-    };
-
-    writeMpProcessados(processados);
 
     const r = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
       headers: {
@@ -1239,6 +1226,23 @@ app.post("/webhook/mercadopago", async (req, res) => {
       return res.json({ ok: true, error: "sem whatsapp ou credito" });
     }
 
+    const processadosAntesCredito = readMpProcessados();
+
+    if (processadosAntesCredito[paymentId]?.creditado === true || processadosAntesCredito[paymentId]?.processando === true) {
+      return res.json({ ok: true, duplicado: true });
+    }
+
+    processadosAntesCredito[paymentId] = {
+      whatsapp,
+      credito,
+      status: pagamento.status,
+      processando: true,
+      creditado: false,
+      iniciado_em: new Date().toISOString()
+    };
+
+    writeMpProcessados(processadosAntesCredito);
+
     const clientes = readClientes();
     const c = clientes[whatsapp];
 
@@ -1258,7 +1262,9 @@ app.post("/webhook/mercadopago", async (req, res) => {
     clientes[whatsapp] = c;
     writeClientes(clientes);
 
-    processados[paymentId] = {
+    const processadosFinal = readMpProcessados();
+
+    processadosFinal[paymentId] = {
       whatsapp,
       credito,
       status: pagamento.status,
@@ -1267,29 +1273,11 @@ app.post("/webhook/mercadopago", async (req, res) => {
       criado_em: new Date().toISOString()
     };
 
-    writeMpProcessados(processados);
+    writeMpProcessados(processadosFinal);
 
     return res.json({ ok: true });
 
   } catch (e) {
-
-    try{
-      const body = req.body || {};
-      const paymentId = body?.data?.id || body?.id || req.query?.id;
-
-      if(paymentId){
-        const processados = readMpProcessados();
-
-        if(processados[paymentId]){
-          processados[paymentId].processando = false;
-          processados[paymentId].erro = true;
-          processados[paymentId].erro_em = new Date().toISOString();
-
-          writeMpProcessados(processados);
-        }
-      }
-    }catch{}
-
     return res.json({ ok: true });
   }
 });
@@ -2801,7 +2789,6 @@ setInterval(finalizarConversasSuporteInativas, 60 * 1000);
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
-
 
 
 
