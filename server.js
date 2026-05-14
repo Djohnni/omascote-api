@@ -182,12 +182,10 @@ function criarLoginAutomaticoUnico(base, clientes) {
     loginBase = "jogador";
   }
 
-  let login = loginBase;
-  let tentativas = 0;
+  let login = "auto_" + loginBase + "_" + Date.now();
 
   while (clientes[login]) {
-    tentativas++;
-    login = `${loginBase}${Math.floor(100 + Math.random() * 900)}${tentativas}`;
+    login = "auto_" + loginBase + "_" + Date.now() + "_" + Math.floor(Math.random() * 999);
   }
 
   return login;
@@ -865,29 +863,15 @@ app.post("/auth/auto-register", (req, res) => {
     ).trim();
 
     const login = criarLoginAutomaticoUnico(body.login || nome_time, clientes);
-    const senhaCliente = String(body.senha || gerarSenhaAutomatica()).trim();
-
-    if (!login || login.length < 3) {
-      return res.status(400).json({
-        ok: false,
-        error: "Não foi possível gerar login automático."
-      });
-    }
-
-    if (!senhaCliente || senhaCliente.length < 3) {
-      return res.status(400).json({
-        ok: false,
-        error: "Não foi possível gerar senha automática."
-      });
-    }
-
+    const senhaCliente = gerarSenhaAutomatica();
     const senha_hash = bcrypt.hashSync(senhaCliente, 8);
 
     const novo = {
-      nome_time: nome_time || login,
+      nome_time: nome_time || "Jogador",
       senha_hash,
       login_tipo: "automatico",
       cadastro_automatico: true,
+      conta_finalizada: false,
       produto_origem: String(body.produto || ""),
       device_id: String(body.device_id || ""),
       plano: 0,
@@ -896,7 +880,6 @@ app.post("/auth/auto-register", (req, res) => {
       usados_no_ciclo: 0,
       ciclo_mes: nowYYYYMM(),
       ativo: true,
-      conta_ativada: false,
       criado_em: new Date().toISOString()
     };
 
@@ -910,7 +893,6 @@ app.post("/auth/auto-register", (req, res) => {
       token,
       login,
       whatsapp: login,
-      senha_cliente: senhaCliente,
       nome_time: novo.nome_time,
       plano: novo.plano,
       saldo_mensal: Number(novo.saldo_mensal || 0),
@@ -921,43 +903,12 @@ app.post("/auth/auto-register", (req, res) => {
   } catch (e) {
     return res.status(500).json({
       ok: false,
-      error: "Erro ao criar conta automática."
+      error: "Erro ao criar acesso automático."
     });
   }
 });
 
 // Login
-app.post("/auth/ativar-conta-auto", auth, (req, res) => {
-  try{
-    const clientes = readClientes();
-    const whatsapp = req.user.whatsapp;
-
-    const c = clientes[whatsapp];
-
-    if(!c){
-      return res.status(404).json({
-        ok:false,
-        error:"Conta não encontrada"
-      });
-    }
-
-    c.conta_ativada = true;
-
-    clientes[whatsapp] = c;
-    writeClientes(clientes);
-
-    return res.json({
-      ok:true
-    });
-
-  }catch(e){
-    return res.status(500).json({
-      ok:false,
-      error:"Erro ao ativar conta"
-    });
-  }
-});
-
 app.post("/auth/register", (req, res) => {
   const body = req.body || {};
   const whatsapp = normalizarLoginId(body.whatsapp);
@@ -1015,6 +966,83 @@ app.post("/auth/register", (req, res) => {
     plano: novo.plano,
     usados_no_ciclo: novo.usados_no_ciclo
   });
+});
+
+app.post("/auth/finalizar-conta-auto", auth, (req, res) => {
+  try {
+    const loginAtual = req.user.whatsapp;
+    const novoLogin = normalizarLoginId(req.body?.login);
+    const senha = String(req.body?.senha || "");
+
+    if (!novoLogin || novoLogin.length < 3) {
+      return res.status(400).json({ ok:false, error:"Login muito curto" });
+    }
+
+    if (!senha || senha.length < 3) {
+      return res.status(400).json({ ok:false, error:"Senha muito curta" });
+    }
+
+    const clientes = readClientes();
+    const clienteAtual = clientes[loginAtual];
+
+    if (!clienteAtual) {
+      return res.status(404).json({ ok:false, error:"Conta automática não encontrada" });
+    }
+
+    if (clienteAtual.cadastro_automatico !== true || clienteAtual.conta_finalizada === true) {
+      return res.status(400).json({ ok:false, error:"Essa conta já foi finalizada" });
+    }
+
+    if (clientes[novoLogin] && novoLogin !== loginAtual) {
+      return res.status(400).json({
+        ok:false,
+        error:`Esse login já existe. Tente algo como: ${novoLogin}${Math.floor(Math.random()*99)}`
+      });
+    }
+
+    clienteAtual.nome_time = novoLogin;
+    clienteAtual.senha_hash = bcrypt.hashSync(senha, 8);
+    clienteAtual.conta_finalizada = true;
+    clienteAtual.finalizado_em = new Date().toISOString();
+
+    if (novoLogin !== loginAtual) {
+      clientes[novoLogin] = clienteAtual;
+      delete clientes[loginAtual];
+
+      try {
+        const pastaAntiga = path.join(PEDIDOS_DIR, loginAtual);
+        const pastaNova = path.join(PEDIDOS_DIR, novoLogin);
+
+        if (fs.existsSync(pastaAntiga) && !fs.existsSync(pastaNova)) {
+          fs.renameSync(pastaAntiga, pastaNova);
+        }
+      } catch {}
+    } else {
+      clientes[loginAtual] = clienteAtual;
+    }
+
+    writeClientes(clientes);
+
+    const token = jwt.sign({ whatsapp: novoLogin }, JWT_SECRET, { expiresIn: "7d" });
+
+    return res.json({
+      ok:true,
+      token,
+      whatsapp: novoLogin,
+      nome_time: clienteAtual.nome_time,
+      plano: clienteAtual.plano,
+      saldo_mensal: Number(clienteAtual.saldo_mensal || 0),
+      saldo_extra: Number(clienteAtual.saldo_extra || 0),
+      saldo: Number(clienteAtual.saldo_mensal || 0) + Number(clienteAtual.saldo_extra || 0),
+      usados_no_ciclo: clienteAtual.usados_no_ciclo
+    });
+
+  } catch (e) {
+    return res.status(500).json({
+      ok:false,
+      error:"Erro ao finalizar conta automática"
+    });
+  }
 });
 
 app.post("/auth/login", (req, res) => {
@@ -1683,10 +1711,10 @@ app.get("/pedidos/:id/download-resultado", auth, (req, res) => {
   const clientes = readClientes();
   const cliente = clientes[whatsapp];
 
-  if (cliente?.cadastro_automatico === true && cliente?.conta_ativada !== true) {
+  if (cliente?.cadastro_automatico === true && cliente?.conta_finalizada !== true) {
     return res.status(403).json({
       ok: false,
-      error: "Ative sua conta antes de baixar a imagem."
+      error: "Crie seu login e senha para liberar o download."
     });
   }
 
@@ -2720,7 +2748,6 @@ setInterval(finalizarConversasSuporteInativas, 60 * 1000);
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
-
 
 
 
