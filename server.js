@@ -141,7 +141,10 @@ if (categoria === "escudo3d") return 4.00;
 if (categoria === "proximo_jogo_jogador") return 7.00;
 if (categoria === "resultado_jogo_jogador") return 8.00;
 if (categoria === "jogador_escudo") return 6.00;
-if (categoria === "mascote_uniforme") return 18.00;
+if (categoria === "mascote_uniforme") {
+  if (cliente && cliente.brinde_mascote_disponivel === true) return 0;
+  return 18.00;
+}
 
 return 0;
 }
@@ -1113,6 +1116,7 @@ app.get("/me", auth, (req, res) => {
     saldo_extra: Number(c.saldo_extra || 0),
     saldo: Number(c.saldo_mensal || 0) + Number(c.saldo_extra || 0),
     usados_no_ciclo: c.usados_no_ciclo,
+    brinde_mascote_disponivel: c.brinde_mascote_disponivel === true,
     ativo: c.ativo
   });
 });
@@ -1232,6 +1236,12 @@ app.post("/webhook/mercadopago", async (req, res) => {
     c.saldo_extra = Number(c.saldo_extra || 0) + credito;
     c.ativo = true;
 
+    if (c.brinde_mascote_ja_liberado !== true) {
+      c.brinde_mascote_disponivel = true;
+      c.brinde_mascote_ja_liberado = true;
+      c.brinde_mascote_liberado_em = new Date().toISOString();
+    }
+
     clientes[whatsapp] = c;
     writeClientes(clientes);
 
@@ -1267,6 +1277,8 @@ function criarPedidoHandler(categoria) {
       c.ciclo_mes = mesAtual;
       c.usados_no_ciclo = 0;
     }
+
+    const temBrindeMascote = categoria === "mascote_uniforme" && c.brinde_mascote_disponivel === true;
 
     const custoPedido = getCustoPedido(categoria, c);
     const saldoTotal = Number(c.saldo_mensal || 0) + Number(c.saldo_extra || 0);
@@ -1388,6 +1400,11 @@ function criarPedidoHandler(categoria) {
 
     c.usados_no_ciclo = (c.usados_no_ciclo || 0) + 1;
     c.ciclo_mes = mesAtual;
+
+    if (temBrindeMascote) {
+      c.brinde_mascote_disponivel = false;
+      c.brinde_mascote_usado_em = new Date().toISOString();
+    }
 
     clientes[whatsapp] = c;
     writeClientes(clientes);
@@ -2751,6 +2768,7 @@ setInterval(finalizarConversasSuporteInativas, 60 * 1000);
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
 
 
