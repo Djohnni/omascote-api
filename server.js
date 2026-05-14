@@ -1202,9 +1202,22 @@ app.post("/webhook/mercadopago", async (req, res) => {
     }
 
     const processados = readMpProcessados();
-    if (processados[paymentId]) {
+
+    if (processados[paymentId]?.creditado === true) {
       return res.json({ ok: true, duplicado: true });
     }
+
+    if (processados[paymentId]?.processando === true) {
+      return res.json({ ok: true, duplicado: true, processando: true });
+    }
+
+    processados[paymentId] = {
+      processando: true,
+      creditado: false,
+      iniciado_em: new Date().toISOString()
+    };
+
+    writeMpProcessados(processados);
 
     const r = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
       headers: {
@@ -1233,10 +1246,6 @@ app.post("/webhook/mercadopago", async (req, res) => {
       return res.json({ ok: true, error: "cliente não encontrado" });
     }
 
-    if (c.brinde_mascote_ja_liberado !== true) {
-      c.saldo_extra = 0; // remove qualquer sobra do saldo grátis inicial antes da primeira compra
-    }
-
     c.saldo_extra = Number(c.saldo_extra || 0) + credito;
     c.ativo = true;
 
@@ -1253,6 +1262,8 @@ app.post("/webhook/mercadopago", async (req, res) => {
       whatsapp,
       credito,
       status: pagamento.status,
+      processando: false,
+      creditado: true,
       criado_em: new Date().toISOString()
     };
 
