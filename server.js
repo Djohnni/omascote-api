@@ -141,6 +141,7 @@ if (categoria === "escudo3d") return 4.00;
 if (categoria === "proximo_jogo_jogador") return 7.00;
 if (categoria === "resultado_jogo_jogador") return 8.00;
 if (categoria === "jogador_escudo") return 6.00;
+if (categoria === "mascote_uniforme") return 18.00;
 
 return 0;
 }
@@ -156,7 +157,8 @@ function nomeCategoriaPedido(categoria) {
     escudo3d: "Escudo 3D",
     proximo_jogo_jogador: "Próximo jogo jogador",
     resultado_jogo_jogador: "Resultado jogador",
-    jogador_escudo: "Jogador + escudo"
+    jogador_escudo: "Jogador + escudo",
+    mascote_uniforme: "Mascote + uniforme"
   };
 
   return nomes[categoria] || categoria || "";
@@ -1314,10 +1316,10 @@ function criarPedidoHandler(categoria) {
       fs.renameSync(f.path, dest);
     }
 
-    const podeUsarEscudo1 = ["resultado", "escalacao", "contratacao", "proximo_jogo", "patrocinador", "escudo3d", "proximo_jogo_jogador", "resultado_jogo_jogador", "jogador_escudo"].includes(categoria);
+    const podeUsarEscudo1 = ["resultado", "escalacao", "contratacao", "proximo_jogo", "patrocinador", "escudo3d", "proximo_jogo_jogador", "resultado_jogo_jogador", "jogador_escudo", "mascote_uniforme"].includes(categoria);
     const podeUsarEscudo2 = ["resultado", "escalacao", "contratacao", "proximo_jogo", "proximo_jogo_jogador", "resultado_jogo_jogador"].includes(categoria);
     const escudo2EhFotoJogador = false;
-    const podeUsarMascote = ["resultado", "escalacao", "proximo_jogo_jogador", "resultado_jogo_jogador", "jogador_escudo"].includes(categoria);
+    const podeUsarMascote = ["resultado", "escalacao", "proximo_jogo_jogador", "resultado_jogo_jogador", "jogador_escudo", "mascote_uniforme"].includes(categoria);
     const podeUsarPatrocinadores = categoria === "patrocinador";
 
     if (podeUsarEscudo1) moveOne("escudo1", "escudo1.png");
@@ -1339,8 +1341,8 @@ function criarPedidoHandler(categoria) {
       time_adversario: ["resultado", "proximo_jogo", "proximo_jogo_jogador", "resultado_jogo_jogador"].includes(categoria) ? (time_adversario || "") : "",
     
       artilheiros: categoria === "resultado" && artilheiros ? JSON.parse(artilheiros) : [],
-      jogadores: ["escalacao", "jogador_escudo"].includes(categoria) && jogadores_json ? JSON.parse(jogadores_json) : [],
-      jogadores_texto: ["escalacao", "jogador_escudo"].includes(categoria) ? (jogadores_texto || "") : "",
+      jogadores: ["escalacao", "jogador_escudo", "mascote_uniforme"].includes(categoria) && jogadores_json ? JSON.parse(jogadores_json) : [],
+      jogadores_texto: ["escalacao", "jogador_escudo", "mascote_uniforme"].includes(categoria) ? (jogadores_texto || "") : "",
     
       escudo_principal: podeUsarEscudo1 && files["escudo1"]?.[0] ? "escudo1.png" : "",
       escudo_adversario: podeUsarEscudo2 && files["escudo2"]?.[0] ? "escudo2.png" : "",
@@ -1417,6 +1419,7 @@ app.post(
     if (flyer_tipo === "jog_proximo") return criarPedidoHandler("proximo_jogo_jogador")(req, res);
     if (flyer_tipo === "jog_resultado") return criarPedidoHandler("resultado_jogo_jogador")(req, res);
     if (flyer_tipo === "jog_escudo") return criarPedidoHandler("jogador_escudo")(req, res);
+    if (flyer_tipo === "mascote_uniforme") return criarPedidoHandler("mascote_uniforme")(req, res);
 
     return criarPedidoHandler("pedido")(req, res);
   }
@@ -2748,6 +2751,7 @@ setInterval(finalizarConversasSuporteInativas, 60 * 1000);
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
+
 
 
 
