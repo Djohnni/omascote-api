@@ -6,6 +6,11 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const multer = require("multer");
 const archiver = require("archiver");
+const productsRegistry = require("./src/products");
+const orderStorage = require("./src/orders/order.storage");
+const orderStatus = require("./src/orders/order.status");
+const orderService = require("./src/orders/order.service");
+const billingService = require("./src/billing/billing.service");
 
 const app = express();
 
@@ -131,26 +136,32 @@ function writeTempoEstimado(obj) {
 }
 
 function getCustoPedido(categoria, cliente) {
-if (categoria === "resultado") return 8.00;
-if (categoria === "escalacao") return 8.00;
-if (categoria === "contratacao") return 7.00;
-if (categoria === "proximo_jogo") return 7.00;
-if (categoria === "patrocinador") return 8.00;
-if (categoria === "escudo3d") return 4.00;
+  const registryPrice = productsRegistry.getProductPrice(categoria, cliente);
+  if (registryPrice !== null) return registryPrice;
 
-if (categoria === "proximo_jogo_jogador") return 7.00;
-if (categoria === "resultado_jogo_jogador") return 8.00;
-if (categoria === "jogador_escudo") return 6.00;
-if (categoria === "mascote_uniforme") {
-  if (cliente && cliente.brinde_mascote_disponivel === true) return 0;
-  return 18.00;
-}
+  if (categoria === "resultado") return 8.00;
+  if (categoria === "escalacao") return 8.00;
+  if (categoria === "contratacao") return 7.00;
+  if (categoria === "proximo_jogo") return 7.00;
+  if (categoria === "patrocinador") return 8.00;
+  if (categoria === "escudo3d") return 4.00;
 
-return 0;
+  if (categoria === "proximo_jogo_jogador") return 7.00;
+  if (categoria === "resultado_jogo_jogador") return 8.00;
+  if (categoria === "jogador_escudo") return 6.00;
+  if (categoria === "mascote_uniforme") {
+    if (cliente && cliente.brinde_mascote_disponivel === true) return 0;
+    return 18.00;
+  }
+
+  return 0;
 }
 
 
 function nomeCategoriaPedido(categoria) {
+  const registryName = productsRegistry.getProductName(categoria);
+  if (registryName) return registryName;
+
   const nomes = {
     resultado: "Resultado do jogo",
     escalacao: "Escalação",
@@ -197,44 +208,19 @@ function criarLoginAutomaticoUnico(base, clientes) {
 }
 
 function nowYYYYMM() {
-  const d = new Date();
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  return `${y}-${m}`;
+  return orderStorage.nowYYYYMM();
 }
 
 function newPedidoId() {
-  const d = new Date();
-  const y = d.getFullYear();
-  const mo = String(d.getMonth() + 1).padStart(2, "0");
-  const da = String(d.getDate()).padStart(2, "0");
-  const hh = String(d.getHours()).padStart(2, "0");
-  const mm = String(d.getMinutes()).padStart(2, "0");
-  const ss = String(d.getSeconds()).padStart(2, "0");
-  return `${y}${mo}${da}_${hh}${mm}${ss}`;
+  return orderStorage.newPedidoId();
 }
 
 function getPedidoBase(whatsapp, pedidoId) {
-  const pastaWhatsapp = path.join(PEDIDOS_DIR, whatsapp);
-
-  if (!fs.existsSync(pastaWhatsapp)) return null;
-
-  const meses = fs.readdirSync(pastaWhatsapp);
-
-  for (const mes of meses) {
-    const base = path.join(pastaWhatsapp, mes, pedidoId);
-    if (fs.existsSync(base)) return base;
-  }
-
-  return null;
+  return orderStorage.getPedidoBase(PEDIDOS_DIR, whatsapp, pedidoId);
 }
 
 function safeReadJson(filePath) {
-  try {
-    return JSON.parse(fs.readFileSync(filePath, "utf8"));
-  } catch {
-    return null;
-  }
+  return orderStorage.safeReadJson(filePath);
 }
 
 function isBotAdmin(req) {
@@ -242,73 +228,31 @@ function isBotAdmin(req) {
 }
 
 function getPedidoBaseGlobal(pedidoId) {
-  if (!fs.existsSync(PEDIDOS_DIR)) return null;
-
-  const whatsapps = fs.readdirSync(PEDIDOS_DIR);
-
-  for (const whatsapp of whatsapps) {
-    const pastaWhatsapp = path.join(PEDIDOS_DIR, whatsapp);
-    if (!fs.existsSync(pastaWhatsapp) || !fs.statSync(pastaWhatsapp).isDirectory()) continue;
-
-    const meses = fs.readdirSync(pastaWhatsapp);
-
-    for (const mes of meses) {
-      const base = path.join(pastaWhatsapp, mes, pedidoId);
-      if (fs.existsSync(base)) return base;
-    }
-  }
-
-  return null;
+  return orderStorage.getPedidoBaseGlobal(PEDIDOS_DIR, pedidoId);
 }
 
 function listPedidoBasesByWhatsapp(whatsapp) {
-  const pastaWhatsapp = path.join(PEDIDOS_DIR, whatsapp);
-
-  if (!fs.existsSync(pastaWhatsapp)) return [];
-
-  const meses = fs.readdirSync(pastaWhatsapp);
-  const pedidos = [];
-
-  for (const mes of meses) {
-    const pastaMes = path.join(pastaWhatsapp, mes);
-    if (!fs.existsSync(pastaMes) || !fs.statSync(pastaMes).isDirectory()) continue;
-
-    const ids = fs.readdirSync(pastaMes);
-
-    for (const id of ids) {
-      const base = path.join(pastaMes, id);
-      if (!fs.existsSync(base) || !fs.statSync(base).isDirectory()) continue;
-
-      const pedidoPath = path.join(base, "pedido.json");
-      const pedido = safeReadJson(pedidoPath) || {};
-      const criadoEm = pedido.criado_em || new Date(fs.statSync(base).mtimeMs).toISOString();
-
-      pedidos.push({
-        id,
-        base,
-        mes,
-        pedido,
-        criado_em: criadoEm
-      });
-    }
-  }
-
-  pedidos.sort((a, b) => new Date(b.criado_em) - new Date(a.criado_em));
-  return pedidos;
+  return orderStorage.listPedidoBasesByWhatsapp(PEDIDOS_DIR, whatsapp);
 }
 
 function removeOldPedidos(whatsapp, maxKeep = 15) {
-  const pedidos = listPedidoBasesByWhatsapp(whatsapp);
+  return orderStorage.removeOldPedidos(PEDIDOS_DIR, whatsapp, maxKeep);
+}
 
-  if (pedidos.length <= maxKeep) return;
+function readPedido(base) {
+  return orderStorage.readOrder(base);
+}
 
-  const excedentes = pedidos.slice(maxKeep);
+function writePedido(base, pedido) {
+  return orderStorage.writeOrder(base, pedido);
+}
 
-  for (const item of excedentes) {
-    try {
-      fs.rmSync(item.base, { recursive: true, force: true });
-    } catch {}
-  }
+function readOrderStatus(base, fallback = "") {
+  return orderStorage.readStatus(base, fallback);
+}
+
+function writeOrderStatus(base, status) {
+  return orderStorage.writeStatus(base, status);
 }
 
 function readJsonArraySafe(filePath) {
@@ -1285,138 +1229,43 @@ function criarPedidoHandler(categoria) {
     }
 
     const mesAtual = nowYYYYMM();
-    if (c.ciclo_mes !== mesAtual) {
-      c.ciclo_mes = mesAtual;
-      c.usados_no_ciclo = 0;
-    }
+    billingService.ensureCurrentBillingCycle(c, mesAtual);
 
-    const temBrindeMascote = categoria === "mascote_uniforme" && c.brinde_mascote_disponivel === true;
+    const temBrindeMascote = billingService.hasMascoteUniformeGift(categoria, c);
 
     const custoPedido = getCustoPedido(categoria, c);
-    const saldoTotal = Number(c.saldo_mensal || 0) + Number(c.saldo_extra || 0);
 
-    if (saldoTotal < custoPedido) {
+    if (!billingService.hasEnoughBalance(c, custoPedido)) {
       clientes[whatsapp] = c;
       writeClientes(clientes);
       return res.status(403).json({
         ok: false,
-        error: `Saldo insuficiente. Este pedido custa R$ ${custoPedido.toFixed(2).replace(".", ",")}`
+        error: billingService.formatInsufficientBalanceMessage(custoPedido)
       });
     }
 
-    const {
-  rodada,
-  data,
-  hora,
-  arena,
-  mascote_tipo,
-  flyer_tipo,
-  artilheiros,
-  jogadores_json,
-  jogadores_texto,
-  time_principal,
-  gols_time_principal,
-  gols_adversario,
-  time_adversario
-} = req.body || {};
-    if (!rodada || !data) {
+    const fields = orderService.normalizeOrderBody(req.body);
+
+    if (!orderService.hasRequiredOrderFields(fields)) {
       return res.status(400).json({
         ok: false,
         error: "rodada e data são obrigatórios"
       });
     }
 
-    const id = newPedidoId();
-    const base = path.join(PEDIDOS_DIR, whatsapp, mesAtual, id);
-
-    ensureDir(base);
-
     const files = req.files || {};
-
-    function moveOne(field, destName) {
-      const f = files[field]?.[0];
-      if (!f) return;
-      const dest = path.join(base, destName);
-      fs.renameSync(f.path, dest);
-    }
-
-    const podeUsarEscudo1 = ["resultado", "escalacao", "contratacao", "proximo_jogo", "patrocinador", "escudo3d", "proximo_jogo_jogador", "resultado_jogo_jogador", "jogador_escudo", "mascote_uniforme"].includes(categoria);
-    const podeUsarEscudo2 = ["resultado", "escalacao", "contratacao", "proximo_jogo", "proximo_jogo_jogador", "resultado_jogo_jogador"].includes(categoria);
-    const escudo2EhFotoJogador = false;
-    const podeUsarMascote = ["resultado", "escalacao", "proximo_jogo_jogador", "resultado_jogo_jogador", "jogador_escudo", "mascote_uniforme"].includes(categoria);
-    const podeUsarPatrocinadores = categoria === "patrocinador";
-
-    if (podeUsarEscudo1) moveOne("escudo1", "escudo1.png");
-    if (podeUsarEscudo2) moveOne("escudo2", "escudo2.png");
-    if (escudo2EhFotoJogador) moveOne("escudo2", "mascote.png");
-    if (podeUsarMascote) moveOne("mascote", "mascote.png");
-
-    const pats = podeUsarPatrocinadores ? (files["patrocinadores"] || []) : [];
-
-    pats.forEach((f, i) => {
-      const dest = path.join(base, `pat${String(i + 1).padStart(2, "0")}.png`);
-      fs.renameSync(f.path, dest);
+    const draft = orderService.createOrderDraft({
+      categoria,
+      pedidosDir: PEDIDOS_DIR,
+      whatsapp,
+      mesAtual,
+      fields,
+      files
     });
 
-   const pedido = {
-      time_principal: ["resultado", "proximo_jogo", "proximo_jogo_jogador", "resultado_jogo_jogador"].includes(categoria) ? (time_principal || "") : "",
-      gols_time_principal: ["resultado", "resultado_jogo_jogador"].includes(categoria) ? (Number(gols_time_principal) || 0) : 0,
-      gols_adversario: ["resultado", "resultado_jogo_jogador"].includes(categoria) ? (Number(gols_adversario) || 0) : 0,
-      time_adversario: ["resultado", "proximo_jogo", "proximo_jogo_jogador", "resultado_jogo_jogador"].includes(categoria) ? (time_adversario || "") : "",
-    
-      artilheiros: categoria === "resultado" && artilheiros ? JSON.parse(artilheiros) : [],
-      jogadores: ["escalacao", "jogador_escudo", "mascote_uniforme"].includes(categoria) && jogadores_json ? JSON.parse(jogadores_json) : [],
-      jogadores_texto: ["escalacao", "jogador_escudo", "mascote_uniforme"].includes(categoria) ? (jogadores_texto || "") : "",
-    
-      escudo_principal: podeUsarEscudo1 && files["escudo1"]?.[0] ? "escudo1.png" : "",
-      escudo_adversario: podeUsarEscudo2 && files["escudo2"]?.[0] ? "escudo2.png" : "",
-      foto_jogo: ((podeUsarMascote && files["mascote"]?.[0]) || (escudo2EhFotoJogador && files["escudo2"]?.[0])) ? "mascote.png" : "",
-    
-      categoria: categoria,
-      id,
-      whatsapp,
-      mes: mesAtual,
-      rodada,
-      data,
-       hora: ["resultado", "resultado_jogo_jogador", "contratacao", "proximo_jogo", "proximo_jogo_jogador", "escalacao"].includes(categoria) ? (hora || "") : "",
-      arena: ["proximo_jogo", "proximo_jogo_jogador", "escalacao"].includes(categoria) ? (arena || "") : "",
-      mascote_tipo: mascote_tipo || "",
-      patrocinadores_qtd: pats.length,
-      status: "novo",
-      aprovado_cliente: false,
-      baixado_cliente: false,
-      ajuste_automatico_usado: false,
-      motivo_ajuste: "",
-      criado_em: new Date().toISOString()
-    };
+    const id = draft.id;
 
-    fs.writeFileSync(
-      path.join(base, "pedido.json"),
-      JSON.stringify(pedido, null, 2),
-      "utf8"
-    );
-
-    fs.writeFileSync(path.join(base, "status.txt"), "novo", "utf8");
-
-    let restante = custoPedido;
-
-    const saldoExtraAtual = Number(c.saldo_extra || 0);
-    const descontoExtra = Math.min(saldoExtraAtual, restante);
-    c.saldo_extra = Number((saldoExtraAtual - descontoExtra).toFixed(2));
-    restante = Number((restante - descontoExtra).toFixed(2));
-
-    if (restante > 0) {
-      const saldoMensalAtual = Number(c.saldo_mensal || 0);
-      c.saldo_mensal = Number(Math.max(0, saldoMensalAtual - restante).toFixed(2));
-    }
-
-    c.usados_no_ciclo = (c.usados_no_ciclo || 0) + 1;
-    c.ciclo_mes = mesAtual;
-
-    if (temBrindeMascote) {
-      c.brinde_mascote_disponivel = false;
-      c.brinde_mascote_usado_em = new Date().toISOString();
-    }
+    billingService.applyOrderCharge(c, { custoPedido, mesAtual, temBrindeMascote });
 
     clientes[whatsapp] = c;
     writeClientes(clientes);
@@ -1439,6 +1288,9 @@ app.post(
   ]),
   (req, res) => {
     const flyer_tipo = (req.body?.flyer_tipo || "").toLowerCase();
+    const productFromRegistry = productsRegistry.getProductByFlyerTipo(flyer_tipo);
+
+    if (productFromRegistry) return criarPedidoHandler(productFromRegistry.id)(req, res);
 
     if (flyer_tipo === "escudo3d") return criarPedidoHandler("escudo3d")(req, res);
     if (flyer_tipo === "zz1fs") return criarPedidoHandler("escalacao")(req, res);
@@ -1506,14 +1358,10 @@ app.get("/bot/pedidos/novos", auth, (req, res) => {
 
       for (const id of ids) {
         const base = path.join(pastaMes, id);
-        const st = path.join(base, "status.txt");
+        const statusPedido = readOrderStatus(base, "");
 
-        if (fs.existsSync(st)) {
-          const statusPedido = fs.readFileSync(st, "utf8").trim();
-
-          if (statusPedido === "novo" || statusPedido === "ajuste_pendente") {
-            pedidos.push({ id, whatsapp, mes, status: statusPedido });
-          }
+        if (statusPedido === "novo" || statusPedido === "ajuste_pendente") {
+          pedidos.push({ id, whatsapp, mes, status: statusPedido });
         }
       }
     }
@@ -1558,11 +1406,11 @@ app.post("/bot/pedidos/:id/status", auth, (req, res) => {
 
   const { status } = req.body || {};
 
-  if (!["novo", "em_producao", "pronto", "ajuste_pendente", "erro"].includes(status)) {
+  if (!orderStatus.isValidPublicStatus(status)) {
     return res.status(400).json({ ok: false, error: "status inválido" });
   }
 
-  fs.writeFileSync(path.join(base, "status.txt"), status, "utf8");
+  writeOrderStatus(base, status);
 
   return res.json({ ok: true });
 });
@@ -1581,9 +1429,8 @@ app.get("/pedidos/novos", auth, (req, res) => {
 
   for (const id of fs.readdirSync(dir)) {
     const pdir = path.join(dir, id);
-    const st = path.join(pdir, "status.txt");
 
-    if (fs.existsSync(st) && fs.readFileSync(st, "utf8").trim() === "novo") {
+    if (readOrderStatus(pdir, "") === "novo") {
       pedidos.push({ id });
     }
   }
@@ -1598,11 +1445,8 @@ app.get("/meus-pedidos", auth, (req, res) => {
   const itens = listPedidoBasesByWhatsapp(whatsapp).slice(0, 15);
 
   const pedidos = itens.map((item) => {
-    const statusPath = path.join(item.base, "status.txt");
     const resultadoFinalPath = path.join(item.base, "resultado_final.png");
-    const status = fs.existsSync(statusPath)
-      ? fs.readFileSync(statusPath, "utf8").trim()
-      : (item.pedido.status || "novo");
+    const status = readOrderStatus(item.base, item.pedido.status || "novo");
     const imagemPronta = fs.existsSync(resultadoFinalPath);
     const aprovadoCliente = item.pedido.aprovado_cliente === true;
     const ajusteUsado = item.pedido.ajuste_automatico_usado === true;
@@ -1712,7 +1556,7 @@ app.post("/pedidos/:id/solicitar-ajuste", auth, (req, res) => {
   pedido.ajuste_solicitado_em = new Date().toISOString();
 
   fs.writeFileSync(pedidoPath, JSON.stringify(pedido, null, 2), "utf8");
-  fs.writeFileSync(path.join(base, "status.txt"), "ajuste_pendente", "utf8");
+  writeOrderStatus(base, orderStatus.ORDER_STATUS.AJUSTE_PENDENTE);
   fs.writeFileSync(path.join(base, "ajuste_pendente.txt"), motivo, "utf8");
 
   return res.json({
@@ -1779,7 +1623,6 @@ app.get("/pedidos/:id/info", auth, (req, res) => {
   }
 
   const pedidoJsonPath = path.join(base, "pedido.json");
-  const statusPath = path.join(base, "status.txt");
   const resultadoFinalPath = path.join(base, "resultado_final.png");
 
   let pedido = {};
@@ -1789,9 +1632,7 @@ app.get("/pedidos/:id/info", auth, (req, res) => {
     } catch {}
   }
 
-  const status = fs.existsSync(statusPath)
-    ? fs.readFileSync(statusPath, "utf8").trim()
-    : "novo";
+  const status = readOrderStatus(base, "novo");
 
   const imagem_pronta = fs.existsSync(resultadoFinalPath);
 
@@ -1893,11 +1734,11 @@ app.post("/pedidos/:id/status", auth, (req, res) => {
 
   const { status } = req.body || {};
 
-  if (!["novo", "em_producao", "pronto", "ajuste_pendente", "erro"].includes(status)) {
+  if (!orderStatus.isValidPublicStatus(status)) {
     return res.status(400).json({ ok: false, error: "status inválido" });
   }
 
-  fs.writeFileSync(path.join(base, "status.txt"), status, "utf8");
+  writeOrderStatus(base, status);
 
   return res.json({ ok: true });
 });
@@ -1942,7 +1783,7 @@ app.post(
         fs.renameSync(previewFile.path, previewDest);
       }
 
-      fs.writeFileSync(path.join(base, "status.txt"), "pronto", "utf8");
+      writeOrderStatus(base, orderStatus.ORDER_STATUS.PRONTO);
 
       try {
         const ajustePendentePath = path.join(base, "ajuste_pendente.txt");
@@ -2100,12 +1941,9 @@ if(
 const pedidos = listPedidoBasesByWhatsapp(whatsapp).slice(0, 5);
 
     const resumoPedidos = pedidos.map((p) => {
-      const statusPath = path.join(p.base, "status.txt");
       const resultadoFinalPath = path.join(p.base, "resultado_final.png");
 
-      const status = fs.existsSync(statusPath)
-        ? fs.readFileSync(statusPath, "utf8").trim()
-        : (p.pedido.status || "novo");
+      const status = readOrderStatus(p.base, p.pedido.status || "novo");
 
       return {
         id: p.id,
@@ -2502,7 +2340,7 @@ app.post("/bot/suporte/erro-pedido", auth, (req, res) => {
 
     if (basePedido) {
       try {
-        fs.writeFileSync(path.join(basePedido, "status.txt"), "erro", "utf8");
+        writeOrderStatus(basePedido, orderStatus.ORDER_STATUS.ERRO);
 
         const pedidoPath = path.join(basePedido, "pedido.json");
         const pedidoData = safeReadJson(pedidoPath) || {};
@@ -2780,19 +2618,3 @@ setInterval(finalizarConversasSuporteInativas, 60 * 1000);
 app.listen(PORT, () => {
   console.log("API rodando na porta", PORT);
 });
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
