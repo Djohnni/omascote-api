@@ -11,7 +11,37 @@ function ensureOrderDirectory(base) {
   orderStorage.ensureDir(base);
 }
 
+function safeParseJsonObject(value, fallback = {}) {
+  if (!value) return fallback;
+
+  if (typeof value === "object" && !Array.isArray(value)) {
+    return value;
+  }
+
+  if (typeof value !== "string") return fallback;
+
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function normalizeNewOrderModel(body = {}) {
+  const schemaVersion = Number(body.schema_version || body.schemaVersion || 0);
+
+  return {
+    schema_version: Number.isFinite(schemaVersion) && schemaVersion > 0 ? schemaVersion : undefined,
+    product_id: body.product_id ? String(body.product_id) : "",
+    fields: safeParseJsonObject(body.fields_json || body.fields, {}),
+    assets: safeParseJsonObject(body.assets_json || body.assets, {})
+  };
+}
+
 function normalizeOrderBody(body = {}) {
+  const newModel = normalizeNewOrderModel(body);
+
   return {
     rodada: body.rodada,
     data: body.data,
@@ -25,7 +55,8 @@ function normalizeOrderBody(body = {}) {
     time_principal: body.time_principal,
     gols_time_principal: body.gols_time_principal,
     gols_adversario: body.gols_adversario,
-    time_adversario: body.time_adversario
+    time_adversario: body.time_adversario,
+    new_model: newModel
   };
 }
 
@@ -110,10 +141,11 @@ function buildPedidoData({
     time_principal,
     gols_time_principal,
     gols_adversario,
-    time_adversario
+    time_adversario,
+    new_model
   } = fields;
 
-  return {
+  const pedido = {
     time_principal: ["resultado", "proximo_jogo", "proximo_jogo_jogador", "resultado_jogo_jogador"].includes(categoria) ? (time_principal || "") : "",
     gols_time_principal: ["resultado", "resultado_jogo_jogador"].includes(categoria) ? (Number(gols_time_principal) || 0) : 0,
     gols_adversario: ["resultado", "resultado_jogo_jogador"].includes(categoria) ? (Number(gols_adversario) || 0) : 0,
@@ -144,6 +176,36 @@ function buildPedidoData({
     motivo_ajuste: "",
     criado_em: new Date().toISOString()
   };
+
+  const cleanModel = new_model || {};
+
+  if (cleanModel.schema_version || cleanModel.product_id || Object.keys(cleanModel.fields || {}).length || Object.keys(cleanModel.assets || {}).length) {
+    pedido.schema_version = cleanModel.schema_version || 1;
+    pedido.product_id = cleanModel.product_id || categoria;
+    pedido.fields = cleanModel.fields || {};
+    pedido.assets = cleanModel.assets || {};
+    pedido.legacy = {
+      time_principal: pedido.time_principal,
+      gols_time_principal: pedido.gols_time_principal,
+      gols_adversario: pedido.gols_adversario,
+      time_adversario: pedido.time_adversario,
+      artilheiros: pedido.artilheiros,
+      jogadores: pedido.jogadores,
+      jogadores_texto: pedido.jogadores_texto,
+      escudo_principal: pedido.escudo_principal,
+      escudo_adversario: pedido.escudo_adversario,
+      foto_jogo: pedido.foto_jogo,
+      categoria: pedido.categoria,
+      rodada: pedido.rodada,
+      data: pedido.data,
+      hora: pedido.hora,
+      arena: pedido.arena,
+      mascote_tipo: pedido.mascote_tipo,
+      patrocinadores_qtd: pedido.patrocinadores_qtd
+    };
+  }
+
+  return pedido;
 }
 
 function persistNewOrder({ base, pedido }) {
@@ -189,6 +251,8 @@ module.exports = {
   orderStatus,
   buildOrderBasePath,
   ensureOrderDirectory,
+  safeParseJsonObject,
+  normalizeNewOrderModel,
   normalizeOrderBody,
   hasRequiredOrderFields,
   getUploadPermissions,
