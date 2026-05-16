@@ -1476,6 +1476,70 @@ app.get("/meus-pedidos", auth, (req, res) => {
   return res.json({ ok: true, pedidos });
 });
 
+app.post("/pedidos/:id/pagar-com-saldo", auth, (req, res) => {
+  const whatsapp = req.user.whatsapp;
+  const base = getPedidoBase(whatsapp, req.params.id);
+
+  if (!base) {
+    return res.status(404).json({ ok: false, error: "Pedido nao encontrado" });
+  }
+
+  const pedidoPath = path.join(base, "pedido.json");
+  const pedido = safeReadJson(pedidoPath) || {};
+
+  if (pedido.pagamento_pendente !== true) {
+    return res.json({
+      ok: true,
+      mensagem: "Pedido ja liberado.",
+      pagamento_pendente: false
+    });
+  }
+
+  const valorPendente = Number(pedido.valor_pendente || 0);
+
+  if (!valorPendente || valorPendente <= 0) {
+    return res.status(400).json({ ok: false, error: "Valor pendente invalido." });
+  }
+
+  const clientes = readClientes();
+  const c = clientes[whatsapp];
+
+  if (!c) {
+    return res.status(404).json({ ok: false, error: "Cliente nao encontrado" });
+  }
+
+  const mesAtual = nowYYYYMM();
+  billingService.ensureCurrentBillingCycle(c, mesAtual);
+
+  if (!billingService.hasEnoughBalance(c, valorPendente)) {
+    clientes[whatsapp] = c;
+    writeClientes(clientes);
+    return res.status(403).json({
+      ok: false,
+      error: "Saldo insuficiente para desbloquear esta imagem."
+    });
+  }
+
+  billingService.applyOrderCharge(c, {
+    custoPedido: valorPendente,
+    mesAtual,
+    temBrindeMascote: false
+  });
+
+  pedido.pagamento_pendente = false;
+  pedido.pagamento_metodo = "saldo_ia4tube";
+  pedido.pagamento_confirmado_em = new Date().toISOString();
+
+  clientes[whatsapp] = c;
+  writeClientes(clientes);
+  fs.writeFileSync(pedidoPath, JSON.stringify(pedido, null, 2), "utf8");
+
+  return res.json({
+    ok: true,
+    pagamento_pendente: false
+  });
+});
+
 app.post("/pedidos/:id/aprovar", auth, (req, res) => {
   const whatsapp = req.user.whatsapp;
   const base = getPedidoBase(whatsapp, req.params.id);
