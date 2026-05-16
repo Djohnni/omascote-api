@@ -1097,6 +1097,7 @@ app.post("/comprar-creditos", auth, async (req, res) => {
       }],
       external_reference: `${whatsapp}|${pacote}|${Date.now()}`,
       metadata: {
+        tipo: "saldo",
         whatsapp,
         pacote,
         credito: Number(p.credito)
@@ -1175,6 +1176,87 @@ app.post("/webhook/mercadopago", async (req, res) => {
     }
 
     const external = String(pagamento.external_reference || "");
+    const tipo = pagamento.metadata?.tipo || "";
+
+    if (tipo === "pedido_pix") {
+      const whatsapp = pagamento.metadata?.whatsapp || external.split("|")[1];
+      const pedidoId = pagamento.metadata?.pedido_id || external.split("|")[2];
+
+      if (!whatsapp || !pedidoId) {
+        processados = readMpProcessados();
+        processados[paymentId] = {
+          tipo: "pedido_pix",
+          status: "erro_sem_pedido",
+          criado_em: new Date().toISOString()
+        };
+        writeMpProcessados(processados);
+        return res.json({ ok: true });
+      }
+
+      const base = getPedidoBase(whatsapp, pedidoId);
+
+      if (!base) {
+        processados = readMpProcessados();
+        processados[paymentId] = {
+          tipo: "pedido_pix",
+          whatsapp,
+          pedido_id: pedidoId,
+          status: "pedido_nao_encontrado",
+          criado_em: new Date().toISOString()
+        };
+        writeMpProcessados(processados);
+        return res.json({ ok: true });
+      }
+
+      const pedidoPath = path.join(base, "pedido.json");
+      const pedido = safeReadJson(pedidoPath) || {};
+
+      if (pedido.pagamento_pendente !== true) {
+        processados = readMpProcessados();
+        processados[paymentId] = {
+          tipo: "pedido_pix",
+          whatsapp,
+          pedido_id: pedidoId,
+          status: "ja_liberado",
+          criado_em: new Date().toISOString()
+        };
+        writeMpProcessados(processados);
+        return res.json({ ok: true });
+      }
+
+      if (String(pedido.mp_payment_id || "") !== String(paymentId)) {
+        processados = readMpProcessados();
+        processados[paymentId] = {
+          tipo: "pedido_pix",
+          whatsapp,
+          pedido_id: pedidoId,
+          status: "payment_id_divergente",
+          criado_em: new Date().toISOString()
+        };
+        writeMpProcessados(processados);
+        return res.json({ ok: true });
+      }
+
+      pedido.pagamento_pendente = false;
+      pedido.pagamento_metodo = "pix";
+      pedido.pagamento_confirmado_em = new Date().toISOString();
+      pedido.mp_payment_status = "approved";
+
+      fs.writeFileSync(pedidoPath, JSON.stringify(pedido, null, 2), "utf8");
+
+      processados = readMpProcessados();
+      processados[paymentId] = {
+        tipo: "pedido_pix",
+        whatsapp,
+        pedido_id: pedidoId,
+        status: pagamento.status,
+        criado_em: new Date().toISOString()
+      };
+      writeMpProcessados(processados);
+
+      return res.json({ ok: true });
+    }
+
     const whatsapp = pagamento.metadata?.whatsapp || external.split("|")[0];
     const credito = Number(pagamento.metadata?.credito || 0);
 
@@ -1537,6 +1619,135 @@ app.post("/pedidos/:id/pagar-com-saldo", auth, (req, res) => {
   return res.json({
     ok: true,
     pagamento_pendente: false
+  });
+});
+
+app.post("/pedidos/:id/gerar-pix", auth, async (req, res) => {
+  try {
+    if (!MP_ACCESS_TOKEN) {
+      return res.status(500).json({ ok: false, error: "MP_ACCESS_TOKEN nao configurado" });
+    }
+
+    const whatsapp = req.user.whatsapp;
+    const id = req.params.id;
+    const base = getPedidoBase(whatsapp, id);
+
+    if (!base) {
+      return res.status(404).json({ ok: false, error: "Pedido nao encontrado" });
+    }
+
+    const pedidoPath = path.join(base, "pedido.json");
+    const pedido = safeReadJson(pedidoPath) || {};
+
+    if (pedido.pagamento_pendente !== true) {
+      return res.status(400).json({ ok: false, error: "Pedido ja liberado." });
+    }
+
+    const valorPendente = Number(pedido.valor_pendente || 0);
+
+    if (!valorPendente || valorPendente <= 0) {
+      return res.status(400).json({ ok: false, error: "Valor pendente invalido." });
+    }
+
+    if (
+      pedido.mp_payment_id &&
+      pedido.pix_copia_cola &&
+      String(pedido.mp_payment_status || "").toLowerCase() === "pending"
+    ) {
+      return res.json({
+        ok: true,
+        pix_copia_cola: pedido.pix_copia_cola,
+        qr_code_base64: pedido.pix_qr_code_base64 || "",
+        ticket_url: pedido.pix_ticket_url || "",
+        payment_id: pedido.mp_payment_id
+      });
+    }
+
+    const payerEmail = `${String(whatsapp).replace(/\D/g, "") || "cliente"}@ia4tube.com.br`;
+    const paymentPayload = {
+      transaction_amount: Number(valorPendente.toFixed(2)),
+      description: `IA4Tube - Desbloqueio pedido ${id}`,
+      payment_method_id: "pix",
+      payer: {
+        email: payerEmail
+      },
+      external_reference: `pedido_pix|${whatsapp}|${id}|${Date.now()}`,
+      metadata: {
+        tipo: "pedido_pix",
+        whatsapp,
+        pedido_id: id,
+        valor_pendente: Number(valorPendente.toFixed(2))
+      },
+      notification_url: "https://api.omascote.com.br/webhook/mercadopago"
+    };
+
+    const r = await fetch("https://api.mercadopago.com/v1/payments", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${MP_ACCESS_TOKEN}`,
+        "Content-Type": "application/json",
+        "X-Idempotency-Key": `pedido_pix_${id}_${Date.now()}`
+      },
+      body: JSON.stringify(paymentPayload)
+    });
+
+    const data = await r.json();
+
+    if (!r.ok) {
+      return res.status(500).json({ ok: false, error: "Erro ao gerar Pix", detalhe: data });
+    }
+
+    const transactionData = data.point_of_interaction?.transaction_data || {};
+    const pixCopiaCola = transactionData.qr_code || "";
+    const qrCodeBase64 = transactionData.qr_code_base64 || "";
+    const ticketUrl = transactionData.ticket_url || "";
+
+    if (!pixCopiaCola) {
+      return res.status(500).json({ ok: false, error: "Mercado Pago nao retornou codigo Pix", detalhe: data });
+    }
+
+    pedido.pagamento_metodo_pendente = "pix";
+    pedido.mp_payment_id = String(data.id || "");
+    pedido.mp_payment_status = data.status || "pending";
+    pedido.pix_copia_cola = pixCopiaCola;
+    pedido.pix_qr_code_base64 = qrCodeBase64;
+    pedido.pix_ticket_url = ticketUrl;
+    pedido.pix_gerado_em = new Date().toISOString();
+
+    fs.writeFileSync(pedidoPath, JSON.stringify(pedido, null, 2), "utf8");
+
+    return res.json({
+      ok: true,
+      pix_copia_cola: pixCopiaCola,
+      qr_code_base64: qrCodeBase64,
+      ticket_url: ticketUrl,
+      payment_id: pedido.mp_payment_id
+    });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: "Erro interno ao gerar Pix" });
+  }
+});
+
+app.get("/pedidos/:id/pagamento-info", auth, (req, res) => {
+  const whatsapp = req.user.whatsapp;
+  const base = getPedidoBase(whatsapp, req.params.id);
+
+  if (!base) {
+    return res.status(404).json({ ok: false, error: "Pedido nao encontrado" });
+  }
+
+  const pedidoPath = path.join(base, "pedido.json");
+  const pedido = safeReadJson(pedidoPath) || {};
+
+  return res.json({
+    ok: true,
+    pagamento_pendente: pedido.pagamento_pendente === true,
+    valor_pendente: Number(pedido.valor_pendente || 0),
+    mp_payment_status: pedido.mp_payment_status || "",
+    pix_copia_cola: pedido.pix_copia_cola || "",
+    qr_code_base64: pedido.pix_qr_code_base64 || "",
+    ticket_url: pedido.pix_ticket_url || "",
+    payment_id: pedido.mp_payment_id || ""
   });
 });
 
