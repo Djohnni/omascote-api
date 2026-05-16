@@ -1235,14 +1235,7 @@ function criarPedidoHandler(categoria) {
 
     const custoPedido = getCustoPedido(categoria, c);
 
-    if (!billingService.hasEnoughBalance(c, custoPedido)) {
-      clientes[whatsapp] = c;
-      writeClientes(clientes);
-      return res.status(403).json({
-        ok: false,
-        error: billingService.formatInsufficientBalanceMessage(custoPedido)
-      });
-    }
+    const temSaldoSuficiente = billingService.hasEnoughBalance(c, custoPedido);
 
     const fields = orderService.normalizeOrderBody(req.body);
 
@@ -1265,7 +1258,14 @@ function criarPedidoHandler(categoria) {
 
     const id = draft.id;
 
-    billingService.applyOrderCharge(c, { custoPedido, mesAtual, temBrindeMascote });
+    if (temSaldoSuficiente) {
+      billingService.applyOrderCharge(c, { custoPedido, mesAtual, temBrindeMascote });
+    } else {
+      draft.pedido.pagamento_pendente = true;
+      draft.pedido.valor_pendente = custoPedido;
+      draft.pedido.motivo_pagamento_pendente = "saldo_insuficiente";
+      orderService.orderStorage.writeOrder(draft.base, draft.pedido);
+    }
 
     clientes[whatsapp] = c;
     writeClientes(clientes);
@@ -1449,6 +1449,7 @@ app.get("/meus-pedidos", auth, (req, res) => {
     const status = readOrderStatus(item.base, item.pedido.status || "novo");
     const imagemPronta = fs.existsSync(resultadoFinalPath);
     const aprovadoCliente = item.pedido.aprovado_cliente === true;
+    const pagamentoPendente = item.pedido.pagamento_pendente === true;
     const ajusteUsado = item.pedido.ajuste_automatico_usado === true;
 
     return {
@@ -1463,9 +1464,11 @@ app.get("/meus-pedidos", auth, (req, res) => {
       imagem_pronta: imagemPronta,
       descricao_instagram: item.pedido.descricao_instagram || "",
       aprovado_cliente: aprovadoCliente,
+      pagamento_pendente: pagamentoPendente,
+      valor_pendente: Number(item.pedido.valor_pendente || 0),
       ajuste_automatico_usado: ajusteUsado,
       motivo_ajuste: item.pedido.motivo_ajuste || "",
-      pode_baixar: imagemPronta && aprovadoCliente,
+      pode_baixar: imagemPronta && aprovadoCliente && !pagamentoPendente,
       pode_pedir_ajuste: imagemPronta && !aprovadoCliente && !ajusteUsado && status === "pronto"
     };
   });
@@ -1577,6 +1580,13 @@ app.get("/pedidos/:id/download-resultado", auth, (req, res) => {
   const pedidoPath = path.join(base, "pedido.json");
   const pedido = safeReadJson(pedidoPath) || {};
 
+  if (pedido.pagamento_pendente === true) {
+    return res.status(403).json({
+      ok: false,
+      error: "Pagamento pendente. Desbloqueie esta imagem para baixar em alta qualidade."
+    });
+  }
+
   if (pedido.aprovado_cliente !== true) {
     return res.status(403).json({
       ok: false,
@@ -1646,9 +1656,11 @@ app.get("/pedidos/:id/info", auth, (req, res) => {
       ? `${req.protocol}://${req.get("host")}/pedidos/${req.params.id}/preview`
       : null,
     aprovado_cliente: pedido.aprovado_cliente === true,
+    pagamento_pendente: pedido.pagamento_pendente === true,
+    valor_pendente: Number(pedido.valor_pendente || 0),
     ajuste_automatico_usado: pedido.ajuste_automatico_usado === true,
     motivo_ajuste: pedido.motivo_ajuste || "",
-    pode_baixar: imagem_pronta && pedido.aprovado_cliente === true,
+    pode_baixar: imagem_pronta && pedido.aprovado_cliente === true && pedido.pagamento_pendente !== true,
     pode_pedir_ajuste: imagem_pronta && pedido.aprovado_cliente !== true && pedido.ajuste_automatico_usado !== true && status === "pronto"
   });
 });
