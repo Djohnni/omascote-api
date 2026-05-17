@@ -1244,6 +1244,26 @@ app.post("/webhook/mercadopago", async (req, res) => {
       pedido.pagamento_confirmado_em = new Date().toISOString();
       pedido.mp_payment_status = "approved";
 
+      const valorBonusPedido = Number(
+        pedido.valor_pendente ||
+        pagamento.metadata?.valor_pendente ||
+        pagamento.transaction_amount ||
+        0
+      );
+
+      if (valorBonusPedido > 0) {
+        const clientes = readClientes();
+        const c = clientes[whatsapp];
+
+        if (c) {
+          c.saldo_extra = Number(c.saldo_extra || 0) + valorBonusPedido;
+          clientes[whatsapp] = c;
+          writeClientes(clientes);
+          pedido.bonus_saldo_extra = valorBonusPedido;
+          pedido.bonus_saldo_extra_em = new Date().toISOString();
+        }
+      }
+
       fs.writeFileSync(pedidoPath, JSON.stringify(pedido, null, 2), "utf8");
 
       processados = readMpProcessados();
