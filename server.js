@@ -157,6 +157,13 @@ function getCustoPedido(categoria, cliente) {
   return 0;
 }
 
+function isPedidoBoasVindas(c, categoria) {
+  return c &&
+    c.cadastro_automatico === true &&
+    c.conta_finalizada !== true &&
+    Number(c.usados_no_ciclo || 0) === 0;
+}
+
 
 function nomeCategoriaPedido(categoria) {
   const registryName = productsRegistry.getProductName(categoria);
@@ -759,7 +766,7 @@ app.post("/auth/google", async (req, res) => {
         foto_google: google.picture || "",
         plano: 0,
         saldo_mensal: 0,
-        saldo_extra: 6,
+        saldo_extra: 0,
         usados_no_ciclo: 0,
         ciclo_mes: nowYYYYMM(),
         ativo: true
@@ -825,7 +832,7 @@ app.post("/auth/auto-register", (req, res) => {
       device_id: String(body.device_id || ""),
       plano: 0,
       saldo_mensal: 0,
-      saldo_extra: 6,
+      saldo_extra: 0,
       usados_no_ciclo: 0,
       ciclo_mes: nowYYYYMM(),
       ativo: true,
@@ -888,7 +895,7 @@ app.post("/auth/register", (req, res) => {
     senha_hash,
     plano: 0,
     saldo_mensal: 0,
-    saldo_extra: 6,
+    saldo_extra: 0,
     usados_no_ciclo: 0,
     ciclo_mes: nowYYYYMM(),
     ativo: true
@@ -1244,6 +1251,16 @@ app.post("/webhook/mercadopago", async (req, res) => {
 
       fs.writeFileSync(pedidoPath, JSON.stringify(pedido, null, 2), "utf8");
 
+      if (pedido.oferta_boas_vindas === true) {
+        const clientes = readClientes();
+        const c = clientes[whatsapp];
+        if (c) {
+          c.usados_no_ciclo = Math.max(1, Number(c.usados_no_ciclo || 0));
+          clientes[whatsapp] = c;
+          writeClientes(clientes);
+        }
+      }
+
       processados = readMpProcessados();
       processados[paymentId] = {
         tipo: "pedido_pix",
@@ -1316,8 +1333,10 @@ function criarPedidoHandler(categoria) {
     const temBrindeMascote = billingService.hasMascoteUniformeGift(categoria, c);
 
     const custoPedido = getCustoPedido(categoria, c);
+    const pedidoBoasVindas = isPedidoBoasVindas(c, categoria);
+    const custoEfetivoPedido = pedidoBoasVindas ? 1 : custoPedido;
 
-    const temSaldoSuficiente = billingService.hasEnoughBalance(c, custoPedido);
+    const temSaldoSuficiente = !pedidoBoasVindas && billingService.hasEnoughBalance(c, custoEfetivoPedido);
 
     const fields = orderService.normalizeOrderBody(req.body);
 
@@ -1340,11 +1359,17 @@ function criarPedidoHandler(categoria) {
 
     const id = draft.id;
 
-    if (temSaldoSuficiente) {
-      billingService.applyOrderCharge(c, { custoPedido, mesAtual, temBrindeMascote });
+    if (pedidoBoasVindas) {
+      draft.pedido.pagamento_pendente = true;
+      draft.pedido.valor_pendente = 1;
+      draft.pedido.motivo_pagamento_pendente = "boas_vindas_1_real";
+      draft.pedido.oferta_boas_vindas = true;
+      orderService.orderStorage.writeOrder(draft.base, draft.pedido);
+    } else if (temSaldoSuficiente) {
+      billingService.applyOrderCharge(c, { custoPedido: custoEfetivoPedido, mesAtual, temBrindeMascote });
     } else {
       draft.pedido.pagamento_pendente = true;
-      draft.pedido.valor_pendente = custoPedido;
+      draft.pedido.valor_pendente = custoEfetivoPedido;
       draft.pedido.motivo_pagamento_pendente = "saldo_insuficiente";
       orderService.orderStorage.writeOrder(draft.base, draft.pedido);
     }
@@ -1548,6 +1573,8 @@ app.get("/meus-pedidos", auth, (req, res) => {
       aprovado_cliente: aprovadoCliente,
       pagamento_pendente: pagamentoPendente,
       valor_pendente: Number(item.pedido.valor_pendente || 0),
+      motivo_pagamento_pendente: item.pedido.motivo_pagamento_pendente || "",
+      oferta_boas_vindas: item.pedido.oferta_boas_vindas === true,
       ajuste_automatico_usado: ajusteUsado,
       motivo_ajuste: item.pedido.motivo_ajuste || "",
       pode_baixar: imagemPronta && aprovadoCliente && !pagamentoPendente,
@@ -1611,6 +1638,10 @@ app.post("/pedidos/:id/pagar-com-saldo", auth, (req, res) => {
   pedido.pagamento_pendente = false;
   pedido.pagamento_metodo = "saldo_ia4tube";
   pedido.pagamento_confirmado_em = new Date().toISOString();
+
+  if (pedido.oferta_boas_vindas === true) {
+    c.usados_no_ciclo = Math.max(1, Number(c.usados_no_ciclo || 0));
+  }
 
   clientes[whatsapp] = c;
   writeClientes(clientes);
@@ -1871,8 +1902,12 @@ app.get("/pedidos/:id/download-resultado", auth, (req, res) => {
 
   const clientes = readClientes();
   const cliente = clientes[whatsapp];
+  const downloadBoasVindasLiberado =
+    pedido.oferta_boas_vindas === true &&
+    pedido.pagamento_pendente !== true &&
+    pedido.aprovado_cliente === true;
 
-  if (cliente?.cadastro_automatico === true && cliente?.conta_finalizada !== true) {
+  if (cliente?.cadastro_automatico === true && cliente?.conta_finalizada !== true && !downloadBoasVindasLiberado) {
     return res.status(403).json({
       ok: false,
       error: "Crie seu login e senha para liberar o download."
@@ -1933,6 +1968,8 @@ app.get("/pedidos/:id/info", auth, (req, res) => {
     aprovado_cliente: pedido.aprovado_cliente === true,
     pagamento_pendente: pedido.pagamento_pendente === true,
     valor_pendente: Number(pedido.valor_pendente || 0),
+    motivo_pagamento_pendente: pedido.motivo_pagamento_pendente || "",
+    oferta_boas_vindas: pedido.oferta_boas_vindas === true,
     ajuste_automatico_usado: pedido.ajuste_automatico_usado === true,
     motivo_ajuste: pedido.motivo_ajuste || "",
     pode_baixar: imagem_pronta && pedido.aprovado_cliente === true && pedido.pagamento_pendente !== true,
