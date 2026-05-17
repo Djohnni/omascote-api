@@ -1139,6 +1139,79 @@ app.post("/comprar-creditos", auth, async (req, res) => {
   }
 });
 
+app.post("/comprar-creditos-pix", auth, async (req, res) => {
+  try {
+    if (!MP_ACCESS_TOKEN) {
+      return res.status(500).json({ ok: false, error: "MP_ACCESS_TOKEN nÃ£o configurado" });
+    }
+
+    const { pacote } = req.body || {};
+    const whatsapp = req.user.whatsapp;
+
+    const pacotes = {
+      saldo_800: { titulo: "Saldo IA4Tube - R$8", valor_pago: 8.00, credito: 8.00 },
+      saldo_1800: { titulo: "Saldo IA4Tube - R$18", valor_pago: 18.00, credito: 18.00 },
+      saldo_2800: { titulo: "Saldo IA4Tube - R$28", valor_pago: 28.00, credito: 28.00 },
+      saldo_4800: { titulo: "Saldo IA4Tube - R$48", valor_pago: 48.00, credito: 48.00 }
+    };
+
+    const p = pacotes[pacote];
+
+    if (!p) {
+      return res.status(400).json({ ok: false, error: "Pacote invÃ¡lido" });
+    }
+
+    const payerEmail = `${String(whatsapp).replace(/\D/g, "") || "cliente"}@ia4tube.com.br`;
+    const paymentPayload = {
+      transaction_amount: Number(Number(p.valor_pago).toFixed(2)),
+      description: p.titulo,
+      payment_method_id: "pix",
+      payer: {
+        email: payerEmail
+      },
+      external_reference: `saldo_pix|${whatsapp}|${pacote}|${Date.now()}`,
+      metadata: {
+        tipo: "saldo",
+        whatsapp,
+        pacote,
+        credito: Number(p.credito)
+      },
+      notification_url: "https://api.omascote.com.br/webhook/mercadopago"
+    };
+
+    const r = await fetch("https://api.mercadopago.com/v1/payments", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${MP_ACCESS_TOKEN}`,
+        "Content-Type": "application/json",
+        "X-Idempotency-Key": `saldo_pix_${whatsapp}_${pacote}_${Date.now()}`
+      },
+      body: JSON.stringify(paymentPayload)
+    });
+
+    const data = await r.json();
+
+    if (!r.ok) {
+      return res.status(500).json({ ok: false, error: "Erro ao gerar Pix", detalhe: data });
+    }
+
+    const transactionData = data.point_of_interaction?.transaction_data || {};
+
+    return res.json({
+      ok: true,
+      pix_copia_cola: transactionData.qr_code || "",
+      qr_code_base64: transactionData.qr_code_base64 || "",
+      ticket_url: transactionData.ticket_url || "",
+      payment_id: data.id,
+      valor_pago: Number(p.valor_pago),
+      credito: Number(p.credito)
+    });
+
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: "Erro interno ao gerar Pix" });
+  }
+});
+
 app.post("/webhook/mercadopago", async (req, res) => {
   try {
     const body = req.body || {};
