@@ -1396,7 +1396,7 @@ app.post("/webhook/mercadopago", async (req, res) => {
 
 // ===== CRIA PEDIDO =====
 function criarPedidoHandler(categoria) {
-  return async (req, res) => {
+  return (req, res) => {
     const whatsapp = req.user.whatsapp;
     const clientes = readClientes();
     const c = clientes[whatsapp];
@@ -1425,14 +1425,30 @@ function criarPedidoHandler(categoria) {
     }
 
     const files = req.files || {};
-    const draft = await orderService.createOrderDraft({
-      categoria,
-      pedidosDir: PEDIDOS_DIR,
-      whatsapp,
-      mesAtual,
-      fields,
-      files
-    });
+    let draft;
+
+    try {
+      draft = orderService.createOrderDraft({
+        categoria,
+        pedidosDir: PEDIDOS_DIR,
+        whatsapp,
+        mesAtual,
+        fields,
+        files
+      });
+    } catch (e) {
+      console.error("[pedido] erro ao criar pedido", {
+        categoria,
+        whatsapp,
+        erro: e.message,
+        code: e.code
+      });
+
+      return res.status(400).json({
+        ok: false,
+        error: e.message || "Erro ao salvar arquivos do pedido"
+      });
+    }
 
     const id = draft.id;
 
@@ -1462,14 +1478,11 @@ app.post(
     { name: "escudo1", maxCount: 1 },
     { name: "escudo2", maxCount: 1 },
     { name: "mascote", maxCount: 1 },
-    { name: "patrocinadores", maxCount: 20 },
-    { name: "logo", maxCount: 1 },
-    { name: "fotos", maxCount: 20 },
-    { name: "referencias", maxCount: 20 }
+    { name: "patrocinadores", maxCount: 20 }
   ]),
   (req, res) => {
     const flyer_tipo = (req.body?.flyer_tipo || "").toLowerCase();
-    const productFromRegistry = productsRegistry.resolveProductFromRequestBody(req.body);
+    const productFromRegistry = productsRegistry.getProductByFlyerTipo(flyer_tipo);
 
     if (productFromRegistry) return criarPedidoHandler(productFromRegistry.id)(req, res);
 
@@ -1494,10 +1507,7 @@ app.post(
     { name: "escudo1", maxCount: 1 },
     { name: "escudo2", maxCount: 1 },
     { name: "mascote", maxCount: 1 },
-    { name: "patrocinadores", maxCount: 20 },
-    { name: "logo", maxCount: 1 },
-    { name: "fotos", maxCount: 20 },
-    { name: "referencias", maxCount: 20 }
+    { name: "patrocinadores", maxCount: 20 }
   ]),
   criarPedidoHandler("mascote")
 );
@@ -1509,10 +1519,7 @@ app.post(
     { name: "escudo1", maxCount: 1 },
     { name: "escudo2", maxCount: 1 },
     { name: "mascote", maxCount: 1 },
-    { name: "patrocinadores", maxCount: 20 },
-    { name: "logo", maxCount: 1 },
-    { name: "fotos", maxCount: 20 },
-    { name: "referencias", maxCount: 20 }
+    { name: "patrocinadores", maxCount: 20 }
   ]),
   criarPedidoHandler("resultado")
 );
