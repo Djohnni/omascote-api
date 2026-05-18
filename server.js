@@ -34,8 +34,11 @@ const TEMPO_ESTIMADO_FILE = path.join(DATA_DIR, "tempo_estimado.json");
 const ONLINE_FILE = path.join(DATA_DIR, "usuarios_online.json");
 const SUPORTE_ABERTAS_FILE = path.join(DATA_DIR, "suporte_conversas_abertas.json");
 const SUPORTE_FINALIZADAS_FILE = path.join(DATA_DIR, "suporte_conversas_finalizadas.json");
+const PREVIEW_LIMITER_FILE = path.join(DATA_DIR, "preview_limiter.json");
 const ANALYTICS_DIR = path.join(DATA_DIR, "analytics");
 const EVENTOS_CLIENTES_FILE = path.join(DATA_DIR, "eventos_clientes.json");
+const PREVIEW_LIMITER_MAX = 3;
+const PREVIEW_LIMITER_TTL_MS = 6 * 60 * 60 * 1000;
 
 const CLIENTES_TESTE = [
   "Los Hermanos",
@@ -99,6 +102,10 @@ if (!fs.existsSync(EVENTOS_CLIENTES_FILE)) {
   fs.writeFileSync(EVENTOS_CLIENTES_FILE, JSON.stringify([], null, 2), "utf8");
 }
 
+if (!fs.existsSync(PREVIEW_LIMITER_FILE)) {
+  fs.writeFileSync(PREVIEW_LIMITER_FILE, JSON.stringify([], null, 2), "utf8");
+}
+
 // ===== HELPERS =====
 function readClientes() {
   return JSON.parse(fs.readFileSync(CLIENTES_FILE, "utf8") || "{}");
@@ -114,6 +121,19 @@ function readMpProcessados() {
 
 function writeMpProcessados(obj) {
   fs.writeFileSync(MP_PROCESSADOS_FILE, JSON.stringify(obj, null, 2), "utf8");
+}
+
+function readPreviewLimiter() {
+  try {
+    const data = JSON.parse(fs.readFileSync(PREVIEW_LIMITER_FILE, "utf8") || "[]");
+    return Array.isArray(data) ? data : [];
+  } catch {
+    return [];
+  }
+}
+
+function writePreviewLimiter(lista) {
+  fs.writeFileSync(PREVIEW_LIMITER_FILE, JSON.stringify(lista || [], null, 2), "utf8");
 }
 
 function readTempoEstimado() {
@@ -236,6 +256,117 @@ function listPedidoBasesByWhatsapp(whatsapp) {
 
 function removeOldPedidos(whatsapp, maxKeep = 15) {
   return orderStorage.removeOldPedidos(PEDIDOS_DIR, whatsapp, maxKeep);
+}
+
+function getPreviewLimiterIp(req) {
+  const forwarded = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
+  return forwarded || req.ip || req.socket?.remoteAddress || "";
+}
+
+function getPreviewLimiterIdentifiers(req, cliente, whatsapp) {
+  const clienteId = cliente?.cliente_id || cliente?.id || "";
+  const deviceId = cliente?.device_id || req.body?.device_id || req.headers["x-device-id"] || req.headers["x-session-id"] || "";
+  const ip = getPreviewLimiterIp(req);
+  const identifiers = [];
+
+  if (clienteId) identifiers.push(`cliente:${clienteId}`);
+  if (whatsapp) identifiers.push(`whatsapp:${whatsapp}`);
+  if (deviceId) identifiers.push(`device:${deviceId}`);
+  if (!identifiers.length) identifiers.push(`ip:${ip || "desconhecido"}`);
+
+  return identifiers;
+}
+
+function isPedidoSemPagamentoConfirmado(pedido) {
+  if (!pedido) return false;
+  if (pedido.pagamento_pendente === true) return true;
+
+  return (
+    Number(pedido.valor_pendente || 0) > 0 &&
+    pedido.pagamento_pendente !== false &&
+    !pedido.pagamento_confirmado_em
+  );
+}
+
+function previewLimiterEntryStillCounts(entry) {
+  if (!entry?.whatsapp || !entry?.pedido_id) return true;
+
+  const base = getPedidoBase(entry.whatsapp, entry.pedido_id);
+  if (!base) return false;
+
+  try {
+    const pedido = readPedido(base);
+    return isPedidoSemPagamentoConfirmado(pedido);
+  } catch {
+    return false;
+  }
+}
+
+function getPreviewLimiterState(identifiers) {
+  const agora = Date.now();
+  const lista = readPreviewLimiter();
+  const ativos = [];
+  const wanted = new Set(Array.isArray(identifiers) ? identifiers : [identifiers].filter(Boolean));
+  const totals = {};
+
+  for (const entry of lista) {
+    const criadoEm = Number(entry.criado_em || 0);
+    if (!criadoEm || (agora - criadoEm) > PREVIEW_LIMITER_TTL_MS) continue;
+    if (!previewLimiterEntryStillCounts(entry)) continue;
+
+    ativos.push(entry);
+
+    const entryIdentifiers = Array.isArray(entry.identificadores)
+      ? entry.identificadores
+      : [entry.identificador].filter(Boolean);
+
+    entryIdentifiers.forEach(identifier => {
+      if (!wanted.has(identifier)) return;
+      totals[identifier] = (totals[identifier] || 0) + 1;
+    });
+  }
+
+  if (ativos.length !== lista.length) {
+    writePreviewLimiter(ativos);
+  }
+
+  let total = 0;
+  let identificador = Array.from(wanted)[0] || "desconhecido";
+
+  Object.entries(totals).forEach(([key, value]) => {
+    if (value > total) {
+      total = value;
+      identificador = key;
+    }
+  });
+
+  return { total, identificador };
+}
+
+function registrarPreviewPendente({ identifiers, whatsapp, pedidoId }) {
+  if (!pedidoId) return;
+
+  const listaIdentificadores = Array.isArray(identifiers)
+    ? identifiers.filter(Boolean)
+    : [identifiers].filter(Boolean);
+
+  if (!listaIdentificadores.length) return;
+
+  const agora = Date.now();
+  const lista = readPreviewLimiter().filter(entry => {
+    const criadoEm = Number(entry.criado_em || 0);
+    return criadoEm && (agora - criadoEm) <= PREVIEW_LIMITER_TTL_MS;
+  });
+
+  lista.push({
+    identificador: listaIdentificadores[0],
+    identificadores: listaIdentificadores,
+    whatsapp,
+    pedido_id: pedidoId,
+    criado_em: agora
+  });
+
+  writePreviewLimiter(lista);
 }
 
 function readPedido(base) {
@@ -1416,6 +1547,18 @@ function criarPedidoHandler(categoria) {
     const temSaldoSuficiente = billingService.hasEnoughBalance(c, custoEfetivoPedido);
 
     const fields = orderService.normalizeOrderBody(req.body);
+    const previewLimiterIdentifiers = getPreviewLimiterIdentifiers(req, c, whatsapp);
+    const previewLimiterState = getPreviewLimiterState(previewLimiterIdentifiers);
+
+    if (!temSaldoSuficiente && previewLimiterState.total >= PREVIEW_LIMITER_MAX) {
+      console.warn(`[PREVIEW_LIMIT] bloqueado identificador=${previewLimiterState.identificador} total=${previewLimiterState.total} motivo=3_previews_sem_pagamento`);
+
+      return res.status(429).json({
+        ok: false,
+        erro: "limite_preview",
+        mensagem: "Detectamos várias prévias geradas em sequência. Aguarde um pouco para criar novas artes."
+      });
+    }
 
     if (!orderService.hasRequiredOrderFields(fields)) {
       return res.status(400).json({
@@ -1459,6 +1602,7 @@ function criarPedidoHandler(categoria) {
       draft.pedido.valor_pendente = custoEfetivoPedido;
       draft.pedido.motivo_pagamento_pendente = "saldo_insuficiente";
       orderService.orderStorage.writeOrder(draft.base, draft.pedido);
+      registrarPreviewPendente({ identifiers: previewLimiterIdentifiers, whatsapp, pedidoId: id });
     }
 
     clientes[whatsapp] = c;
