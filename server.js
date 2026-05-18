@@ -1396,7 +1396,7 @@ app.post("/webhook/mercadopago", async (req, res) => {
 
 // ===== CRIA PEDIDO =====
 function criarPedidoHandler(categoria) {
-  return (req, res) => {
+  return async (req, res) => {
     const whatsapp = req.user.whatsapp;
     const clientes = readClientes();
     const c = clientes[whatsapp];
@@ -1425,7 +1425,7 @@ function criarPedidoHandler(categoria) {
     }
 
     const files = req.files || {};
-    const draft = orderService.createOrderDraft({
+    const draft = await orderService.createOrderDraft({
       categoria,
       pedidosDir: PEDIDOS_DIR,
       whatsapp,
@@ -1462,11 +1462,14 @@ app.post(
     { name: "escudo1", maxCount: 1 },
     { name: "escudo2", maxCount: 1 },
     { name: "mascote", maxCount: 1 },
-    { name: "patrocinadores", maxCount: 20 }
+    { name: "patrocinadores", maxCount: 20 },
+    { name: "logo", maxCount: 1 },
+    { name: "fotos", maxCount: 20 },
+    { name: "referencias", maxCount: 20 }
   ]),
   (req, res) => {
     const flyer_tipo = (req.body?.flyer_tipo || "").toLowerCase();
-    const productFromRegistry = productsRegistry.getProductByFlyerTipo(flyer_tipo);
+    const productFromRegistry = productsRegistry.resolveProductFromRequestBody(req.body);
 
     if (productFromRegistry) return criarPedidoHandler(productFromRegistry.id)(req, res);
 
@@ -1491,7 +1494,10 @@ app.post(
     { name: "escudo1", maxCount: 1 },
     { name: "escudo2", maxCount: 1 },
     { name: "mascote", maxCount: 1 },
-    { name: "patrocinadores", maxCount: 20 }
+    { name: "patrocinadores", maxCount: 20 },
+    { name: "logo", maxCount: 1 },
+    { name: "fotos", maxCount: 20 },
+    { name: "referencias", maxCount: 20 }
   ]),
   criarPedidoHandler("mascote")
 );
@@ -1503,7 +1509,10 @@ app.post(
     { name: "escudo1", maxCount: 1 },
     { name: "escudo2", maxCount: 1 },
     { name: "mascote", maxCount: 1 },
-    { name: "patrocinadores", maxCount: 20 }
+    { name: "patrocinadores", maxCount: 20 },
+    { name: "logo", maxCount: 1 },
+    { name: "fotos", maxCount: 20 },
+    { name: "referencias", maxCount: 20 }
   ]),
   criarPedidoHandler("resultado")
 );
