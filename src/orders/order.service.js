@@ -69,7 +69,7 @@ function getUploadPermissions(categoria) {
     podeUsarEscudo1: ["resultado", "escalacao", "contratacao", "proximo_jogo", "patrocinador", "escudo3d", "proximo_jogo_jogador", "resultado_jogo_jogador", "jogador_escudo", "mascote_uniforme"].includes(categoria),
     podeUsarEscudo2: ["resultado", "escalacao", "contratacao", "proximo_jogo", "proximo_jogo_jogador", "resultado_jogo_jogador"].includes(categoria),
     escudo2EhFotoJogador: false,
-    podeUsarMascote: ["resultado", "escalacao", "proximo_jogo_jogador", "resultado_jogo_jogador", "jogador_escudo", "mascote_uniforme"].includes(categoria),
+    podeUsarMascote: ["resultado", "escalacao", "proximo_jogo", "proximo_jogo_jogador", "resultado_jogo_jogador", "jogador_escudo", "mascote_uniforme"].includes(categoria),
     podeUsarPatrocinadores: categoria === "patrocinador"
   };
 }
