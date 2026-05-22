@@ -744,6 +744,8 @@ function auth(req, res, next) {
 }
 
 // ===== UPLOAD (multer) =====
+const MAX_UPLOAD_FILE_SIZE = 50 * 1024 * 1024;
+
 const storage = multer.diskStorage({
   destination: (req, file, cb) =>
     cb(null, path.join(DATA_DIR, "tmp_uploads")),
@@ -756,6 +758,9 @@ const storage = multer.diskStorage({
 
 const upload = multer({
   storage,
+  limits: {
+    fileSize: MAX_UPLOAD_FILE_SIZE
+  },
   fileFilter: (req, file, cb) => {
     const permitidos = [
       "image/png",
@@ -773,6 +778,35 @@ const upload = multer({
 });
 
 const uploadResultado = multer({ storage });
+
+function uploadComErroControlado(middleware) {
+  return (req, res, next) => {
+    middleware(req, res, (err) => {
+      if (!err) return next();
+
+      if (err.code === "LIMIT_FILE_SIZE") {
+        console.warn("[UPLOAD_LIMIT] arquivo_maior_50mb", {
+          field: err.field || "",
+          url: req.originalUrl || req.url || ""
+        });
+        return res.status(400).json({
+          ok: false,
+          error: "Arquivo muito grande. Envie imagens com até 50MB."
+        });
+      }
+
+      console.warn("[UPLOAD_ERROR]", {
+        field: err.field || "",
+        url: req.originalUrl || req.url || "",
+        message: err.message || String(err)
+      });
+      return res.status(400).json({
+        ok: false,
+        error: err.message || "Erro ao enviar arquivo."
+      });
+    });
+  };
+}
 
 // ===== ROTAS =====
 
@@ -1443,10 +1477,52 @@ app.post("/webhook/mercadopago", async (req, res) => {
         return res.json({ ok: true });
       }
 
+      const confirmadoEm = new Date().toISOString();
+      const documentoNumero = String(pagamento.payer?.identification?.number || "").replace(/\D/g, "");
+      const documentoFinal = documentoNumero ? documentoNumero.slice(-4) : "";
+
       pedido.pagamento_pendente = false;
       pedido.pagamento_metodo = "pix";
-      pedido.pagamento_confirmado_em = new Date().toISOString();
+      pedido.pagamento_confirmado_em = confirmadoEm;
       pedido.mp_payment_status = "approved";
+      pedido.pagamento_info = {
+        tipo: "pedido_pix",
+        status: pagamento.status || "",
+        valor_pago: Number(pagamento.transaction_amount || 0),
+        payment_id: String(paymentId),
+        whatsapp: whatsapp,
+        pedido_id: pedidoId,
+        confirmado_em: confirmadoEm,
+        pagador: {
+          email: pagamento.payer?.email || "",
+          nome: pagamento.payer?.first_name || "",
+          sobrenome: pagamento.payer?.last_name || "",
+          documento_tipo: pagamento.payer?.identification?.type || "",
+          documento_final: documentoFinal
+        }
+      };
+
+      pedido.mensagens_cliente = Array.isArray(pedido.mensagens_cliente)
+        ? pedido.mensagens_cliente
+        : [];
+
+      const jaTemMensagemPagamento = pedido.mensagens_cliente.some(msg =>
+        msg &&
+        msg.tipo === "pagamento_confirmado" &&
+        String(msg.payment_id || "") === String(paymentId)
+      );
+
+      if (!jaTemMensagemPagamento) {
+        pedido.mensagens_cliente.push({
+          id: "msg_pagamento_" + Date.now(),
+          tipo: "pagamento_confirmado",
+          titulo: "Pagamento confirmado ✅",
+          texto: "Seu pagamento foi aprovado. Sua arte já está liberada ou será liberada assim que ficar pronta.",
+          lida: false,
+          payment_id: String(paymentId),
+          criado_em: confirmadoEm
+        });
+      }
 
       const valorBonusPedido = Number(
         pedido.valor_pendente ||
@@ -1618,12 +1694,12 @@ function criarPedidoHandler(categoria) {
 app.post(
   "/pedidos",
   auth,
-  upload.fields([
+  uploadComErroControlado(upload.fields([
     { name: "escudo1", maxCount: 1 },
     { name: "escudo2", maxCount: 1 },
     { name: "mascote", maxCount: 1 },
     { name: "patrocinadores", maxCount: 20 }
-  ]),
+  ])),
   (req, res) => {
     const flyer_tipo = (req.body?.flyer_tipo || "").toLowerCase();
     const productFromRegistry = productsRegistry.getProductByFlyerTipo(flyer_tipo);
@@ -1647,24 +1723,24 @@ app.post(
 app.post(
   "/mascotes",
   auth,
-  upload.fields([
+  uploadComErroControlado(upload.fields([
     { name: "escudo1", maxCount: 1 },
     { name: "escudo2", maxCount: 1 },
     { name: "mascote", maxCount: 1 },
     { name: "patrocinadores", maxCount: 20 }
-  ]),
+  ])),
   criarPedidoHandler("mascote")
 );
 
 app.post(
   "/resultado_do_jogo",
   auth,
-  upload.fields([
+  uploadComErroControlado(upload.fields([
     { name: "escudo1", maxCount: 1 },
     { name: "escudo2", maxCount: 1 },
     { name: "mascote", maxCount: 1 },
     { name: "patrocinadores", maxCount: 20 }
-  ]),
+  ])),
   criarPedidoHandler("resultado")
 );
 
