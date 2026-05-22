@@ -399,6 +399,93 @@ function writeJsonSafe(filePath, data) {
   fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf8");
 }
 
+const EVENTOS_INSTALACAO_APP = new Set([
+  "clicou_instalar_app",
+  "resultado_instalar_app",
+  "app_instalado",
+  "abriu_modal_instalar_app"
+]);
+
+function atualizarPedidosComInstalacaoApp(req, eventos = []) {
+  try {
+    const whatsapp = req.user?.whatsapp || "";
+    if (!whatsapp || !Array.isArray(eventos) || eventos.length === 0) return;
+
+    const eventosApp = eventos.filter(ev => EVENTOS_INSTALACAO_APP.has(ev?.e || ""));
+    if (!eventosApp.length) return;
+
+    const itens = listPedidoBasesByWhatsapp(whatsapp).slice(0, 20);
+    if (!itens.length) return;
+
+    itens.forEach(item => {
+      try {
+        const pedidoPath = path.join(item.base, "pedido.json");
+        const pedido = safeReadJson(pedidoPath) || {};
+        let alterou = false;
+
+        const appInstalacao = {
+          clicou_instalar: pedido.app_instalacao?.clicou_instalar === true,
+          abriu_modal_manual: pedido.app_instalacao?.abriu_modal_manual === true,
+          tentativas: Number(pedido.app_instalacao?.tentativas || 0),
+          cancelou: Number(pedido.app_instalacao?.cancelou || 0),
+          aceitou_prompt: Number(pedido.app_instalacao?.aceitou_prompt || 0),
+          instalado: pedido.app_instalacao?.instalado === true,
+          ultimo_resultado: pedido.app_instalacao?.ultimo_resultado || "",
+          primeira_acao_em: pedido.app_instalacao?.primeira_acao_em || "",
+          ultima_acao_em: pedido.app_instalacao?.ultima_acao_em || ""
+        };
+
+        eventosApp.forEach(ev => {
+          const agoraIso = new Date().toISOString();
+          const evento = ev?.e || "";
+          const payload = ev?.p || {};
+
+          if (!appInstalacao.primeira_acao_em) {
+            appInstalacao.primeira_acao_em = agoraIso;
+          }
+          appInstalacao.ultima_acao_em = agoraIso;
+
+          if (evento === "clicou_instalar_app") {
+            appInstalacao.clicou_instalar = true;
+            appInstalacao.tentativas += 1;
+            alterou = true;
+          }
+
+          if (evento === "abriu_modal_instalar_app") {
+            appInstalacao.abriu_modal_manual = true;
+            alterou = true;
+          }
+
+          if (evento === "resultado_instalar_app") {
+            const resultado = String(payload.resultado || "");
+            appInstalacao.ultimo_resultado = resultado;
+
+            if (resultado === "accepted") {
+              appInstalacao.aceitou_prompt += 1;
+            }
+
+            if (resultado === "dismissed") {
+              appInstalacao.cancelou += 1;
+            }
+
+            alterou = true;
+          }
+
+          if (evento === "app_instalado") {
+            appInstalacao.instalado = true;
+            alterou = true;
+          }
+        });
+
+        if (alterou) {
+          pedido.app_instalacao = appInstalacao;
+          writePedido(item.base, pedido);
+        }
+      } catch {}
+    });
+  } catch {}
+}
+
 function salvarEventosCliente(req, eventos = []) {
   try {
     if (!Array.isArray(eventos) || eventos.length === 0) return;
@@ -425,6 +512,8 @@ function salvarEventosCliente(req, eventos = []) {
     ) {
       return;
     }
+
+    atualizarPedidosComInstalacaoApp(req, eventos);
 
     const ultimoEventoPorSessao = {};
 
