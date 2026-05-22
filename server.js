@@ -1673,6 +1673,47 @@ function criarPedidoHandler(categoria) {
 
     if (temSaldoSuficiente) {
       billingService.applyOrderCharge(c, { custoPedido: custoEfetivoPedido, mesAtual, temBrindeMascote });
+
+      if (custoEfetivoPedido > 0) {
+        const confirmadoEm = new Date().toISOString();
+
+        draft.pedido.pagamento_pendente = false;
+        draft.pedido.pagamento_metodo = "saldo_ia4tube";
+        draft.pedido.pagamento_confirmado_em = confirmadoEm;
+        draft.pedido.pagamento_info = {
+          tipo: "saldo_ia4tube",
+          status: "approved",
+          valor_pago: custoEfetivoPedido,
+          payment_id: "",
+          whatsapp: whatsapp,
+          pedido_id: id,
+          confirmado_em: confirmadoEm,
+          origem: "desconto_automatico_criacao"
+        };
+
+        draft.pedido.mensagens_cliente = Array.isArray(draft.pedido.mensagens_cliente)
+          ? draft.pedido.mensagens_cliente
+          : [];
+
+        const jaTemMensagemPagamento = draft.pedido.mensagens_cliente.some(msg =>
+          msg &&
+          msg.tipo === "pagamento_confirmado" &&
+          draft.pedido.pagamento_info?.origem === "desconto_automatico_criacao"
+        );
+
+        if (!jaTemMensagemPagamento) {
+          draft.pedido.mensagens_cliente.push({
+            id: "msg_pagamento_" + Date.now(),
+            tipo: "pagamento_confirmado",
+            titulo: "Pagamento confirmado ✅",
+            texto: "Seu saldo IA4Tube foi usado automaticamente para criar esta arte.",
+            lida: false,
+            criado_em: confirmadoEm
+          });
+        }
+
+        orderService.orderStorage.writeOrder(draft.base, draft.pedido);
+      }
     } else {
       draft.pedido.pagamento_pendente = true;
       draft.pedido.valor_pendente = custoEfetivoPedido;
