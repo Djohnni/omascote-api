@@ -1941,9 +1941,31 @@ app.post("/pedidos/:id/pagar-com-saldo", auth, (req, res) => {
     temBrindeMascote: false
   });
 
+  const confirmadoEm = new Date().toISOString();
+
   pedido.pagamento_pendente = false;
   pedido.pagamento_metodo = "saldo_ia4tube";
-  pedido.pagamento_confirmado_em = new Date().toISOString();
+  pedido.pagamento_confirmado_em = confirmadoEm;
+  pedido.pagamento_info = {
+    tipo: "saldo_ia4tube",
+    status: "approved",
+    valor_pago: valorPendente,
+    payment_id: "",
+    whatsapp: whatsapp,
+    pedido_id: req.params.id,
+    confirmado_em: confirmadoEm
+  };
+  pedido.mensagens_cliente = Array.isArray(pedido.mensagens_cliente)
+    ? pedido.mensagens_cliente
+    : [];
+  pedido.mensagens_cliente.push({
+    id: "msg_pagamento_" + Date.now(),
+    tipo: "pagamento_confirmado",
+    titulo: "Pagamento confirmado ✅",
+    texto: "Seu saldo IA4Tube foi usado e sua arte foi liberada para download.",
+    lida: false,
+    criado_em: confirmadoEm
+  });
 
   clientes[whatsapp] = c;
   writeClientes(clientes);
