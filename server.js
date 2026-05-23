@@ -456,6 +456,80 @@ function getCartaAppAtivaById(id) {
   ) || null;
 }
 
+function pedidoBaseTimestamp(item) {
+  const pedido = item?.pedido || {};
+  return new Date(pedido.criado_em || pedido.data_criacao || pedido.created_at || 0).getTime() || 0;
+}
+
+function getPedidoIdFromBase(base) {
+  return path.basename(String(base || ""));
+}
+
+function encontrarEscudoPrincipalCliente(whatsapp) {
+  const pedidos = listPedidoBasesByWhatsapp(whatsapp)
+    .slice()
+    .sort((a, b) => pedidoBaseTimestamp(b) - pedidoBaseTimestamp(a))
+    .slice(0, 15);
+
+  for (const item of pedidos) {
+    const base = item?.base;
+    if (!base) continue;
+
+    for (const arquivo of ["escudo1.png", "escudo2.png"]) {
+      const arquivoPath = path.join(base, arquivo);
+
+      if (fs.existsSync(arquivoPath)) {
+        return {
+          encontrado: true,
+          pedido_id: item?.pedido?.id || getPedidoIdFromBase(base),
+          arquivo,
+          path: arquivoPath,
+          caminho_relativo: path.relative(DATA_DIR, arquivoPath).replace(/\\/g, "/")
+        };
+      }
+    }
+  }
+
+  return {
+    encontrado: false,
+    pedido_id: "",
+    arquivo: "",
+    path: "",
+    caminho_relativo: ""
+  };
+}
+
+function getUltimoPedidoCliente(whatsapp) {
+  const pedidos = listPedidoBasesByWhatsapp(whatsapp)
+    .slice()
+    .sort((a, b) => pedidoBaseTimestamp(b) - pedidoBaseTimestamp(a));
+
+  const item = pedidos[0];
+  if (!item) {
+    return {
+      total_pedidos: 0,
+      ultimo_pedido: "",
+      ultimo_pedido_em: ""
+    };
+  }
+
+  const pedido = item.pedido || {};
+
+  return {
+    total_pedidos: pedidos.length,
+    ultimo_pedido: pedido.id || getPedidoIdFromBase(item.base),
+    ultimo_pedido_em: pedido.criado_em || pedido.data_criacao || pedido.created_at || ""
+  };
+}
+
+function clienteUsaApp(cliente) {
+  return Number(cliente?.app_uso?.total_acessos_app || 0) > 0;
+}
+
+function clienteTemApp(cliente) {
+  return cliente?.app_instalado === true || clienteUsaApp(cliente);
+}
+
 const EVENTOS_INSTALACAO_APP = new Set([
   "clicou_instalar_app",
   "resultado_instalar_app",
@@ -1521,6 +1595,104 @@ app.post("/cartas-app/:id/lida", auth, (req, res) => {
     return res.json({ ok: true });
   } catch {
     return res.status(500).json({ ok: false, error: "erro_marcar_carta_lida" });
+  }
+});
+
+app.get("/bot/clientes-arte-semana", auth, (req, res) => {
+  try {
+    if (!isBotAdmin(req)) {
+      return res.status(403).json({ ok: false, error: "Acesso negado" });
+    }
+
+    const somenteApp = String(req.query.somente_app || "") === "1";
+    const limit = Math.max(1, Math.min(Number(req.query.limit || 100) || 100, 500));
+    const offset = Math.max(0, Number(req.query.offset || 0) || 0);
+    const clientes = readClientes();
+    const ids = Object.keys(clientes).sort();
+
+    const filtrados = ids
+      .map(id => {
+        const cliente = clientes[id] || {};
+        const usaApp = clienteUsaApp(cliente);
+        const temApp = clienteTemApp(cliente);
+
+        return {
+          id,
+          cliente,
+          usa_app: usaApp,
+          tem_app: temApp
+        };
+      })
+      .filter(item => !somenteApp || item.tem_app);
+
+    const pagina = filtrados.slice(offset, offset + limit);
+    const itens = pagina.map(item => {
+      const resumoPedido = getUltimoPedidoCliente(item.id);
+      const escudo = encontrarEscudoPrincipalCliente(item.id);
+
+      return {
+        id: item.id,
+        nome_time: item.cliente.nome_time || "",
+        usa_app: item.usa_app,
+        app_instalado: item.cliente.app_instalado === true,
+        tem_app: item.tem_app,
+        total_pedidos: resumoPedido.total_pedidos,
+        ultimo_pedido: resumoPedido.ultimo_pedido,
+        ultimo_pedido_em: resumoPedido.ultimo_pedido_em,
+        escudo: escudo.encontrado
+          ? {
+              encontrado: true,
+              pedido_id: escudo.pedido_id,
+              arquivo: escudo.arquivo,
+              url: `/bot/clientes/${encodeURIComponent(item.id)}/escudo-principal`,
+              caminho_relativo: escudo.caminho_relativo
+            }
+          : {
+              encontrado: false,
+              pedido_id: "",
+              arquivo: "",
+              url: "",
+              caminho_relativo: ""
+            }
+      };
+    });
+
+    return res.json({
+      ok: true,
+      total: filtrados.length,
+      limit,
+      offset,
+      itens
+    });
+  } catch {
+    return res.status(500).json({ ok: false, error: "erro_clientes_arte_semana" });
+  }
+});
+
+app.get("/bot/clientes/:id/escudo-principal", auth, (req, res) => {
+  try {
+    if (!isBotAdmin(req)) {
+      return res.status(403).json({ ok: false, error: "Acesso negado" });
+    }
+
+    const clienteId = String(req.params.id || "").trim();
+    const clientes = readClientes();
+
+    if (!clienteId || !clientes[clienteId]) {
+      return res.status(404).json({ ok: false, error: "Cliente não encontrado" });
+    }
+
+    const escudo = encontrarEscudoPrincipalCliente(clienteId);
+
+    if (!escudo.encontrado || !escudo.path || !fs.existsSync(escudo.path)) {
+      return res.status(404).json({ ok: false, error: "Escudo não encontrado" });
+    }
+
+    res.setHeader("Content-Type", "image/png");
+    res.setHeader("Content-Disposition", `inline; filename="${escudo.arquivo}"`);
+    return res.sendFile(escudo.path);
+  } catch {
+    return res.status(500).json({ ok: false, error: "erro_escudo_principal" });
   }
 });
 
