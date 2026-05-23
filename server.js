@@ -429,6 +429,23 @@ function sanitizeCartaApp(carta, cartasLidas = []) {
   };
 }
 
+function cartaAppPermitidaParaCliente(carta, clienteId) {
+  const publico = carta?.publico;
+  if (!publico) return true;
+  if (publico.todos === true) return true;
+
+  if (publico.todos === false) {
+    const idAtual = String(clienteId || "").trim();
+    const clientesIds = Array.isArray(publico.clientes_ids)
+      ? publico.clientes_ids.map(id => String(id || "").trim()).filter(Boolean)
+      : [];
+
+    return Boolean(idAtual) && clientesIds.includes(idAtual);
+  }
+
+  return true;
+}
+
 function getCartaAppAtivaById(id) {
   const cartaId = String(id || "").trim();
   if (!cartaId) return null;
@@ -1468,6 +1485,7 @@ app.get("/cartas-app/ativas", auth, (req, res) => {
     const cartas = readCartasApp()
       .filter(carta => carta?.ativo === true)
       .filter(carta => carta?.somente_app !== false)
+      .filter(carta => cartaAppPermitidaParaCliente(carta, req.user.whatsapp))
       .map(carta => sanitizeCartaApp(carta, cartasLidas))
       .filter(Boolean);
 
