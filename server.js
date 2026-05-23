@@ -403,7 +403,8 @@ const EVENTOS_INSTALACAO_APP = new Set([
   "clicou_instalar_app",
   "resultado_instalar_app",
   "app_instalado",
-  "abriu_modal_instalar_app"
+  "abriu_modal_instalar_app",
+  "uso_app_pwa"
 ]);
 
 function atualizarPedidosComInstalacaoApp(req, eventos = []) {
@@ -414,8 +415,92 @@ function atualizarPedidosComInstalacaoApp(req, eventos = []) {
     const eventosApp = eventos.filter(ev => EVENTOS_INSTALACAO_APP.has(ev?.e || ""));
     if (!eventosApp.length) return;
 
+    const agoraIsoGeral = new Date().toISOString();
+
+    try {
+      const clientes = readClientes();
+      const cliente = clientes[whatsapp];
+
+      if (cliente) {
+        let alterouCliente = false;
+
+        cliente.app_instalacao = cliente.app_instalacao || {
+          clicou_instalar: false,
+          abriu_modal_manual: false,
+          tentativas: 0,
+          cancelou: 0,
+          aceitou_prompt: 0,
+          instalado: false,
+          ultimo_resultado: "",
+          primeira_acao_em: "",
+          ultima_acao_em: ""
+        };
+
+        eventosApp.forEach(ev => {
+          const evento = ev?.e || "";
+          const payload = ev?.p || {};
+
+          if (!cliente.app_instalacao.primeira_acao_em) {
+            cliente.app_instalacao.primeira_acao_em = agoraIsoGeral;
+          }
+
+          cliente.app_instalacao.ultima_acao_em = agoraIsoGeral;
+
+          if (evento === "clicou_instalar_app") {
+            cliente.app_instalacao.clicou_instalar = true;
+            cliente.app_instalacao.tentativas = Number(cliente.app_instalacao.tentativas || 0) + 1;
+            alterouCliente = true;
+          }
+
+          if (evento === "abriu_modal_instalar_app") {
+            cliente.app_instalacao.abriu_modal_manual = true;
+            alterouCliente = true;
+          }
+
+          if (evento === "resultado_instalar_app") {
+            const resultado = String(payload.resultado || "");
+            cliente.app_instalacao.ultimo_resultado = resultado;
+
+            if (resultado === "accepted") {
+              cliente.app_instalacao.aceitou_prompt = Number(cliente.app_instalacao.aceitou_prompt || 0) + 1;
+            }
+
+            if (resultado === "dismissed") {
+              cliente.app_instalacao.cancelou = Number(cliente.app_instalacao.cancelou || 0) + 1;
+            }
+
+            alterouCliente = true;
+          }
+
+          if (evento === "app_instalado") {
+            cliente.app_instalacao.instalado = true;
+            cliente.app_instalado = true;
+            cliente.app_instalado_em = cliente.app_instalado_em || agoraIsoGeral;
+            alterouCliente = true;
+          }
+
+          if (evento === "uso_app_pwa") {
+            cliente.app_instalado = true;
+            cliente.app_instalado_em = cliente.app_instalado_em || agoraIsoGeral;
+            cliente.app_instalacao.instalado = true;
+            cliente.app_uso = cliente.app_uso || {
+              ultimo_acesso_app_em: "",
+              total_acessos_app: 0
+            };
+            cliente.app_uso.ultimo_acesso_app_em = agoraIsoGeral;
+            cliente.app_uso.total_acessos_app = Number(cliente.app_uso.total_acessos_app || 0) + 1;
+            alterouCliente = true;
+          }
+        });
+
+        if (alterouCliente) {
+          clientes[whatsapp] = cliente;
+          writeClientes(clientes);
+        }
+      }
+    } catch {}
+
     const itens = listPedidoBasesByWhatsapp(whatsapp).slice(0, 20);
-    if (!itens.length) return;
 
     itens.forEach(item => {
       try {
@@ -432,7 +517,9 @@ function atualizarPedidosComInstalacaoApp(req, eventos = []) {
           instalado: pedido.app_instalacao?.instalado === true,
           ultimo_resultado: pedido.app_instalacao?.ultimo_resultado || "",
           primeira_acao_em: pedido.app_instalacao?.primeira_acao_em || "",
-          ultima_acao_em: pedido.app_instalacao?.ultima_acao_em || ""
+          ultima_acao_em: pedido.app_instalacao?.ultima_acao_em || "",
+          ultimo_acesso_app_em: pedido.app_instalacao?.ultimo_acesso_app_em || "",
+          total_acessos_app: Number(pedido.app_instalacao?.total_acessos_app || 0)
         };
 
         eventosApp.forEach(ev => {
@@ -473,6 +560,13 @@ function atualizarPedidosComInstalacaoApp(req, eventos = []) {
 
           if (evento === "app_instalado") {
             appInstalacao.instalado = true;
+            alterou = true;
+          }
+
+          if (evento === "uso_app_pwa") {
+            appInstalacao.instalado = true;
+            appInstalacao.ultimo_acesso_app_em = agoraIso;
+            appInstalacao.total_acessos_app = Number(appInstalacao.total_acessos_app || 0) + 1;
             alterou = true;
           }
         });
