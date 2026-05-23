@@ -38,6 +38,7 @@ const PREVIEW_LIMITER_FILE = path.join(DATA_DIR, "preview_limiter.json");
 const ANALYTICS_DIR = path.join(DATA_DIR, "analytics");
 const EVENTOS_CLIENTES_FILE = path.join(DATA_DIR, "eventos_clientes.json");
 const CARTAS_APP_FILE = path.join(DATA_DIR, "cartas_app.json");
+const CARTAS_APP_IMAGENS_DIR = path.join(DATA_DIR, "cartas_app_imagens");
 const PREVIEW_LIMITER_MAX = 3;
 const PREVIEW_LIMITER_TTL_MS = 6 * 60 * 60 * 1000;
 
@@ -67,6 +68,7 @@ ensureDir(DATA_DIR);
 ensureDir(PEDIDOS_DIR);
 ensureDir(path.join(DATA_DIR, "tmp_uploads"));
 ensureDir(ANALYTICS_DIR);
+ensureDir(CARTAS_APP_IMAGENS_DIR);
 
 if (!fs.existsSync(CLIENTES_FILE)) {
   fs.writeFileSync(CLIENTES_FILE, JSON.stringify({}, null, 2), "utf8");
@@ -411,6 +413,58 @@ function readCartasApp() {
   } catch {
     return [];
   }
+}
+
+function writeCartasApp(cartas) {
+  writeJsonSafe(CARTAS_APP_FILE, Array.isArray(cartas) ? cartas : []);
+}
+
+function gerarCartaAppId() {
+  const d = new Date();
+  const pad = n => String(n).padStart(2, "0");
+  const data = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}`;
+  const hora = `${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+  const sufixo = Math.random().toString(36).slice(2, 6);
+  return `${data}_${hora}_${sufixo}`;
+}
+
+function normalizarPublicoCartaApp(publico) {
+  if (!publico || typeof publico !== "object") {
+    return {
+      todos: true,
+      clientes_ids: []
+    };
+  }
+
+  return {
+    todos: publico.todos === true,
+    clientes_ids: Array.isArray(publico.clientes_ids)
+      ? publico.clientes_ids.map(id => String(id || "").trim()).filter(Boolean)
+      : []
+  };
+}
+
+function normalizarCartaAppPayload(body = {}) {
+  return {
+    id: gerarCartaAppId(),
+    titulo: String(body.titulo || "Mensagem da IA4Tube").trim() || "Mensagem da IA4Tube",
+    texto_curto: String(body.texto_curto || "").trim(),
+    texto: String(body.texto || "").trim(),
+    imagem_url: String(body.imagem_url || "").trim(),
+    imagem_path: "",
+    somente_app: body.somente_app !== false,
+    ativo: body.ativo !== false,
+    publico: normalizarPublicoCartaApp(body.publico),
+    criado_em: new Date().toISOString()
+  };
+}
+
+function getExtensaoImagemCarta(mimetype) {
+  const mime = String(mimetype || "").toLowerCase();
+  if (mime === "image/png") return ".png";
+  if (mime === "image/webp") return ".webp";
+  if (mime === "image/jpeg" || mime === "image/jpg") return ".jpg";
+  return "";
 }
 
 function sanitizeCartaApp(carta, cartasLidas = []) {
@@ -1091,6 +1145,34 @@ const upload = multer({
   }
 });
 
+const uploadCartaAppImagem = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => cb(null, CARTAS_APP_IMAGENS_DIR),
+    filename: (req, file, cb) => {
+      const ext = getExtensaoImagemCarta(file.mimetype);
+      const id = String(req.params.id || "").replace(/[^\w.\-]+/g, "_");
+      cb(null, `${id}${ext || ".png"}`);
+    }
+  }),
+  limits: {
+    fileSize: 15 * 1024 * 1024
+  },
+  fileFilter: (req, file, cb) => {
+    const permitidos = new Set([
+      "image/png",
+      "image/jpeg",
+      "image/jpg",
+      "image/webp"
+    ]);
+
+    if (!permitidos.has(String(file.mimetype || "").toLowerCase())) {
+      return cb(new Error("Apenas imagens PNG, JPG e WEBP são permitidas."));
+    }
+
+    cb(null, true);
+  }
+});
+
 const uploadResultado = multer({ storage });
 
 function uploadComErroControlado(middleware) {
@@ -1696,6 +1778,80 @@ app.get("/bot/clientes/:id/escudo-principal", auth, (req, res) => {
   }
 });
 
+app.post("/bot/cartas-app", auth, (req, res) => {
+  try {
+    if (!isBotAdmin(req)) {
+      return res.status(403).json({ ok: false, error: "Acesso negado" });
+    }
+
+    const cartas = readCartasApp();
+    const carta = normalizarCartaAppPayload(req.body || {});
+
+    cartas.push(carta);
+    writeCartasApp(cartas);
+
+    return res.json({
+      ok: true,
+      carta,
+      imagem_url_cliente: `/cartas-app/${encodeURIComponent(carta.id)}/imagem`
+    });
+  } catch {
+    return res.status(500).json({ ok: false, error: "erro_criar_carta_app" });
+  }
+});
+
+app.post("/bot/cartas-app/:id/imagem", auth, (req, res) => {
+  if (!isBotAdmin(req)) {
+    return res.status(403).json({ ok: false, error: "Acesso negado" });
+  }
+
+  uploadCartaAppImagem.single("imagem")(req, res, err => {
+    try {
+      if (err) {
+        return res.status(400).json({ ok: false, error: err.message || "erro_upload_imagem_carta" });
+      }
+
+      if (!req.file) {
+        return res.status(400).json({ ok: false, error: "Imagem obrigatória" });
+      }
+
+      const cartaId = String(req.params.id || "").trim();
+      const cartas = readCartasApp();
+      const idx = cartas.findIndex(carta => String(carta?.id || "") === cartaId);
+
+      if (idx === -1) {
+        try { fs.unlinkSync(req.file.path); } catch {}
+        return res.status(404).json({ ok: false, error: "Carta não encontrada" });
+      }
+
+      const imagemAntiga = String(cartas[idx].imagem_path || "").trim();
+      if (imagemAntiga) {
+        const base = path.resolve(DATA_DIR);
+        const antigaPath = path.resolve(DATA_DIR, imagemAntiga);
+        const novaPath = path.resolve(req.file.path);
+
+        if (antigaPath !== novaPath && antigaPath.startsWith(base + path.sep)) {
+          try { fs.unlinkSync(antigaPath); } catch {}
+        }
+      }
+
+      cartas[idx].imagem_url = "";
+      cartas[idx].imagem_path = path.relative(DATA_DIR, req.file.path).replace(/\\/g, "/");
+      cartas[idx].imagem_atualizada_em = new Date().toISOString();
+
+      writeCartasApp(cartas);
+
+      return res.json({
+        ok: true,
+        carta: cartas[idx],
+        imagem_url_cliente: `/cartas-app/${encodeURIComponent(cartaId)}/imagem`
+      });
+    } catch {
+      return res.status(500).json({ ok: false, error: "erro_salvar_imagem_carta" });
+    }
+  });
+});
+
 app.get("/cartas-app/:id/imagem", auth, (req, res) => {
   try {
     const carta = getCartaAppAtivaById(req.params.id);
@@ -1712,7 +1868,8 @@ app.get("/cartas-app/:id/imagem", auth, (req, res) => {
       return res.status(404).json({ ok: false, error: "Imagem não encontrada" });
     }
 
-    return res.download(alvo);
+    res.setHeader("Cache-Control", "public, max-age=300");
+    return res.sendFile(alvo);
   } catch {
     return res.status(500).json({ ok: false, error: "erro_imagem_carta" });
   }
