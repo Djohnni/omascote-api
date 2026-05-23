@@ -37,6 +37,7 @@ const SUPORTE_FINALIZADAS_FILE = path.join(DATA_DIR, "suporte_conversas_finaliza
 const PREVIEW_LIMITER_FILE = path.join(DATA_DIR, "preview_limiter.json");
 const ANALYTICS_DIR = path.join(DATA_DIR, "analytics");
 const EVENTOS_CLIENTES_FILE = path.join(DATA_DIR, "eventos_clientes.json");
+const CARTAS_APP_FILE = path.join(DATA_DIR, "cartas_app.json");
 const PREVIEW_LIMITER_MAX = 3;
 const PREVIEW_LIMITER_TTL_MS = 6 * 60 * 60 * 1000;
 
@@ -104,6 +105,10 @@ if (!fs.existsSync(EVENTOS_CLIENTES_FILE)) {
 
 if (!fs.existsSync(PREVIEW_LIMITER_FILE)) {
   fs.writeFileSync(PREVIEW_LIMITER_FILE, JSON.stringify([], null, 2), "utf8");
+}
+
+if (!fs.existsSync(CARTAS_APP_FILE)) {
+  fs.writeFileSync(CARTAS_APP_FILE, JSON.stringify([], null, 2), "utf8");
 }
 
 // ===== HELPERS =====
@@ -397,6 +402,41 @@ function readJsonArraySafe(filePath) {
 
 function writeJsonSafe(filePath, data) {
   fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf8");
+}
+
+function readCartasApp() {
+  try {
+    const cartas = safeReadJson(CARTAS_APP_FILE) || [];
+    return Array.isArray(cartas) ? cartas : [];
+  } catch {
+    return [];
+  }
+}
+
+function sanitizeCartaApp(carta, cartasLidas = []) {
+  const id = String(carta?.id || "").trim();
+  if (!id) return null;
+
+  return {
+    id,
+    titulo: String(carta?.titulo || "Mensagem da IA4Tube"),
+    texto_curto: String(carta?.texto_curto || ""),
+    texto: String(carta?.texto || ""),
+    imagem_url: String(carta?.imagem_url || ""),
+    tem_imagem: Boolean(carta?.imagem_url || carta?.imagem_path),
+    criado_em: String(carta?.criado_em || ""),
+    lida: cartasLidas.includes(id)
+  };
+}
+
+function getCartaAppAtivaById(id) {
+  const cartaId = String(id || "").trim();
+  if (!cartaId) return null;
+
+  return readCartasApp().find(carta =>
+    String(carta?.id || "") === cartaId &&
+    carta?.ativo === true
+  ) || null;
 }
 
 const EVENTOS_INSTALACAO_APP = new Set([
@@ -1413,6 +1453,79 @@ app.get("/me", auth, (req, res) => {
     brinde_mascote_disponivel: c.brinde_mascote_disponivel === true,
     ativo: c.ativo
   });
+});
+
+app.get("/cartas-app/ativas", auth, (req, res) => {
+  try {
+    const clientes = readClientes();
+    const cliente = clientes[req.user.whatsapp];
+
+    if (!cliente) {
+      return res.status(404).json({ ok: false, error: "Cliente não encontrado" });
+    }
+
+    const cartasLidas = Array.isArray(cliente.cartas_lidas) ? cliente.cartas_lidas.map(String) : [];
+    const cartas = readCartasApp()
+      .filter(carta => carta?.ativo === true)
+      .filter(carta => carta?.somente_app !== false)
+      .map(carta => sanitizeCartaApp(carta, cartasLidas))
+      .filter(Boolean);
+
+    return res.json({ ok: true, cartas });
+  } catch {
+    return res.status(500).json({ ok: false, error: "erro_cartas_app" });
+  }
+});
+
+app.post("/cartas-app/:id/lida", auth, (req, res) => {
+  try {
+    const carta = getCartaAppAtivaById(req.params.id);
+    if (!carta) {
+      return res.status(404).json({ ok: false, error: "Carta não encontrada" });
+    }
+
+    const clientes = readClientes();
+    const cliente = clientes[req.user.whatsapp];
+
+    if (!cliente) {
+      return res.status(404).json({ ok: false, error: "Cliente não encontrado" });
+    }
+
+    const cartaId = String(carta.id || "");
+    cliente.cartas_lidas = Array.isArray(cliente.cartas_lidas) ? cliente.cartas_lidas.map(String) : [];
+
+    if (!cliente.cartas_lidas.includes(cartaId)) {
+      cliente.cartas_lidas.push(cartaId);
+      clientes[req.user.whatsapp] = cliente;
+      writeClientes(clientes);
+    }
+
+    return res.json({ ok: true });
+  } catch {
+    return res.status(500).json({ ok: false, error: "erro_marcar_carta_lida" });
+  }
+});
+
+app.get("/cartas-app/:id/imagem", auth, (req, res) => {
+  try {
+    const carta = getCartaAppAtivaById(req.params.id);
+    const imagemPath = String(carta?.imagem_path || "").trim();
+
+    if (!carta || !imagemPath) {
+      return res.status(404).json({ ok: false, error: "Imagem não encontrada" });
+    }
+
+    const base = path.resolve(DATA_DIR);
+    const alvo = path.resolve(DATA_DIR, imagemPath);
+
+    if (!alvo.startsWith(base + path.sep) || !fs.existsSync(alvo)) {
+      return res.status(404).json({ ok: false, error: "Imagem não encontrada" });
+    }
+
+    return res.download(alvo);
+  } catch {
+    return res.status(500).json({ ok: false, error: "erro_imagem_carta" });
+  }
 });
 
 // ===== MERCADO PAGO =====
