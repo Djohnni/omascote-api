@@ -56,6 +56,8 @@ function normalizeOrderBody(body = {}) {
     gols_time_principal: body.gols_time_principal,
     gols_adversario: body.gols_adversario,
     time_adversario: body.time_adversario,
+    origem_acesso: body.origem_acesso,
+    display_mode: body.display_mode,
     new_model: newModel
   };
 }
@@ -168,6 +170,8 @@ function buildPedidoData({
     gols_time_principal,
     gols_adversario,
     time_adversario,
+    origem_acesso,
+    display_mode,
     new_model
   } = fields;
 
@@ -200,6 +204,8 @@ function buildPedidoData({
     baixado_cliente: false,
     ajuste_automatico_usado: false,
     motivo_ajuste: "",
+    origem_acesso: origem_acesso === "pwa" ? "pwa" : "navegador",
+    display_mode: display_mode === "standalone" ? "standalone" : "browser",
     criado_em: new Date().toISOString()
   };
 
