@@ -580,8 +580,19 @@ function clienteUsaApp(cliente) {
   return Number(cliente?.app_uso?.total_acessos_app || 0) > 0;
 }
 
-function clienteTemApp(cliente) {
-  return cliente?.app_instalado === true || clienteUsaApp(cliente);
+function clienteTemPedidoPwa(whatsapp) {
+  return listPedidoBasesByWhatsapp(whatsapp)
+    .slice()
+    .sort((a, b) => pedidoBaseTimestamp(b) - pedidoBaseTimestamp(a))
+    .slice(0, 15)
+    .some(item => {
+      const pedido = item?.pedido || {};
+      return pedido.origem_acesso === "pwa" || pedido.display_mode === "standalone";
+    });
+}
+
+function clienteTemApp(cliente, whatsapp = "") {
+  return cliente?.app_instalado === true || clienteUsaApp(cliente) || clienteTemPedidoPwa(whatsapp);
 }
 
 const EVENTOS_INSTALACAO_APP = new Set([
@@ -1695,8 +1706,9 @@ app.get("/bot/clientes-arte-semana", auth, (req, res) => {
     const filtrados = ids
       .map(id => {
         const cliente = clientes[id] || {};
-        const usaApp = clienteUsaApp(cliente);
-        const temApp = clienteTemApp(cliente);
+        const temPedidoPwa = clienteTemPedidoPwa(id);
+        const usaApp = clienteUsaApp(cliente) || temPedidoPwa;
+        const temApp = clienteTemApp(cliente, id);
 
         return {
           id,
@@ -1716,7 +1728,7 @@ app.get("/bot/clientes-arte-semana", auth, (req, res) => {
         id: item.id,
         nome_time: item.cliente.nome_time || "",
         usa_app: item.usa_app,
-        app_instalado: item.cliente.app_instalado === true,
+        app_instalado: item.cliente.app_instalado === true || item.tem_app,
         tem_app: item.tem_app,
         total_pedidos: resumoPedido.total_pedidos,
         ultimo_pedido: resumoPedido.ultimo_pedido,
