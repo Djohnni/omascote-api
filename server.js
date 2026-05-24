@@ -601,14 +601,12 @@ function getUltimoPedidoCliente(whatsapp) {
     .join(" | ");
   const pedidosPagos = pedidos.filter(item => {
     const pedido = item.pedido || {};
-    return pedido.pagamento_pendente === false || Boolean(pedido.pagamento_confirmado_em);
+    return Boolean(pedido.pagamento_confirmado_em) || pedido.pagamento_info?.status === "approved";
   });
   const valorTotalPago = pedidosPagos.reduce((total, item) => {
     const pedido = item.pedido || {};
     const valorInfo = Number(pedido.pagamento_info?.valor_pago || 0);
-    const valorPendente = Number(pedido.valor_pendente || 0);
-    const custo = Number(pedido.custo || pedido.custo_pedido || pedido.valor || 0);
-    return total + (valorInfo || valorPendente || custo || 0);
+    return total + (valorInfo > 0 ? valorInfo : 0);
   }, 0);
 
   const item = pedidos[0];
