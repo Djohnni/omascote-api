@@ -599,11 +599,24 @@ function getUltimoPedidoCliente(whatsapp) {
   const categoriasResumo = Object.entries(categorias)
     .map(([nome, total]) => `${nome}: ${total}`)
     .join(" | ");
+  const pedidosPagos = pedidos.filter(item => {
+    const pedido = item.pedido || {};
+    return pedido.pagamento_pendente === false || Boolean(pedido.pagamento_confirmado_em);
+  });
+  const valorTotalPago = pedidosPagos.reduce((total, item) => {
+    const pedido = item.pedido || {};
+    const valorInfo = Number(pedido.pagamento_info?.valor_pago || 0);
+    const valorPendente = Number(pedido.valor_pendente || 0);
+    const custo = Number(pedido.custo || pedido.custo_pedido || pedido.valor || 0);
+    return total + (valorInfo || valorPendente || custo || 0);
+  }, 0);
 
   const item = pedidos[0];
   if (!item) {
     return {
       total_pedidos: 0,
+      total_pagos: 0,
+      valor_total_pago: 0,
       ultimo_pedido: "",
       ultimo_pedido_em: "",
       ultimo_pedido_url: "",
@@ -617,6 +630,8 @@ function getUltimoPedidoCliente(whatsapp) {
 
   return {
     total_pedidos: pedidos.length,
+    total_pagos: pedidosPagos.length,
+    valor_total_pago: Number(valorTotalPago.toFixed(2)),
     ultimo_pedido: ultimoPedidoId,
     ultimo_pedido_em: pedido.criado_em || pedido.data_criacao || pedido.created_at || "",
     ultimo_pedido_url: `/bot/pedidos/${encodeURIComponent(ultimoPedidoId)}/zip`,
@@ -1780,6 +1795,8 @@ app.get("/bot/clientes-arte-semana", auth, (req, res) => {
         app_instalado: item.cliente.app_instalado === true || item.tem_app,
         tem_app: item.tem_app,
         total_pedidos: resumoPedido.total_pedidos,
+        total_pagos: resumoPedido.total_pagos,
+        valor_total_pago: resumoPedido.valor_total_pago,
         ultimo_pedido: resumoPedido.ultimo_pedido,
         ultimo_pedido_em: resumoPedido.ultimo_pedido_em,
         ultimo_pedido_url: resumoPedido.ultimo_pedido_url,
