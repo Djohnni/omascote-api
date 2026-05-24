@@ -519,6 +519,23 @@ function getPedidoIdFromBase(base) {
   return path.basename(String(base || ""));
 }
 
+function nomeCategoriaResumo(categoria) {
+  const nomes = {
+    resultado: "Resultado",
+    escalacao: "Escalação",
+    contratacao: "Contratação",
+    proximo_jogo: "Próximo jogo",
+    patrocinador: "Patrocinador",
+    escudo3d: "Escudo 3D",
+    proximo_jogo_jogador: "Próximo jogo jogador",
+    resultado_jogo_jogador: "Resultado jogador",
+    jogador_escudo: "Jogador + escudo",
+    mascote_uniforme: "Mascote"
+  };
+
+  return nomes[categoria] || categoria || "Sem categoria";
+}
+
 function encontrarEscudoPrincipalCliente(whatsapp) {
   const pedidos = listPedidoBasesByWhatsapp(whatsapp)
     .slice()
@@ -558,21 +575,53 @@ function getUltimoPedidoCliente(whatsapp) {
     .slice()
     .sort((a, b) => pedidoBaseTimestamp(b) - pedidoBaseTimestamp(a));
 
+  const pedidosResumo = pedidos.slice(0, 10).map(item => {
+    const pedido = item.pedido || {};
+    const id = pedido.id || getPedidoIdFromBase(item.base);
+    const categoria = pedido.product_id || pedido.categoria || "";
+
+    return {
+      id,
+      categoria,
+      criado_em: pedido.criado_em || pedido.data_criacao || pedido.created_at || "",
+      status: pedido.status || readOrderStatus(item.base, "")
+    };
+  });
+
+  const categorias = {};
+  pedidos.forEach(item => {
+    const pedido = item.pedido || {};
+    const categoria = pedido.product_id || pedido.categoria || "";
+    const nome = nomeCategoriaResumo(categoria);
+    categorias[nome] = (categorias[nome] || 0) + 1;
+  });
+
+  const categoriasResumo = Object.entries(categorias)
+    .map(([nome, total]) => `${nome}: ${total}`)
+    .join(" | ");
+
   const item = pedidos[0];
   if (!item) {
     return {
       total_pedidos: 0,
       ultimo_pedido: "",
-      ultimo_pedido_em: ""
+      ultimo_pedido_em: "",
+      ultimo_pedido_url: "",
+      pedidos_resumo: [],
+      categorias_resumo: ""
     };
   }
 
   const pedido = item.pedido || {};
+  const ultimoPedidoId = pedido.id || getPedidoIdFromBase(item.base);
 
   return {
     total_pedidos: pedidos.length,
-    ultimo_pedido: pedido.id || getPedidoIdFromBase(item.base),
-    ultimo_pedido_em: pedido.criado_em || pedido.data_criacao || pedido.created_at || ""
+    ultimo_pedido: ultimoPedidoId,
+    ultimo_pedido_em: pedido.criado_em || pedido.data_criacao || pedido.created_at || "",
+    ultimo_pedido_url: `/bot/pedidos/${encodeURIComponent(ultimoPedidoId)}/zip`,
+    pedidos_resumo: pedidosResumo,
+    categorias_resumo: categoriasResumo
   };
 }
 
@@ -1733,6 +1782,9 @@ app.get("/bot/clientes-arte-semana", auth, (req, res) => {
         total_pedidos: resumoPedido.total_pedidos,
         ultimo_pedido: resumoPedido.ultimo_pedido,
         ultimo_pedido_em: resumoPedido.ultimo_pedido_em,
+        ultimo_pedido_url: resumoPedido.ultimo_pedido_url,
+        pedidos_resumo: resumoPedido.pedidos_resumo,
+        categorias_resumo: resumoPedido.categorias_resumo,
         escudo: escudo.encontrado
           ? {
               encontrado: true,
