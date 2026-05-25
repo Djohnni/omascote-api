@@ -1849,6 +1849,53 @@ app.get("/bot/cartas-app/:id/leituras", auth, (req, res) => {
   }
 });
 
+app.get("/bot/cartas-app/:id/debug-leituras", auth, (req, res) => {
+  try {
+    if (!isBotAdmin(req)) {
+      return res.status(403).json({ ok: false, error: "Acesso negado" });
+    }
+
+    const cartaId = String(req.params.id || "").trim();
+    const carta = readCartasApp().find(carta => String(carta?.id || "") === cartaId) || null;
+
+    if (!cartaId || !carta) {
+      return res.status(404).json({ ok: false, error: "Carta não encontrada" });
+    }
+
+    const clientes = readClientes();
+    const publico = {
+      todos: carta?.publico?.todos === true,
+      clientes_ids: Array.isArray(carta?.publico?.clientes_ids)
+        ? carta.publico.clientes_ids.map(id => String(id || "").trim()).filter(Boolean)
+        : []
+    };
+    const idsParaDebug = publico.clientes_ids.length ? publico.clientes_ids : Object.keys(clientes);
+
+    const clientesDebug = idsParaDebug.map(clienteId => {
+      const id = String(clienteId || "").trim();
+      const cliente = clientes[id] || {};
+      return {
+        id,
+        nome_time: String(cliente?.nome_time || ""),
+        cartas_lidas: Array.isArray(cliente?.cartas_lidas) ? cliente.cartas_lidas.map(String) : [],
+        cartas_app_leituras: cliente?.cartas_app_leituras && typeof cliente.cartas_app_leituras === "object"
+          ? cliente.cartas_app_leituras
+          : {}
+      };
+    });
+
+    return res.json({
+      ok: true,
+      carta_id: cartaId,
+      publico,
+      clientes_ids: publico.clientes_ids,
+      clientes: clientesDebug
+    });
+  } catch {
+    return res.status(500).json({ ok: false, error: "erro_debug_leituras_carta_app" });
+  }
+});
+
 app.get("/bot/clientes-arte-semana", auth, (req, res) => {
   try {
     if (!isBotAdmin(req)) {
