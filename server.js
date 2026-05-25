@@ -2987,16 +2987,6 @@ app.get("/pedidos/:id/download-resultado", auth, (req, res) => {
     });
   }
 
-  const clientes = readClientes();
-  const cliente = clientes[whatsapp];
-
-  if (cliente?.cadastro_automatico === true && cliente?.conta_finalizada !== true) {
-    return res.status(403).json({
-      ok: false,
-      error: "Crie seu login e senha para liberar o download."
-    });
-  }
-
   const arquivo = path.join(base, "resultado_final.png");
 
   if (!fs.existsSync(arquivo)) {
