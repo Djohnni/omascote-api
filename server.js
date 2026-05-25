@@ -1776,7 +1776,8 @@ app.get("/bot/cartas-app/:id/leituras", auth, (req, res) => {
     }
 
     const cartaId = String(req.params.id || "").trim();
-    const cartaExiste = readCartasApp().some(carta => String(carta?.id || "") === cartaId);
+    const carta = readCartasApp().find(carta => String(carta?.id || "") === cartaId) || null;
+    const cartaExiste = !!carta;
 
     if (!cartaId || !cartaExiste) {
       return res.status(404).json({ ok: false, error: "Carta não encontrada" });
@@ -1801,6 +1802,12 @@ app.get("/bot/cartas-app/:id/leituras", auth, (req, res) => {
     return res.json({
       ok: true,
       carta_id: cartaId,
+      publico: {
+        todos: carta?.publico?.todos === true,
+        clientes_ids: Array.isArray(carta?.publico?.clientes_ids)
+          ? carta.publico.clientes_ids.map(id => String(id || "").trim()).filter(Boolean)
+          : []
+      },
       leituras
     });
   } catch {
