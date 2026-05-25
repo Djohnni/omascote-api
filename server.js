@@ -1758,7 +1758,12 @@ app.post("/cartas-app/:id/lida", auth, (req, res) => {
     clientes[req.user.whatsapp] = cliente;
     writeClientes(clientes);
 
-    return res.json({ ok: true });
+    return res.json({
+      ok: true,
+      carta_id: cartaId,
+      lida: true,
+      lida_em: cliente.cartas_app_leituras[cartaId]?.lida_em || ""
+    });
   } catch {
     return res.status(500).json({ ok: false, error: "erro_marcar_carta_lida" });
   }
