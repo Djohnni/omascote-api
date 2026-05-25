@@ -1739,6 +1739,18 @@ app.post("/cartas-app/:id/lida", auth, (req, res) => {
     }
 
     const cartaId = String(carta.id || "");
+    const cartasLidasAntes = Array.isArray(cliente.cartas_lidas) ? [...cliente.cartas_lidas] : [];
+    const leiturasAntes = cliente.cartas_app_leituras && typeof cliente.cartas_app_leituras === "object"
+      ? { ...cliente.cartas_app_leituras }
+      : {};
+    console.log("[cartas-app:lida] antes", {
+      cartaId,
+      cliente_id: String(cliente.id || req.user.whatsapp || ""),
+      whatsapp: req.user.whatsapp,
+      cartas_lidas: cartasLidasAntes,
+      cartas_app_leituras: leiturasAntes
+    });
+
     cliente.cartas_lidas = Array.isArray(cliente.cartas_lidas) ? cliente.cartas_lidas.map(String) : [];
     cliente.cartas_app_leituras = cliente.cartas_app_leituras && typeof cliente.cartas_app_leituras === "object"
       ? cliente.cartas_app_leituras
@@ -1757,6 +1769,14 @@ app.post("/cartas-app/:id/lida", auth, (req, res) => {
 
     clientes[req.user.whatsapp] = cliente;
     writeClientes(clientes);
+
+    console.log("[cartas-app:lida] depois", {
+      cartaId,
+      cliente_id: String(cliente.id || req.user.whatsapp || ""),
+      whatsapp: req.user.whatsapp,
+      cartas_lidas: cliente.cartas_lidas,
+      cartas_app_leituras: cliente.cartas_app_leituras
+    });
 
     return res.json({
       ok: true,
@@ -1787,7 +1807,11 @@ app.get("/bot/cartas-app/:id/leituras", auth, (req, res) => {
     const leituras = Object.entries(clientes).map(([clienteId, cliente]) => {
       const cartasLidas = Array.isArray(cliente?.cartas_lidas) ? cliente.cartas_lidas.map(String) : [];
       const leitura = cliente?.cartas_app_leituras?.[cartaId] || null;
-      const lida = cartasLidas.includes(cartaId) || leitura?.lida === true;
+      const origem = [
+        cartasLidas.includes(cartaId) ? "cartas_lidas" : "",
+        leitura?.lida === true ? "cartas_app_leituras" : ""
+      ].filter(Boolean);
+      const lida = origem.length > 0;
 
       if (!lida) return null;
 
@@ -1795,9 +1819,19 @@ app.get("/bot/cartas-app/:id/leituras", auth, (req, res) => {
         cliente_id: String(clienteId || ""),
         nome_time: String(cliente?.nome_time || ""),
         lida: true,
-        lida_em: leitura?.lida_em || ""
+        lida_em: leitura?.lida_em || "",
+        origem
       };
     }).filter(Boolean);
+
+    console.log("[cartas-app:leituras]", {
+      carta_id: cartaId,
+      clientes_lidos: leituras.map(item => ({
+        cliente_id: item.cliente_id,
+        lida_em: item.lida_em,
+        origem: item.origem
+      }))
+    });
 
     return res.json({
       ok: true,
