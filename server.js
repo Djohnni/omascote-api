@@ -1740,16 +1740,66 @@ app.post("/cartas-app/:id/lida", auth, (req, res) => {
 
     const cartaId = String(carta.id || "");
     cliente.cartas_lidas = Array.isArray(cliente.cartas_lidas) ? cliente.cartas_lidas.map(String) : [];
+    cliente.cartas_app_leituras = cliente.cartas_app_leituras && typeof cliente.cartas_app_leituras === "object"
+      ? cliente.cartas_app_leituras
+      : {};
 
     if (!cliente.cartas_lidas.includes(cartaId)) {
       cliente.cartas_lidas.push(cartaId);
-      clientes[req.user.whatsapp] = cliente;
-      writeClientes(clientes);
     }
+
+    if (cliente.cartas_app_leituras[cartaId]?.lida !== true) {
+      cliente.cartas_app_leituras[cartaId] = {
+        lida: true,
+        lida_em: new Date().toISOString()
+      };
+    }
+
+    clientes[req.user.whatsapp] = cliente;
+    writeClientes(clientes);
 
     return res.json({ ok: true });
   } catch {
     return res.status(500).json({ ok: false, error: "erro_marcar_carta_lida" });
+  }
+});
+
+app.get("/bot/cartas-app/:id/leituras", auth, (req, res) => {
+  try {
+    if (!isBotAdmin(req)) {
+      return res.status(403).json({ ok: false, error: "Acesso negado" });
+    }
+
+    const cartaId = String(req.params.id || "").trim();
+    const cartaExiste = readCartasApp().some(carta => String(carta?.id || "") === cartaId);
+
+    if (!cartaId || !cartaExiste) {
+      return res.status(404).json({ ok: false, error: "Carta não encontrada" });
+    }
+
+    const clientes = readClientes();
+    const leituras = Object.entries(clientes).map(([clienteId, cliente]) => {
+      const cartasLidas = Array.isArray(cliente?.cartas_lidas) ? cliente.cartas_lidas.map(String) : [];
+      const leitura = cliente?.cartas_app_leituras?.[cartaId] || null;
+      const lida = cartasLidas.includes(cartaId) || leitura?.lida === true;
+
+      if (!lida) return null;
+
+      return {
+        cliente_id: String(clienteId || ""),
+        nome_time: String(cliente?.nome_time || ""),
+        lida: true,
+        lida_em: leitura?.lida_em || ""
+      };
+    }).filter(Boolean);
+
+    return res.json({
+      ok: true,
+      carta_id: cartaId,
+      leituras
+    });
+  } catch {
+    return res.status(500).json({ ok: false, error: "erro_leituras_carta_app" });
   }
 });
 
