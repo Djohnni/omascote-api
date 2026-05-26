@@ -2577,6 +2577,7 @@ function criarPedidoHandler(categoria) {
         draft.pedido.pagamento_metodo = "brinde_app";
         draft.pedido.pagamento_confirmado_em = confirmadoEm;
         draft.pedido.brinde_escudo3d_app = true;
+        draft.pedido.qualidade_geracao = "low";
         draft.pedido.pagamento_info = {
           tipo: "brinde_app",
           status: "approved",
