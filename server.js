@@ -2603,7 +2603,7 @@ app.post(
   uploadComErroControlado(upload.fields([
     { name: "escudo1", maxCount: 1 },
     { name: "escudo2", maxCount: 1 },
-    { name: "mascote", maxCount: 1 },
+    { name: "mascote", maxCount: 4 },
     { name: "patrocinadores", maxCount: 20 }
   ])),
   (req, res) => {
@@ -2644,7 +2644,7 @@ app.post(
   uploadComErroControlado(upload.fields([
     { name: "escudo1", maxCount: 1 },
     { name: "escudo2", maxCount: 1 },
-    { name: "mascote", maxCount: 1 },
+    { name: "mascote", maxCount: 4 },
     { name: "patrocinadores", maxCount: 20 }
   ])),
   criarPedidoHandler("resultado")
