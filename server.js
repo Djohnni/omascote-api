@@ -184,6 +184,23 @@ function getCustoPedido(categoria, cliente) {
   return 0;
 }
 
+function clienteElegivelBrindeEscudo3dApp(req, cliente, whatsapp, categoria) {
+  if (categoria !== "escudo3d") return false;
+  if (!cliente || cliente.brinde_escudo3d_app_usado === true) return false;
+
+  const origemAcesso = String(req.body?.origem_acesso || "").toLowerCase();
+  const displayMode = String(req.body?.display_mode || "").toLowerCase();
+  const estaNoApp = origemAcesso === "pwa" || displayMode === "standalone";
+  if (!estaNoApp) return false;
+
+  if (Number(cliente.usados_no_ciclo || 0) > 0) return false;
+  if (Number(cliente.saldo_mensal || 0) + Number(cliente.saldo_extra || 0) > 0) return false;
+  if (cliente.brinde_mascote_ja_liberado === true) return false;
+  if (listPedidoBasesByWhatsapp(whatsapp).length > 0) return false;
+
+  return true;
+}
+
 function nomeCategoriaPedido(categoria) {
   const registryName = productsRegistry.getProductName(categoria);
   if (registryName) return registryName;
@@ -1697,6 +1714,14 @@ app.get("/me", auth, (req, res) => {
     saldo: Number(c.saldo_mensal || 0) + Number(c.saldo_extra || 0),
     usados_no_ciclo: c.usados_no_ciclo,
     brinde_mascote_disponivel: c.brinde_mascote_disponivel === true,
+    brinde_escudo3d_app_disponivel: (
+      c.brinde_escudo3d_app_usado !== true &&
+      Number(c.usados_no_ciclo || 0) === 0 &&
+      Number(c.saldo_mensal || 0) + Number(c.saldo_extra || 0) <= 0 &&
+      c.brinde_mascote_ja_liberado !== true &&
+      listPedidoBasesByWhatsapp(req.user.whatsapp).length === 0
+    ),
+    brinde_escudo3d_app_usado: c.brinde_escudo3d_app_usado === true,
     ativo: c.ativo
   });
 });
@@ -2481,9 +2506,10 @@ function criarPedidoHandler(categoria) {
     billingService.ensureCurrentBillingCycle(c, mesAtual);
 
     const temBrindeMascote = billingService.hasMascoteUniformeGift(categoria, c);
+    const brindeEscudo3dApp = clienteElegivelBrindeEscudo3dApp(req, c, whatsapp, categoria);
 
     const custoPedido = getCustoPedido(categoria, c);
-    const custoEfetivoPedido = custoPedido;
+    const custoEfetivoPedido = brindeEscudo3dApp ? 0 : custoPedido;
 
     const temSaldoSuficiente = billingService.hasEnoughBalance(c, custoEfetivoPedido);
 
@@ -2539,7 +2565,31 @@ function criarPedidoHandler(categoria) {
     if (temSaldoSuficiente) {
       billingService.applyOrderCharge(c, { custoPedido: custoEfetivoPedido, mesAtual, temBrindeMascote });
 
-      if (custoEfetivoPedido > 0) {
+      if (brindeEscudo3dApp) {
+        const confirmadoEm = new Date().toISOString();
+
+        c.brinde_escudo3d_app_usado = true;
+        c.brinde_escudo3d_app_usado_em = confirmadoEm;
+        c.brinde_escudo3d_app_pedido_id = id;
+        c.primeiro_pedido_gratis_tipo = "escudo3d";
+
+        draft.pedido.pagamento_pendente = false;
+        draft.pedido.pagamento_metodo = "brinde_app";
+        draft.pedido.pagamento_confirmado_em = confirmadoEm;
+        draft.pedido.brinde_escudo3d_app = true;
+        draft.pedido.pagamento_info = {
+          tipo: "brinde_app",
+          status: "approved",
+          valor_pago: 0,
+          payment_id: "",
+          whatsapp: whatsapp,
+          pedido_id: id,
+          confirmado_em: confirmadoEm,
+          origem: "escudo3d_primeiro_uso_app"
+        };
+
+        orderService.orderStorage.writeOrder(draft.base, draft.pedido);
+      } else if (custoEfetivoPedido > 0) {
         const confirmadoEm = new Date().toISOString();
 
         draft.pedido.pagamento_pendente = false;
