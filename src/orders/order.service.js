@@ -76,8 +76,14 @@ function getUploadPermissions(categoria) {
   };
 }
 
-function moveUploadedFile({ files, base, field, destName }) {
-  const f = files[field]?.[0];
+function getMaxFotosMascote(categoria) {
+  if (["proximo_jogo", "resultado"].includes(categoria)) return 4;
+  if (["proximo_jogo_jogador", "resultado_jogo_jogador"].includes(categoria)) return 3;
+  return 1;
+}
+
+function moveUploadedFileObject({ file, base, field, destName }) {
+  const f = file;
   if (!f) return null;
 
   const dest = path.join(base, destName);
@@ -112,8 +118,13 @@ function moveUploadedFile({ files, base, field, destName }) {
   return dest;
 }
 
+function moveUploadedFile({ files, base, field, destName }) {
+  return moveUploadedFileObject({ file: files[field]?.[0], base, field, destName });
+}
+
 function moveOrderUploads({ categoria, files, base }) {
   const permissions = getUploadPermissions(categoria);
+  const fotosExtras = [];
 
   if (permissions.podeUsarEscudo1) {
     moveUploadedFile({ files, base, field: "escudo1", destName: "escudo1.png" });
@@ -129,6 +140,15 @@ function moveOrderUploads({ categoria, files, base }) {
 
   if (permissions.podeUsarMascote) {
     moveUploadedFile({ files, base, field: "mascote", destName: "mascote.png" });
+
+    const maxFotosMascote = getMaxFotosMascote(categoria);
+    const mascoteFiles = files["mascote"] || [];
+
+    for (let i = 1; i < Math.min(mascoteFiles.length, maxFotosMascote); i++) {
+      const destName = `foto${i + 1}.png`;
+      moveUploadedFileObject({ file: mascoteFiles[i], base, field: "mascote", destName });
+      fotosExtras.push(destName);
+    }
   }
 
   const pats = permissions.podeUsarPatrocinadores ? (files["patrocinadores"] || []) : [];
@@ -140,7 +160,8 @@ function moveOrderUploads({ categoria, files, base }) {
 
   return {
     ...permissions,
-    pats
+    pats,
+    fotosExtras
   };
 }
 
@@ -155,7 +176,8 @@ function buildPedidoData({
   podeUsarEscudo1,
   podeUsarEscudo2,
   escudo2EhFotoJogador,
-  podeUsarMascote
+  podeUsarMascote,
+  fotosExtras = []
 }) {
   const {
     rodada,
@@ -188,6 +210,7 @@ function buildPedidoData({
     escudo_principal: podeUsarEscudo1 && files["escudo1"]?.[0] ? "escudo1.png" : "",
     escudo_adversario: podeUsarEscudo2 && files["escudo2"]?.[0] ? "escudo2.png" : "",
     foto_jogo: ((podeUsarMascote && files["mascote"]?.[0]) || (escudo2EhFotoJogador && files["escudo2"]?.[0])) ? "mascote.png" : "",
+    fotos_extras: Array.isArray(fotosExtras) ? fotosExtras : [],
 
     categoria: categoria,
     id,
@@ -227,6 +250,7 @@ function buildPedidoData({
       escudo_principal: pedido.escudo_principal,
       escudo_adversario: pedido.escudo_adversario,
       foto_jogo: pedido.foto_jogo,
+      fotos_extras: pedido.fotos_extras,
       categoria: pedido.categoria,
       rodada: pedido.rodada,
       data: pedido.data,
@@ -264,7 +288,8 @@ function createOrderDraft({ categoria, pedidosDir, whatsapp, mesAtual, fields, f
     podeUsarEscudo1: uploadResult.podeUsarEscudo1,
     podeUsarEscudo2: uploadResult.podeUsarEscudo2,
     escudo2EhFotoJogador: uploadResult.escudo2EhFotoJogador,
-    podeUsarMascote: uploadResult.podeUsarMascote
+    podeUsarMascote: uploadResult.podeUsarMascote,
+    fotosExtras: uploadResult.fotosExtras
   });
 
   persistNewOrder({ base, pedido });
