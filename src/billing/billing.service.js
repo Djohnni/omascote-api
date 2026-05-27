@@ -1,5 +1,5 @@
 function hasMascoteUniformeGift(categoria, cliente) {
-  return categoria === "mascote_uniforme" && cliente.brinde_mascote_disponivel === true;
+  return false;
 }
 
 function getAvailableBalance(cliente) {
