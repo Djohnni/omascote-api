@@ -46,10 +46,6 @@ function getProductPrice(productId, cliente) {
   const product = getProductByAlias(productId);
   if (!product) return null;
 
-  if (product.id === "mascote_uniforme" && cliente && cliente.brinde_mascote_disponivel === true) {
-    return 0;
-  }
-
   return Number(product.price || 0);
 }
 
