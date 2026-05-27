@@ -177,7 +177,6 @@ function getCustoPedido(categoria, cliente) {
   if (categoria === "resultado_jogo_jogador") return 8.00;
   if (categoria === "jogador_escudo") return 6.00;
   if (categoria === "mascote_uniforme") {
-    if (cliente && cliente.brinde_mascote_disponivel === true) return 0;
     return 18.00;
   }
 
