@@ -2424,12 +2424,16 @@ app.post("/webhook/mercadopago", async (req, res) => {
         const clientes = readClientes();
         const c = clientes[whatsapp];
 
-        if (c) {
+        if (c && c.primeira_compra_bonus_concedido !== true) {
           c.saldo_extra = Number(c.saldo_extra || 0) + valorBonusPedido;
+          c.primeira_compra_bonus_concedido = true;
+          c.primeira_compra_bonus_valor = valorBonusPedido;
+          c.primeira_compra_bonus_em = confirmadoEm;
           clientes[whatsapp] = c;
           writeClientes(clientes);
+          pedido.bonus_primeira_compra = true;
           pedido.bonus_saldo_extra = valorBonusPedido;
-          pedido.bonus_saldo_extra_em = new Date().toISOString();
+          pedido.bonus_saldo_extra_em = confirmadoEm;
         }
       }
 
@@ -2642,7 +2646,12 @@ function criarPedidoHandler(categoria) {
 
     removeOldPedidos(whatsapp, 15);
 
-    return res.json({ ok: true, pedido_id: id });
+    return res.json({
+      ok: true,
+      pedido_id: id,
+      pagamento_pendente: draft.pedido.pagamento_pendente === true,
+      valor_pendente: Number(draft.pedido.valor_pendente || 0)
+    });
   };
 }
 
