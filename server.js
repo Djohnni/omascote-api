@@ -39,6 +39,8 @@ const ANALYTICS_DIR = path.join(DATA_DIR, "analytics");
 const EVENTOS_CLIENTES_FILE = path.join(DATA_DIR, "eventos_clientes.json");
 const CARTAS_APP_FILE = path.join(DATA_DIR, "cartas_app.json");
 const CARTAS_APP_IMAGENS_DIR = path.join(DATA_DIR, "cartas_app_imagens");
+const CUPONS_JOGADOR_ESCUDO_FILE = path.join(DATA_DIR, "cupons_jogador_escudo.json");
+const CUPONS_JOGADOR_ESCUDO_LOCK = path.join(DATA_DIR, "cupons_jogador_escudo.lock");
 const PREVIEW_LIMITER_MAX = 3;
 const PREVIEW_LIMITER_TTL_MS = 6 * 60 * 60 * 1000;
 
@@ -113,9 +115,50 @@ if (!fs.existsSync(CARTAS_APP_FILE)) {
   fs.writeFileSync(CARTAS_APP_FILE, JSON.stringify([], null, 2), "utf8");
 }
 
+if (!fs.existsSync(CUPONS_JOGADOR_ESCUDO_FILE)) {
+  fs.writeFileSync(CUPONS_JOGADOR_ESCUDO_FILE, JSON.stringify({}, null, 2), "utf8");
+}
+
 // ===== HELPERS =====
 function readClientes() {
   return JSON.parse(fs.readFileSync(CLIENTES_FILE, "utf8") || "{}");
+}
+
+function normalizarCupomCodigo(codigo) {
+  return String(codigo || "").trim().toLowerCase();
+}
+
+function readCuponsJogadorEscudo() {
+  try {
+    return JSON.parse(fs.readFileSync(CUPONS_JOGADOR_ESCUDO_FILE, "utf8") || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function writeCuponsJogadorEscudo(obj) {
+  fs.writeFileSync(CUPONS_JOGADOR_ESCUDO_FILE, JSON.stringify(obj || {}, null, 2), "utf8");
+}
+
+function adquirirLockCupomJogadorEscudo() {
+  try {
+    if (fs.existsSync(CUPONS_JOGADOR_ESCUDO_LOCK)) {
+      const stat = fs.statSync(CUPONS_JOGADOR_ESCUDO_LOCK);
+      if (Date.now() - stat.mtimeMs > 30000) fs.unlinkSync(CUPONS_JOGADOR_ESCUDO_LOCK);
+    }
+
+    const fd = fs.openSync(CUPONS_JOGADOR_ESCUDO_LOCK, "wx");
+    fs.closeSync(fd);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function liberarLockCupomJogadorEscudo() {
+  try {
+    if (fs.existsSync(CUPONS_JOGADOR_ESCUDO_LOCK)) fs.unlinkSync(CUPONS_JOGADOR_ESCUDO_LOCK);
+  } catch {}
 }
 
 function writeClientes(obj) {
@@ -2512,7 +2555,41 @@ function criarPedidoHandler(categoria) {
     const brindeEscudo3dApp = clienteElegivelBrindeEscudo3dApp(req, c, whatsapp, categoria);
 
     const custoPedido = getCustoPedido(categoria, c);
-    const custoEfetivoPedido = brindeEscudo3dApp ? 0 : custoPedido;
+    const cupomCodigo = normalizarCupomCodigo(req.body?.cupom_codigo);
+    let cupomAplicado = false;
+    let cupomLockAtivo = false;
+    let cuponsJogadorEscudo = null;
+    let custoEfetivoPedido = brindeEscudo3dApp ? 0 : custoPedido;
+
+    if (cupomCodigo) {
+      if (categoria !== "jogador_escudo") {
+        return res.status(400).json({ ok: false, error: "Cupom válido apenas para Jogador + Escudo." });
+      }
+
+      cupomLockAtivo = adquirirLockCupomJogadorEscudo();
+
+      if (!cupomLockAtivo) {
+        return res.status(409).json({ ok: false, error: "Cupom em validação. Tente novamente em alguns segundos." });
+      }
+
+      cuponsJogadorEscudo = readCuponsJogadorEscudo();
+      const cupom = cuponsJogadorEscudo[cupomCodigo];
+
+      if (!cupom) {
+        liberarLockCupomJogadorEscudo();
+        cupomLockAtivo = false;
+        return res.status(400).json({ ok: false, error: "Cupom não encontrado." });
+      }
+
+      if (cupom.ativo === false || cupom.usado === true) {
+        liberarLockCupomJogadorEscudo();
+        cupomLockAtivo = false;
+        return res.status(400).json({ ok: false, error: "Cupom já usado ou inativo." });
+      }
+
+      cupomAplicado = true;
+      custoEfetivoPedido = 0;
+    }
 
     const temSaldoSuficiente = billingService.hasEnoughBalance(c, custoEfetivoPedido);
 
@@ -2561,6 +2638,11 @@ function criarPedidoHandler(categoria) {
         ok: false,
         error: e.message || "Erro ao salvar arquivos do pedido"
       });
+    } finally {
+      if (!draft && cupomLockAtivo) {
+        liberarLockCupomJogadorEscudo();
+        cupomLockAtivo = false;
+      }
     }
 
     const id = draft.id;
@@ -2568,7 +2650,40 @@ function criarPedidoHandler(categoria) {
     if (temSaldoSuficiente) {
       billingService.applyOrderCharge(c, { custoPedido: custoEfetivoPedido, mesAtual, temBrindeMascote });
 
-      if (brindeEscudo3dApp) {
+      if (cupomAplicado) {
+        const confirmadoEm = new Date().toISOString();
+
+        draft.pedido.cupom_aplicado = true;
+        draft.pedido.cupom_codigo = cupomCodigo;
+        draft.pedido.cupom_tipo = "jogador_escudo_100";
+        draft.pedido.pagamento_pendente = false;
+        draft.pedido.pagamento_metodo = "cupom";
+        draft.pedido.pagamento_confirmado_em = confirmadoEm;
+        draft.pedido.pagamento_info = {
+          tipo: "cupom",
+          status: "approved",
+          valor_pago: 0,
+          desconto: Number(custoPedido || 0),
+          payment_id: "",
+          whatsapp: whatsapp,
+          pedido_id: id,
+          confirmado_em: confirmadoEm
+        };
+
+        if (cuponsJogadorEscudo) {
+          cuponsJogadorEscudo[cupomCodigo] = {
+            ...(cuponsJogadorEscudo[cupomCodigo] || {}),
+            ativo: cuponsJogadorEscudo[cupomCodigo]?.ativo !== false,
+            usado: true,
+            usado_por: whatsapp,
+            pedido_id: id,
+            usado_em: confirmadoEm
+          };
+          writeCuponsJogadorEscudo(cuponsJogadorEscudo);
+        }
+
+        orderService.orderStorage.writeOrder(draft.base, draft.pedido);
+      } else if (brindeEscudo3dApp) {
         const confirmadoEm = new Date().toISOString();
 
         c.brinde_escudo3d_app_usado = true;
@@ -2644,13 +2759,20 @@ function criarPedidoHandler(categoria) {
     clientes[whatsapp] = c;
     writeClientes(clientes);
 
+    if (cupomLockAtivo) {
+      liberarLockCupomJogadorEscudo();
+      cupomLockAtivo = false;
+    }
+
     removeOldPedidos(whatsapp, 15);
 
     return res.json({
       ok: true,
       pedido_id: id,
       pagamento_pendente: draft.pedido.pagamento_pendente === true,
-      valor_pendente: Number(draft.pedido.valor_pendente || 0)
+      valor_pendente: Number(draft.pedido.valor_pendente || 0),
+      cupom_aplicado: cupomAplicado,
+      mensagem: cupomAplicado ? "Cupom aplicado. Sua arte Jogador + Escudo ficou R$0." : undefined
     });
   };
 }
