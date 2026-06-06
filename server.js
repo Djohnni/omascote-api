@@ -1963,6 +1963,52 @@ app.get("/bot/cartas-app/:id/debug-leituras", auth, (req, res) => {
   }
 });
 
+app.post("/bot/cupons-jogador-escudo", auth, (req, res) => {
+  let lockAtivo = false;
+
+  try {
+    if (!isBotAdmin(req)) {
+      return res.status(403).json({ ok: false, error: "Acesso negado" });
+    }
+
+    const codigo = normalizarCupomCodigo(req.body?.codigo);
+
+    if (!codigo || codigo.length < 3) {
+      return res.status(400).json({ ok: false, error: "Código de cupom inválido." });
+    }
+
+    lockAtivo = adquirirLockCupomJogadorEscudo();
+
+    if (!lockAtivo) {
+      return res.status(409).json({ ok: false, error: "Arquivo de cupons em uso. Tente novamente em alguns segundos." });
+    }
+
+    const cupons = readCuponsJogadorEscudo();
+
+    if (cupons[codigo]) {
+      return res.status(409).json({ ok: false, error: "Cupom já existe." });
+    }
+
+    const cupom = {
+      ativo: true,
+      usado: false
+    };
+
+    cupons[codigo] = cupom;
+    writeCuponsJogadorEscudo(cupons);
+
+    return res.json({
+      ok: true,
+      codigo,
+      cupom
+    });
+  } catch {
+    return res.status(500).json({ ok: false, error: "Erro ao criar cupom." });
+  } finally {
+    if (lockAtivo) liberarLockCupomJogadorEscudo();
+  }
+});
+
 app.get("/bot/clientes-arte-semana", auth, (req, res) => {
   try {
     if (!isBotAdmin(req)) {
