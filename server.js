@@ -39,6 +39,7 @@ const ANALYTICS_DIR = path.join(DATA_DIR, "analytics");
 const EVENTOS_CLIENTES_FILE = path.join(DATA_DIR, "eventos_clientes.json");
 const CARTAS_APP_FILE = path.join(DATA_DIR, "cartas_app.json");
 const CARTAS_APP_IMAGENS_DIR = path.join(DATA_DIR, "cartas_app_imagens");
+const CUPONS_FILE = path.join(DATA_DIR, "cupons.json");
 const CUPONS_JOGADOR_ESCUDO_FILE = path.join(DATA_DIR, "cupons_jogador_escudo.json");
 const CUPONS_JOGADOR_ESCUDO_LOCK = path.join(DATA_DIR, "cupons_jogador_escudo.lock");
 const PREVIEW_LIMITER_MAX = 3;
@@ -115,9 +116,23 @@ if (!fs.existsSync(CARTAS_APP_FILE)) {
   fs.writeFileSync(CARTAS_APP_FILE, JSON.stringify([], null, 2), "utf8");
 }
 
+if (!fs.existsSync(CUPONS_FILE)) {
+  fs.writeFileSync(CUPONS_FILE, JSON.stringify({
+    voltou18: {
+      codigo: "VOLTOU18",
+      tipo: "percentual",
+      percentual: 50,
+      produtos: "todos",
+      ativo: true
+    }
+  }, null, 2), "utf8");
+}
+
 if (!fs.existsSync(CUPONS_JOGADOR_ESCUDO_FILE)) {
   fs.writeFileSync(CUPONS_JOGADOR_ESCUDO_FILE, JSON.stringify({}, null, 2), "utf8");
 }
+
+ensureCuponsIniciais();
 
 // ===== HELPERS =====
 function readClientes() {
@@ -126,6 +141,33 @@ function readClientes() {
 
 function normalizarCupomCodigo(codigo) {
   return String(codigo || "").trim().toLowerCase();
+}
+
+function readCupons() {
+  try {
+    return JSON.parse(fs.readFileSync(CUPONS_FILE, "utf8") || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function writeCupons(obj) {
+  fs.writeFileSync(CUPONS_FILE, JSON.stringify(obj || {}, null, 2), "utf8");
+}
+
+function ensureCuponsIniciais() {
+  const cupons = readCupons();
+
+  if (!cupons.voltou18) {
+    cupons.voltou18 = {
+      codigo: "VOLTOU18",
+      tipo: "percentual",
+      percentual: 50,
+      produtos: "todos",
+      ativo: true
+    };
+    writeCupons(cupons);
+  }
 }
 
 function readCuponsJogadorEscudo() {
@@ -224,6 +266,113 @@ function getCustoPedido(categoria, cliente) {
   }
 
   return 0;
+}
+
+function produtoAceitaCupom(cupom, categoria) {
+  const produtos = cupom?.produtos;
+
+  if (!produtos || produtos === "todos") return true;
+  if (Array.isArray(produtos)) return produtos.map(String).map(normalizarCupomCodigo).includes(normalizarCupomCodigo(categoria));
+
+  return normalizarCupomCodigo(produtos) === normalizarCupomCodigo(categoria);
+}
+
+function calcularDescontoCupom(cupom, valorOriginal) {
+  const original = Number(valorOriginal || 0);
+
+  if (!cupom || original <= 0) return 0;
+
+  if (cupom.tipo === "percentual") {
+    const percentual = Math.max(0, Math.min(100, Number(cupom.percentual || 0)));
+    return Number((original * percentual / 100).toFixed(2));
+  }
+
+  if (cupom.tipo === "valor") {
+    return Number(Math.min(original, Math.max(0, Number(cupom.valor || 0))).toFixed(2));
+  }
+
+  return 0;
+}
+
+function validarCupomPedido({ codigo, categoria, valorOriginal }) {
+  const cupomCodigo = normalizarCupomCodigo(codigo);
+
+  if (!cupomCodigo) {
+    return {
+      ok: true,
+      cupomAplicado: false,
+      valorOriginal: Number(Number(valorOriginal || 0).toFixed(2)),
+      desconto: 0,
+      valorFinal: Number(Number(valorOriginal || 0).toFixed(2))
+    };
+  }
+
+  const original = Number(Number(valorOriginal || 0).toFixed(2));
+
+  if (original <= 0) {
+    return { ok: false, status: 400, error: "Cupom válido apenas para produtos pagos." };
+  }
+
+  const cupons = readCupons();
+  const cupom = cupons[cupomCodigo];
+
+  if (!cupom) {
+    return { ok: false, status: 400, error: "Cupom não encontrado." };
+  }
+
+  if (cupom.ativo === false) {
+    return { ok: false, status: 400, error: "Cupom inativo." };
+  }
+
+  if (!produtoAceitaCupom(cupom, categoria)) {
+    return { ok: false, status: 400, error: "Cupom não é válido para este produto." };
+  }
+
+  const desconto = calcularDescontoCupom(cupom, original);
+
+  if (desconto <= 0) {
+    return { ok: false, status: 400, error: "Cupom sem desconto disponível." };
+  }
+
+  const valorFinal = Number(Math.max(0, original - desconto).toFixed(2));
+
+  return {
+    ok: true,
+    cupomAplicado: true,
+    cupomCodigo,
+    cupom,
+    valorOriginal: original,
+    desconto,
+    valorFinal,
+    resumo: {
+      codigo: String(cupom.codigo || cupomCodigo).toUpperCase(),
+      tipo: cupom.tipo || "percentual",
+      percentual: cupom.tipo === "percentual" ? Number(cupom.percentual || 0) : undefined,
+      valor_original: original,
+      desconto,
+      valor_final: valorFinal
+    }
+  };
+}
+
+function aplicarResumoCupomNoPedido(pedido, resultadoCupom) {
+  if (!resultadoCupom?.cupomAplicado) return;
+
+  pedido.cupom_aplicado = true;
+  pedido.cupom_codigo = resultadoCupom.resumo.codigo;
+  pedido.cupom_tipo = resultadoCupom.resumo.tipo;
+  pedido.cupom_percentual = resultadoCupom.resumo.percentual;
+  pedido.valor_original = resultadoCupom.valorOriginal;
+  pedido.valor_desconto = resultadoCupom.desconto;
+  pedido.valor_final = resultadoCupom.valorFinal;
+  pedido.desconto_info = {
+    cupom_codigo: resultadoCupom.resumo.codigo,
+    tipo: resultadoCupom.resumo.tipo,
+    percentual: resultadoCupom.resumo.percentual,
+    valor_original: resultadoCupom.valorOriginal,
+    desconto: resultadoCupom.desconto,
+    valor_final: resultadoCupom.valorFinal
+  };
 }
 
 function clienteElegivelBrindeEscudo3dApp(req, cliente, whatsapp, categoria) {
@@ -2601,13 +2750,18 @@ function criarPedidoHandler(categoria) {
     const brindeEscudo3dApp = clienteElegivelBrindeEscudo3dApp(req, c, whatsapp, categoria);
 
     const custoPedido = getCustoPedido(categoria, c);
+    const valorBaseParaCupom = brindeEscudo3dApp ? 0 : custoPedido;
     const cupomCodigo = normalizarCupomCodigo(req.body?.cupom_codigo);
-    let cupomAplicado = false;
     let cupomLockAtivo = false;
     let cuponsJogadorEscudo = null;
-    let custoEfetivoPedido = brindeEscudo3dApp ? 0 : custoPedido;
+    let cupomLegacyJogadorEscudo = false;
+    let resultadoCupom = validarCupomPedido({
+      codigo: cupomCodigo,
+      categoria,
+      valorOriginal: valorBaseParaCupom
+    });
 
-    if (cupomCodigo) {
+    if (!resultadoCupom.ok && cupomCodigo && categoria === "jogador_escudo" && String(resultadoCupom.error || "").toLowerCase().includes("encontrado")) {
       if (categoria !== "jogador_escudo") {
         return res.status(400).json({ ok: false, error: "Cupom válido apenas para Jogador + Escudo." });
       }
@@ -2633,10 +2787,33 @@ function criarPedidoHandler(categoria) {
         return res.status(400).json({ ok: false, error: "Cupom já usado ou inativo." });
       }
 
-      cupomAplicado = true;
-      custoEfetivoPedido = 0;
+      cupomLegacyJogadorEscudo = true;
+      resultadoCupom = {
+        ok: true,
+        cupomAplicado: true,
+        cupomCodigo,
+        valorOriginal: Number(Number(valorBaseParaCupom || 0).toFixed(2)),
+        desconto: Number(Number(valorBaseParaCupom || 0).toFixed(2)),
+        valorFinal: 0,
+        resumo: {
+          codigo: String(cupomCodigo || "").toUpperCase(),
+          tipo: "valor",
+          valor_original: Number(Number(valorBaseParaCupom || 0).toFixed(2)),
+          desconto: Number(Number(valorBaseParaCupom || 0).toFixed(2)),
+          valor_final: 0
+        }
+      };
     }
 
+    if (!resultadoCupom.ok) {
+      return res.status(resultadoCupom.status || 400).json({
+        ok: false,
+        error: resultadoCupom.error || "Cupom invÃ¡lido."
+      });
+    }
+
+    const cupomAplicado = resultadoCupom.cupomAplicado === true;
+    let custoEfetivoPedido = brindeEscudo3dApp ? 0 : resultadoCupom.valorFinal;
     const temSaldoSuficiente = billingService.hasEnoughBalance(c, custoEfetivoPedido);
 
     const fields = orderService.normalizeOrderBody(req.body);
@@ -2696,12 +2873,12 @@ function criarPedidoHandler(categoria) {
     if (temSaldoSuficiente) {
       billingService.applyOrderCharge(c, { custoPedido: custoEfetivoPedido, mesAtual, temBrindeMascote });
 
-      if (cupomAplicado) {
+      if (cupomAplicado && custoEfetivoPedido <= 0) {
         const confirmadoEm = new Date().toISOString();
 
         draft.pedido.cupom_aplicado = true;
-        draft.pedido.cupom_codigo = cupomCodigo;
-        draft.pedido.cupom_tipo = "jogador_escudo_100";
+        draft.pedido.cupom_codigo = resultadoCupom.resumo.codigo;
+        draft.pedido.cupom_tipo = resultadoCupom.resumo.tipo;
         draft.pedido.pagamento_pendente = false;
         draft.pedido.pagamento_metodo = "cupom";
         draft.pedido.pagamento_confirmado_em = confirmadoEm;
@@ -2709,14 +2886,15 @@ function criarPedidoHandler(categoria) {
           tipo: "cupom",
           status: "approved",
           valor_pago: 0,
-          desconto: Number(custoPedido || 0),
+          desconto: resultadoCupom.desconto,
           payment_id: "",
           whatsapp: whatsapp,
           pedido_id: id,
           confirmado_em: confirmadoEm
         };
+        aplicarResumoCupomNoPedido(draft.pedido, resultadoCupom);
 
-        if (cuponsJogadorEscudo) {
+        if (cupomLegacyJogadorEscudo && cuponsJogadorEscudo) {
           cuponsJogadorEscudo[cupomCodigo] = {
             ...(cuponsJogadorEscudo[cupomCodigo] || {}),
             ativo: cuponsJogadorEscudo[cupomCodigo]?.ativo !== false,
@@ -2770,6 +2948,7 @@ function criarPedidoHandler(categoria) {
           confirmado_em: confirmadoEm,
           origem: "desconto_automatico_criacao"
         };
+        aplicarResumoCupomNoPedido(draft.pedido, resultadoCupom);
 
         draft.pedido.mensagens_cliente = Array.isArray(draft.pedido.mensagens_cliente)
           ? draft.pedido.mensagens_cliente
@@ -2798,6 +2977,7 @@ function criarPedidoHandler(categoria) {
       draft.pedido.pagamento_pendente = true;
       draft.pedido.valor_pendente = custoEfetivoPedido;
       draft.pedido.motivo_pagamento_pendente = "saldo_insuficiente";
+      aplicarResumoCupomNoPedido(draft.pedido, resultadoCupom);
       orderService.orderStorage.writeOrder(draft.base, draft.pedido);
       registrarPreviewPendente({ identifiers: previewLimiterIdentifiers, whatsapp, pedidoId: id });
     }
@@ -2818,7 +2998,13 @@ function criarPedidoHandler(categoria) {
       pagamento_pendente: draft.pedido.pagamento_pendente === true,
       valor_pendente: Number(draft.pedido.valor_pendente || 0),
       cupom_aplicado: cupomAplicado,
-      mensagem: cupomAplicado ? "Cupom aplicado. Sua arte Jogador + Escudo ficou R$0." : undefined
+      desconto: cupomAplicado ? resultadoCupom.resumo : null,
+      valor_original: cupomAplicado ? resultadoCupom.valorOriginal : Number(custoPedido || 0),
+      valor_desconto: cupomAplicado ? resultadoCupom.desconto : 0,
+      valor_final: cupomAplicado ? resultadoCupom.valorFinal : Number(custoEfetivoPedido || 0),
+      mensagem: cupomAplicado
+        ? `Cupom ${resultadoCupom.resumo.codigo} aplicado. Valor final: R$ ${resultadoCupom.valorFinal.toFixed(2).replace(".", ",")}.`
+        : undefined
     });
   };
 }
@@ -3013,6 +3199,10 @@ app.get("/meus-pedidos", auth, (req, res) => {
       aprovado_cliente: aprovadoCliente,
       pagamento_pendente: pagamentoPendente,
       valor_pendente: Number(item.pedido.valor_pendente || 0),
+      valor_original: Number(item.pedido.valor_original || 0),
+      valor_desconto: Number(item.pedido.valor_desconto || 0),
+      valor_final: Number(item.pedido.valor_final || item.pedido.valor_pendente || 0),
+      desconto_info: item.pedido.desconto_info || null,
       motivo_pagamento_pendente: item.pedido.motivo_pagamento_pendente || "",
       ajuste_automatico_usado: ajusteUsado,
       motivo_ajuste: item.pedido.motivo_ajuste || "",
@@ -3147,7 +3337,12 @@ app.post("/pedidos/:id/gerar-pix", auth, async (req, res) => {
         pix_copia_cola: pedido.pix_copia_cola,
         qr_code_base64: pedido.pix_qr_code_base64 || "",
         ticket_url: pedido.pix_ticket_url || "",
-        payment_id: pedido.mp_payment_id
+        payment_id: pedido.mp_payment_id,
+        valor_pendente: Number(pedido.valor_pendente || 0),
+        valor_original: Number(pedido.valor_original || 0),
+        valor_desconto: Number(pedido.valor_desconto || 0),
+        valor_final: Number(pedido.valor_final || pedido.valor_pendente || 0),
+        desconto_info: pedido.desconto_info || null
       });
     }
 
@@ -3209,7 +3404,12 @@ app.post("/pedidos/:id/gerar-pix", auth, async (req, res) => {
       pix_copia_cola: pixCopiaCola,
       qr_code_base64: qrCodeBase64,
       ticket_url: ticketUrl,
-      payment_id: pedido.mp_payment_id
+      payment_id: pedido.mp_payment_id,
+      valor_pendente: Number(pedido.valor_pendente || 0),
+      valor_original: Number(pedido.valor_original || 0),
+      valor_desconto: Number(pedido.valor_desconto || 0),
+      valor_final: Number(pedido.valor_final || pedido.valor_pendente || 0),
+      desconto_info: pedido.desconto_info || null
     });
   } catch (e) {
     return res.status(500).json({ ok: false, error: "Erro interno ao gerar Pix" });
@@ -3231,6 +3431,10 @@ app.get("/pedidos/:id/pagamento-info", auth, (req, res) => {
     ok: true,
     pagamento_pendente: pedido.pagamento_pendente === true,
     valor_pendente: Number(pedido.valor_pendente || 0),
+    valor_original: Number(pedido.valor_original || 0),
+    valor_desconto: Number(pedido.valor_desconto || 0),
+    valor_final: Number(pedido.valor_final || pedido.valor_pendente || 0),
+    desconto_info: pedido.desconto_info || null,
     mp_payment_status: pedido.mp_payment_status || "",
     pix_copia_cola: pedido.pix_copia_cola || "",
     qr_code_base64: pedido.pix_qr_code_base64 || "",
@@ -3411,6 +3615,10 @@ app.get("/pedidos/:id/info", auth, (req, res) => {
     aprovado_cliente: pedido.aprovado_cliente === true,
     pagamento_pendente: pedido.pagamento_pendente === true,
     valor_pendente: Number(pedido.valor_pendente || 0),
+    valor_original: Number(pedido.valor_original || 0),
+    valor_desconto: Number(pedido.valor_desconto || 0),
+    valor_final: Number(pedido.valor_final || pedido.valor_pendente || 0),
+    desconto_info: pedido.desconto_info || null,
     motivo_pagamento_pendente: pedido.motivo_pagamento_pendente || "",
     ajuste_automatico_usado: pedido.ajuste_automatico_usado === true,
     motivo_ajuste: pedido.motivo_ajuste || "",
