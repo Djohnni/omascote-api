@@ -171,7 +171,7 @@ function novoCupomVoltou18() {
     produtos: "todos",
     validade_inicio: null,
     validade_fim: null,
-    limite_usos_total: null,
+    limite_usos_total: 100000,
     usos_total: 0,
     limite_usos_por_cliente: null,
     usos_por_cliente: {},
@@ -201,7 +201,11 @@ function ensureCuponsIniciais() {
     cupons.voltou18 = novoCupomVoltou18();
     alterado = true;
   } else {
-    const normalizado = normalizarCupomParaArmazenamento("voltou18", cupons.voltou18, { parcial: true, existente: cupons.voltou18 });
+    const legadoVoltou18 = { ...cupons.voltou18 };
+    if (!Number(legadoVoltou18.limite_usos_total || 0)) {
+      legadoVoltou18.limite_usos_total = 100000;
+    }
+    const normalizado = normalizarCupomParaArmazenamento("voltou18", legadoVoltou18, { parcial: true, existente: legadoVoltou18 });
     cupons.voltou18 = {
       ...normalizado,
       codigo: normalizado.codigo || "VOLTOU18",
@@ -212,6 +216,9 @@ function ensureCuponsIniciais() {
       valor: normalizado.valor ?? null,
       produtos: normalizado.produtos || "todos"
     };
+    if (!Number(cupons.voltou18.limite_usos_total || 0)) {
+      cupons.voltou18.limite_usos_total = 100000;
+    }
     alterado = true;
   }
 
@@ -285,7 +292,7 @@ function normalizarCupomParaArmazenamento(codigoParam, body = {}, { parcial = fa
     produtos: body.produtos === undefined ? (base.produtos || "todos") : normalizarListaProdutosCupom(body.produtos),
     validade_inicio: base.validade_inicio ?? null,
     validade_fim: base.validade_fim ?? null,
-    limite_usos_total: base.limite_usos_total ?? null,
+    limite_usos_total: base.limite_usos_total ?? (parcial ? null : 1),
     usos_total: Number(base.usos_total || 0),
     limite_usos_por_cliente: base.limite_usos_por_cliente ?? null,
     usos_por_cliente: base.usos_por_cliente && typeof base.usos_por_cliente === "object" && !Array.isArray(base.usos_por_cliente)
@@ -352,12 +359,16 @@ function normalizarCupomParaArmazenamento(codigoParam, body = {}, { parcial = fa
 
   if (body.limite_usos_total !== undefined) {
     const limite = normalizarNumeroOpcional(body.limite_usos_total, { min: 1, integer: true });
-    if (limite === undefined) {
+    if (limite === undefined || limite === null) {
       const err = new Error("Limite total de usos inválido.");
       err.status = 400;
       throw err;
     }
     cupom.limite_usos_total = limite;
+  }
+
+  if (!parcial && !Number(cupom.limite_usos_total || 0)) {
+    cupom.limite_usos_total = 1;
   }
 
   if (body.limite_usos_por_cliente !== undefined) {
@@ -394,6 +405,18 @@ function normalizarCupomParaArmazenamento(codigoParam, body = {}, { parcial = fa
   }
 
   return cupom;
+}
+
+function gerarCodigoCupomAutomatico(prefixo = "PROMO") {
+  const safePrefix = String(prefixo || "PROMO").trim().toUpperCase().replace(/[^A-Z0-9]+/g, "").slice(0, 16) || "PROMO";
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let suffix = "";
+
+  for (let i = 0; i < 5; i += 1) {
+    suffix += alphabet[Math.floor(Math.random() * alphabet.length)];
+  }
+
+  return `${safePrefix}-${suffix}`;
 }
 
 function readCuponsJogadorEscudo() {
@@ -675,6 +698,9 @@ function registrarUsoCupomPedido(pedido, whatsapp) {
     }
 
     cupom.atualizado_em = new Date().toISOString();
+    if (Number(cupom.limite_usos_total || 0) > 0 && Number(cupom.usos_total || 0) >= Number(cupom.limite_usos_total || 0)) {
+      cupom.ativo = false;
+    }
     cupons[codigo] = cupom;
     writeCupons(cupons);
 
@@ -2467,6 +2493,69 @@ app.post("/admin/cupons", auth, (req, res) => {
     return res.status(201).json({ ok: true, codigo, cupom });
   } catch (e) {
     return res.status(e.status || 500).json({ ok: false, error: e.message || "Erro ao criar cupom." });
+  } finally {
+    if (lockAtivo) liberarLockCupons();
+  }
+});
+
+app.post("/admin/cupons/gerar", auth, (req, res) => {
+  let lockAtivo = false;
+
+  try {
+    if (!isBotAdmin(req)) {
+      return res.status(403).json({ ok: false, error: "Acesso negado" });
+    }
+
+    const quantidade = Math.max(1, Math.min(100, Math.floor(Number(req.body?.quantidade || 1))));
+    const codigoManual = normalizarCupomCodigo(req.body?.codigo);
+    const prefixo = req.body?.prefixo || codigoManual || "PROMO";
+
+    if (codigoManual && quantidade > 1) {
+      return res.status(400).json({ ok: false, error: "Codigo manual so pode gerar 1 cupom. Para varios cupons, deixe o codigo em branco e use prefixo." });
+    }
+
+    lockAtivo = adquirirLockCupons();
+    if (!lockAtivo) {
+      return res.status(409).json({ ok: false, error: "Arquivo de cupons em uso. Tente novamente em alguns segundos." });
+    }
+
+    const cupons = readCupons();
+    const criados = [];
+
+    for (let i = 0; i < quantidade; i += 1) {
+      let codigoPublico = codigoManual ? cupomCodigoPublico(codigoManual) : gerarCodigoCupomAutomatico(prefixo);
+      let codigo = normalizarCupomCodigo(codigoPublico);
+      let tentativas = 0;
+
+      while (cupons[codigo]) {
+        if (codigoManual) {
+          return res.status(409).json({ ok: false, error: "Cupom ja existe." });
+        }
+        codigoPublico = gerarCodigoCupomAutomatico(prefixo);
+        codigo = normalizarCupomCodigo(codigoPublico);
+        tentativas += 1;
+        if (tentativas > 20) {
+          return res.status(500).json({ ok: false, error: "Nao foi possivel gerar codigos unicos." });
+        }
+      }
+
+      const cupom = normalizarCupomParaArmazenamento(codigo, {
+        ...req.body,
+        codigo: codigoPublico,
+        limite_usos_total: req.body?.limite_usos_total || 1,
+        usos_total: 0,
+        usos_por_cliente: {}
+      });
+
+      cupons[codigo] = cupom;
+      criados.push({ codigo, cupom });
+    }
+
+    writeCupons(cupons);
+
+    return res.status(201).json({ ok: true, quantidade: criados.length, cupons: criados });
+  } catch (e) {
+    return res.status(e.status || 500).json({ ok: false, error: e.message || "Erro ao gerar cupons." });
   } finally {
     if (lockAtivo) liberarLockCupons();
   }
