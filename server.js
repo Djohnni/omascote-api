@@ -3474,6 +3474,93 @@ function criarPedidoHandler(categoria) {
 }
 
 // ===== CRIAR PEDIDO =====
+app.post("/cupons/preco", (req, res) => {
+  try {
+    let whatsapp = "";
+    let cliente = null;
+    const h = req.headers.authorization || "";
+    const token = h.startsWith("Bearer ") ? h.slice(7) : "";
+
+    if (token) {
+      try {
+        const user = jwt.verify(token, JWT_SECRET);
+        whatsapp = user?.whatsapp || "";
+        cliente = whatsapp ? readClientes()[whatsapp] || null : null;
+      } catch {}
+    }
+
+    const body = req.body || {};
+    const product =
+      productsRegistry.getProductByAlias(body.product_id || body.categoria) ||
+      productsRegistry.getProductByFlyerTipo(body.flyer_tipo);
+    const categoria = product?.id || String(body.categoria || body.product_id || "").trim().toLowerCase();
+
+    if (!categoria) {
+      return res.status(400).json({ ok: false, error: "Produto invalido." });
+    }
+
+    const brindeEscudo3dApp = cliente
+      ? clienteElegivelBrindeEscudo3dApp({ ...req, body }, cliente, whatsapp, categoria)
+      : false;
+    const custoPedido = getCustoPedido(categoria, cliente);
+    const valorOriginal = brindeEscudo3dApp ? 0 : custoPedido;
+    const cupomCodigo = normalizarCupomCodigo(body.cupom_codigo);
+    let resultadoCupom = validarCupomPedido({
+      codigo: cupomCodigo,
+      categoria,
+      valorOriginal,
+      whatsapp
+    });
+
+    if (!resultadoCupom.ok && cupomCodigo && categoria === "jogador_escudo" && String(resultadoCupom.error || "").toLowerCase().includes("encontrado")) {
+      const cupomLegacy = readCuponsJogadorEscudo()[cupomCodigo];
+
+      if (cupomLegacy && cupomLegacy.ativo !== false && cupomLegacy.usado !== true) {
+        const original = Number(Number(valorOriginal || 0).toFixed(2));
+        resultadoCupom = {
+          ok: true,
+          cupomAplicado: true,
+          cupomCodigo,
+          valorOriginal: original,
+          desconto: original,
+          valorFinal: 0,
+          resumo: {
+            codigo: String(cupomCodigo || "").toUpperCase(),
+            tipo: "valor",
+            valor: original,
+            valor_original: original,
+            desconto: original,
+            valor_final: 0
+          }
+        };
+      }
+    }
+
+    if (!resultadoCupom.ok) {
+      return res.status(resultadoCupom.status || 400).json({
+        ok: false,
+        error: resultadoCupom.error || "Cupom invalido.",
+        cupom_aplicado: false,
+        valor_original: Number(valorOriginal || 0),
+        valor_desconto: 0,
+        valor_final: Number(valorOriginal || 0)
+      });
+    }
+
+    return res.json({
+      ok: true,
+      produto: categoria,
+      cupom_aplicado: resultadoCupom.cupomAplicado === true,
+      desconto: resultadoCupom.cupomAplicado ? resultadoCupom.resumo : null,
+      valor_original: resultadoCupom.cupomAplicado ? resultadoCupom.valorOriginal : Number(valorOriginal || 0),
+      valor_desconto: resultadoCupom.cupomAplicado ? resultadoCupom.desconto : 0,
+      valor_final: resultadoCupom.cupomAplicado ? resultadoCupom.valorFinal : Number(valorOriginal || 0)
+    });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: "Erro ao calcular cupom." });
+  }
+});
+
 app.post(
   "/pedidos",
   auth,
