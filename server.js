@@ -40,6 +40,7 @@ const EVENTOS_CLIENTES_FILE = path.join(DATA_DIR, "eventos_clientes.json");
 const CARTAS_APP_FILE = path.join(DATA_DIR, "cartas_app.json");
 const CARTAS_APP_IMAGENS_DIR = path.join(DATA_DIR, "cartas_app_imagens");
 const CUPONS_FILE = path.join(DATA_DIR, "cupons.json");
+const CUPONS_LOCK = path.join(DATA_DIR, "cupons.lock");
 const CUPONS_JOGADOR_ESCUDO_FILE = path.join(DATA_DIR, "cupons_jogador_escudo.json");
 const CUPONS_JOGADOR_ESCUDO_LOCK = path.join(DATA_DIR, "cupons_jogador_escudo.lock");
 const PREVIEW_LIMITER_MAX = 3;
@@ -120,10 +121,20 @@ if (!fs.existsSync(CUPONS_FILE)) {
   fs.writeFileSync(CUPONS_FILE, JSON.stringify({
     voltou18: {
       codigo: "VOLTOU18",
+      descricao: "Cupom de retorno 50%",
+      ativo: true,
       tipo: "percentual",
       percentual: 50,
+      valor: null,
       produtos: "todos",
-      ativo: true
+      validade_inicio: null,
+      validade_fim: null,
+      limite_usos_total: null,
+      usos_total: 0,
+      limite_usos_por_cliente: null,
+      usos_por_cliente: {},
+      criado_em: new Date().toISOString(),
+      atualizado_em: new Date().toISOString()
     }
   }, null, 2), "utf8");
 }
@@ -143,9 +154,36 @@ function normalizarCupomCodigo(codigo) {
   return String(codigo || "").trim().toLowerCase();
 }
 
+function cupomCodigoPublico(codigo) {
+  return String(codigo || "").trim().toUpperCase();
+}
+
+function novoCupomVoltou18() {
+  const agora = new Date().toISOString();
+
+  return {
+    codigo: "VOLTOU18",
+    descricao: "Cupom de retorno 50%",
+    ativo: true,
+    tipo: "percentual",
+    percentual: 50,
+    valor: null,
+    produtos: "todos",
+    validade_inicio: null,
+    validade_fim: null,
+    limite_usos_total: null,
+    usos_total: 0,
+    limite_usos_por_cliente: null,
+    usos_por_cliente: {},
+    criado_em: agora,
+    atualizado_em: agora
+  };
+}
+
 function readCupons() {
   try {
-    return JSON.parse(fs.readFileSync(CUPONS_FILE, "utf8") || "{}");
+    const cupons = JSON.parse(fs.readFileSync(CUPONS_FILE, "utf8") || "{}");
+    return cupons && typeof cupons === "object" && !Array.isArray(cupons) ? cupons : {};
   } catch {
     return {};
   }
@@ -157,17 +195,205 @@ function writeCupons(obj) {
 
 function ensureCuponsIniciais() {
   const cupons = readCupons();
+  let alterado = false;
 
   if (!cupons.voltou18) {
+    cupons.voltou18 = novoCupomVoltou18();
+    alterado = true;
+  } else {
+    const normalizado = normalizarCupomParaArmazenamento("voltou18", cupons.voltou18, { parcial: true, existente: cupons.voltou18 });
     cupons.voltou18 = {
-      codigo: "VOLTOU18",
-      tipo: "percentual",
-      percentual: 50,
-      produtos: "todos",
-      ativo: true
+      ...normalizado,
+      codigo: normalizado.codigo || "VOLTOU18",
+      descricao: normalizado.descricao || "Cupom de retorno 50%",
+      ativo: normalizado.ativo !== false,
+      tipo: normalizado.tipo || "percentual",
+      percentual: Number(normalizado.percentual || 50),
+      valor: normalizado.valor ?? null,
+      produtos: normalizado.produtos || "todos"
     };
-    writeCupons(cupons);
+    alterado = true;
   }
+
+  if (alterado) writeCupons(cupons);
+}
+
+function adquirirLockCupons() {
+  try {
+    if (fs.existsSync(CUPONS_LOCK)) {
+      const stat = fs.statSync(CUPONS_LOCK);
+      if (Date.now() - stat.mtimeMs > 30000) fs.unlinkSync(CUPONS_LOCK);
+    }
+
+    const fd = fs.openSync(CUPONS_LOCK, "wx");
+    fs.closeSync(fd);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function liberarLockCupons() {
+  try {
+    if (fs.existsSync(CUPONS_LOCK)) fs.unlinkSync(CUPONS_LOCK);
+  } catch {}
+}
+
+function normalizarListaProdutosCupom(produtos) {
+  if (!produtos || produtos === "todos") return "todos";
+
+  const lista = Array.isArray(produtos)
+    ? produtos
+    : String(produtos).split(",");
+
+  const normalizada = [...new Set(lista.map(normalizarCupomCodigo).filter(Boolean))];
+  return normalizada.length ? normalizada : "todos";
+}
+
+function normalizarDataCupom(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const data = new Date(value);
+  if (Number.isNaN(data.getTime())) return undefined;
+  return data.toISOString();
+}
+
+function normalizarNumeroOpcional(value, { min = 0, integer = false } = {}) {
+  if (value === null || value === undefined || value === "") return null;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < min) return undefined;
+  return integer ? Math.floor(n) : Number(n.toFixed(2));
+}
+
+function normalizarCupomParaArmazenamento(codigoParam, body = {}, { parcial = false, existente = null } = {}) {
+  const agora = new Date().toISOString();
+  const codigoNormalizado = normalizarCupomCodigo(body.codigo || codigoParam || existente?.codigo);
+
+  if (!codigoNormalizado || codigoNormalizado.length < 3) {
+    const err = new Error("Código de cupom inválido.");
+    err.status = 400;
+    throw err;
+  }
+
+  const base = parcial && existente ? { ...existente } : {};
+  const cupom = {
+    codigo: cupomCodigoPublico(body.codigo || base.codigo || codigoNormalizado),
+    descricao: String(body.descricao ?? base.descricao ?? "").trim(),
+    ativo: body.ativo === undefined ? (base.ativo !== false) : body.ativo !== false,
+    tipo: String(body.tipo ?? base.tipo ?? "percentual").trim().toLowerCase(),
+    percentual: base.percentual ?? null,
+    valor: base.valor ?? null,
+    produtos: body.produtos === undefined ? (base.produtos || "todos") : normalizarListaProdutosCupom(body.produtos),
+    validade_inicio: base.validade_inicio ?? null,
+    validade_fim: base.validade_fim ?? null,
+    limite_usos_total: base.limite_usos_total ?? null,
+    usos_total: Number(base.usos_total || 0),
+    limite_usos_por_cliente: base.limite_usos_por_cliente ?? null,
+    usos_por_cliente: base.usos_por_cliente && typeof base.usos_por_cliente === "object" && !Array.isArray(base.usos_por_cliente)
+      ? base.usos_por_cliente
+      : {},
+    criado_em: base.criado_em || agora,
+    atualizado_em: agora
+  };
+
+  if (!["percentual", "valor"].includes(cupom.tipo)) {
+    const err = new Error("Tipo de cupom inválido.");
+    err.status = 400;
+    throw err;
+  }
+
+  if (body.percentual !== undefined || !parcial || cupom.tipo === "percentual") {
+    const percentual = normalizarNumeroOpcional(body.percentual ?? cupom.percentual, { min: 0 });
+    if (percentual === undefined || cupom.tipo === "percentual" && (percentual <= 0 || percentual > 100)) {
+      const err = new Error("Percentual de desconto inválido.");
+      err.status = 400;
+      throw err;
+    }
+    cupom.percentual = percentual;
+  }
+
+  if (body.valor !== undefined || !parcial || cupom.tipo === "valor") {
+    const valor = normalizarNumeroOpcional(body.valor ?? cupom.valor, { min: 0 });
+    if (valor === undefined || cupom.tipo === "valor" && valor <= 0) {
+      const err = new Error("Valor fixo de desconto inválido.");
+      err.status = 400;
+      throw err;
+    }
+    cupom.valor = valor;
+  }
+
+  if (cupom.tipo === "percentual") cupom.valor = cupom.valor ?? null;
+  if (cupom.tipo === "valor") cupom.percentual = cupom.percentual ?? null;
+
+  if (body.validade_inicio !== undefined) {
+    const data = normalizarDataCupom(body.validade_inicio);
+    if (data === undefined) {
+      const err = new Error("Validade inicial inválida.");
+      err.status = 400;
+      throw err;
+    }
+    cupom.validade_inicio = data;
+  }
+
+  if (body.validade_fim !== undefined) {
+    const data = normalizarDataCupom(body.validade_fim);
+    if (data === undefined) {
+      const err = new Error("Validade final inválida.");
+      err.status = 400;
+      throw err;
+    }
+    cupom.validade_fim = data;
+  }
+
+  if (cupom.validade_inicio && cupom.validade_fim && new Date(cupom.validade_inicio).getTime() > new Date(cupom.validade_fim).getTime()) {
+    const err = new Error("Validade inicial não pode ser maior que a validade final.");
+    err.status = 400;
+    throw err;
+  }
+
+  if (body.limite_usos_total !== undefined) {
+    const limite = normalizarNumeroOpcional(body.limite_usos_total, { min: 1, integer: true });
+    if (limite === undefined) {
+      const err = new Error("Limite total de usos inválido.");
+      err.status = 400;
+      throw err;
+    }
+    cupom.limite_usos_total = limite;
+  }
+
+  if (body.limite_usos_por_cliente !== undefined) {
+    const limite = normalizarNumeroOpcional(body.limite_usos_por_cliente, { min: 1, integer: true });
+    if (limite === undefined) {
+      const err = new Error("Limite de usos por cliente inválido.");
+      err.status = 400;
+      throw err;
+    }
+    cupom.limite_usos_por_cliente = limite;
+  }
+
+  if (body.usos_total !== undefined) {
+    const usos = normalizarNumeroOpcional(body.usos_total, { min: 0, integer: true });
+    if (usos === undefined) {
+      const err = new Error("Total de usos inválido.");
+      err.status = 400;
+      throw err;
+    }
+    cupom.usos_total = usos;
+  }
+
+  if (body.usos_por_cliente !== undefined) {
+    if (!body.usos_por_cliente || typeof body.usos_por_cliente !== "object" || Array.isArray(body.usos_por_cliente)) {
+      const err = new Error("Usos por cliente inválido.");
+      err.status = 400;
+      throw err;
+    }
+    cupom.usos_por_cliente = Object.fromEntries(
+      Object.entries(body.usos_por_cliente)
+        .map(([cliente, total]) => [normalizarCupomCodigo(cliente), Math.max(0, Math.floor(Number(total || 0)))])
+        .filter(([cliente]) => cliente)
+    );
+  }
+
+  return cupom;
 }
 
 function readCuponsJogadorEscudo() {
@@ -277,6 +503,33 @@ function produtoAceitaCupom(cupom, categoria) {
   return normalizarCupomCodigo(produtos) === normalizarCupomCodigo(categoria);
 }
 
+function cupomEstaDentroDaValidade(cupom, agora = new Date()) {
+  const time = agora.getTime();
+  const inicio = cupom?.validade_inicio ? new Date(cupom.validade_inicio).getTime() : null;
+  const fim = cupom?.validade_fim ? new Date(cupom.validade_fim).getTime() : null;
+
+  if (inicio && time < inicio) return false;
+  if (fim && time > fim) return false;
+
+  return true;
+}
+
+function cupomTemUsoDisponivel(cupom, whatsapp) {
+  const limiteTotal = Number(cupom?.limite_usos_total || 0);
+  const usosTotal = Number(cupom?.usos_total || 0);
+
+  if (limiteTotal > 0 && usosTotal >= limiteTotal) return false;
+
+  const limiteCliente = Number(cupom?.limite_usos_por_cliente || 0);
+  if (limiteCliente > 0) {
+    const chaveCliente = normalizarCupomCodigo(whatsapp);
+    const usosCliente = Number(cupom?.usos_por_cliente?.[chaveCliente] || 0);
+    if (usosCliente >= limiteCliente) return false;
+  }
+
+  return true;
+}
+
 function calcularDescontoCupom(cupom, valorOriginal) {
   const original = Number(valorOriginal || 0);
 
@@ -294,7 +547,7 @@ function calcularDescontoCupom(cupom, valorOriginal) {
   return 0;
 }
 
-function validarCupomPedido({ codigo, categoria, valorOriginal }) {
+function validarCupomPedido({ codigo, categoria, valorOriginal, whatsapp }) {
   const cupomCodigo = normalizarCupomCodigo(codigo);
 
   if (!cupomCodigo) {
@@ -324,6 +577,14 @@ function validarCupomPedido({ codigo, categoria, valorOriginal }) {
     return { ok: false, status: 400, error: "Cupom inativo." };
   }
 
+  if (!cupomEstaDentroDaValidade(cupom)) {
+    return { ok: false, status: 400, error: "Cupom fora da validade." };
+  }
+
+  if (!cupomTemUsoDisponivel(cupom, whatsapp)) {
+    return { ok: false, status: 400, error: "Cupom sem usos disponiveis." };
+  }
+
   if (!produtoAceitaCupom(cupom, categoria)) {
     return { ok: false, status: 400, error: "Cupom não é válido para este produto." };
   }
@@ -348,6 +609,7 @@ function validarCupomPedido({ codigo, categoria, valorOriginal }) {
       codigo: String(cupom.codigo || cupomCodigo).toUpperCase(),
       tipo: cupom.tipo || "percentual",
       percentual: cupom.tipo === "percentual" ? Number(cupom.percentual || 0) : undefined,
+      valor: cupom.tipo === "valor" ? Number(cupom.valor || 0) : undefined,
       valor_original: original,
       desconto,
       valor_final: valorFinal
@@ -360,19 +622,69 @@ function aplicarResumoCupomNoPedido(pedido, resultadoCupom) {
 
   pedido.cupom_aplicado = true;
   pedido.cupom_codigo = resultadoCupom.resumo.codigo;
+  pedido.cupom_codigo_normalizado = resultadoCupom.cupomCodigo;
   pedido.cupom_tipo = resultadoCupom.resumo.tipo;
   pedido.cupom_percentual = resultadoCupom.resumo.percentual;
+  pedido.cupom_valor = resultadoCupom.resumo.valor;
+  pedido.cupom_uso_registrado = pedido.cupom_uso_registrado === true;
   pedido.valor_original = resultadoCupom.valorOriginal;
   pedido.valor_desconto = resultadoCupom.desconto;
   pedido.valor_final = resultadoCupom.valorFinal;
   pedido.desconto_info = {
     cupom_codigo: resultadoCupom.resumo.codigo,
+    cupom_codigo_normalizado: resultadoCupom.cupomCodigo,
     tipo: resultadoCupom.resumo.tipo,
     percentual: resultadoCupom.resumo.percentual,
+    valor: resultadoCupom.resumo.valor,
     valor_original: resultadoCupom.valorOriginal,
     desconto: resultadoCupom.desconto,
     valor_final: resultadoCupom.valorFinal
   };
+}
+
+function registrarUsoCupomPedido(pedido, whatsapp) {
+  if (!pedido?.cupom_aplicado || pedido.cupom_uso_registrado === true) return { ok: true, skipped: true };
+
+  const codigo = normalizarCupomCodigo(pedido.cupom_codigo_normalizado || pedido.cupom_codigo || pedido.desconto_info?.cupom_codigo);
+  if (!codigo) return { ok: true, skipped: true };
+
+  let lockAtivo = false;
+
+  try {
+    lockAtivo = adquirirLockCupons();
+
+    if (!lockAtivo) {
+      return { ok: false, error: "Arquivo de cupons em uso. Tente novamente em alguns segundos." };
+    }
+
+    const cupons = readCupons();
+    const cupom = cupons[codigo];
+
+    if (!cupom) {
+      return { ok: true, skipped: true };
+    }
+
+    const chaveCliente = normalizarCupomCodigo(whatsapp);
+    cupom.usos_total = Number(cupom.usos_total || 0) + 1;
+    cupom.usos_por_cliente = cupom.usos_por_cliente && typeof cupom.usos_por_cliente === "object" && !Array.isArray(cupom.usos_por_cliente)
+      ? cupom.usos_por_cliente
+      : {};
+
+    if (chaveCliente) {
+      cupom.usos_por_cliente[chaveCliente] = Number(cupom.usos_por_cliente[chaveCliente] || 0) + 1;
+    }
+
+    cupom.atualizado_em = new Date().toISOString();
+    cupons[codigo] = cupom;
+    writeCupons(cupons);
+
+    pedido.cupom_uso_registrado = true;
+    pedido.cupom_uso_registrado_em = new Date().toISOString();
+
+    return { ok: true };
+  } finally {
+    if (lockAtivo) liberarLockCupons();
+  }
 }
 
 function clienteElegivelBrindeEscudo3dApp(req, cliente, whatsapp, categoria) {
@@ -2112,6 +2424,154 @@ app.get("/bot/cartas-app/:id/debug-leituras", auth, (req, res) => {
   }
 });
 
+app.get("/admin/cupons", auth, (req, res) => {
+  try {
+    if (!isBotAdmin(req)) {
+      return res.status(403).json({ ok: false, error: "Acesso negado" });
+    }
+
+    return res.json({
+      ok: true,
+      cupons: readCupons()
+    });
+  } catch {
+    return res.status(500).json({ ok: false, error: "Erro ao listar cupons." });
+  }
+});
+
+app.post("/admin/cupons", auth, (req, res) => {
+  let lockAtivo = false;
+
+  try {
+    if (!isBotAdmin(req)) {
+      return res.status(403).json({ ok: false, error: "Acesso negado" });
+    }
+
+    const codigo = normalizarCupomCodigo(req.body?.codigo);
+    const cupom = normalizarCupomParaArmazenamento(codigo, req.body || {});
+
+    lockAtivo = adquirirLockCupons();
+    if (!lockAtivo) {
+      return res.status(409).json({ ok: false, error: "Arquivo de cupons em uso. Tente novamente em alguns segundos." });
+    }
+
+    const cupons = readCupons();
+
+    if (cupons[codigo]) {
+      return res.status(409).json({ ok: false, error: "Cupom ja existe." });
+    }
+
+    cupons[codigo] = cupom;
+    writeCupons(cupons);
+
+    return res.status(201).json({ ok: true, codigo, cupom });
+  } catch (e) {
+    return res.status(e.status || 500).json({ ok: false, error: e.message || "Erro ao criar cupom." });
+  } finally {
+    if (lockAtivo) liberarLockCupons();
+  }
+});
+
+app.patch("/admin/cupons/:codigo", auth, (req, res) => {
+  let lockAtivo = false;
+
+  try {
+    if (!isBotAdmin(req)) {
+      return res.status(403).json({ ok: false, error: "Acesso negado" });
+    }
+
+    const codigo = normalizarCupomCodigo(req.params.codigo);
+
+    lockAtivo = adquirirLockCupons();
+    if (!lockAtivo) {
+      return res.status(409).json({ ok: false, error: "Arquivo de cupons em uso. Tente novamente em alguns segundos." });
+    }
+
+    const cupons = readCupons();
+    const existente = cupons[codigo];
+
+    if (!existente) {
+      return res.status(404).json({ ok: false, error: "Cupom nao encontrado." });
+    }
+
+    const cupom = normalizarCupomParaArmazenamento(codigo, req.body || {}, { parcial: true, existente });
+    cupons[codigo] = cupom;
+    writeCupons(cupons);
+
+    return res.json({ ok: true, codigo, cupom });
+  } catch (e) {
+    return res.status(e.status || 500).json({ ok: false, error: e.message || "Erro ao editar cupom." });
+  } finally {
+    if (lockAtivo) liberarLockCupons();
+  }
+});
+
+app.post("/admin/cupons/:codigo/desativar", auth, (req, res) => {
+  let lockAtivo = false;
+
+  try {
+    if (!isBotAdmin(req)) {
+      return res.status(403).json({ ok: false, error: "Acesso negado" });
+    }
+
+    const codigo = normalizarCupomCodigo(req.params.codigo);
+
+    lockAtivo = adquirirLockCupons();
+    if (!lockAtivo) {
+      return res.status(409).json({ ok: false, error: "Arquivo de cupons em uso. Tente novamente em alguns segundos." });
+    }
+
+    const cupons = readCupons();
+
+    if (!cupons[codigo]) {
+      return res.status(404).json({ ok: false, error: "Cupom nao encontrado." });
+    }
+
+    cupons[codigo].ativo = false;
+    cupons[codigo].atualizado_em = new Date().toISOString();
+    writeCupons(cupons);
+
+    return res.json({ ok: true, codigo, cupom: cupons[codigo] });
+  } catch {
+    return res.status(500).json({ ok: false, error: "Erro ao desativar cupom." });
+  } finally {
+    if (lockAtivo) liberarLockCupons();
+  }
+});
+
+app.post("/admin/cupons/:codigo/ativar", auth, (req, res) => {
+  let lockAtivo = false;
+
+  try {
+    if (!isBotAdmin(req)) {
+      return res.status(403).json({ ok: false, error: "Acesso negado" });
+    }
+
+    const codigo = normalizarCupomCodigo(req.params.codigo);
+
+    lockAtivo = adquirirLockCupons();
+    if (!lockAtivo) {
+      return res.status(409).json({ ok: false, error: "Arquivo de cupons em uso. Tente novamente em alguns segundos." });
+    }
+
+    const cupons = readCupons();
+
+    if (!cupons[codigo]) {
+      return res.status(404).json({ ok: false, error: "Cupom nao encontrado." });
+    }
+
+    cupons[codigo].ativo = true;
+    cupons[codigo].atualizado_em = new Date().toISOString();
+    writeCupons(cupons);
+
+    return res.json({ ok: true, codigo, cupom: cupons[codigo] });
+  } catch {
+    return res.status(500).json({ ok: false, error: "Erro ao ativar cupom." });
+  } finally {
+    if (lockAtivo) liberarLockCupons();
+  }
+});
+
 app.post("/bot/cupons-jogador-escudo", auth, (req, res) => {
   let lockAtivo = false;
 
@@ -2675,6 +3135,7 @@ app.post("/webhook/mercadopago", async (req, res) => {
         }
       }
 
+      registrarUsoCupomPedido(pedido, whatsapp);
       fs.writeFileSync(pedidoPath, JSON.stringify(pedido, null, 2), "utf8");
 
       processados = readMpProcessados();
@@ -2758,7 +3219,8 @@ function criarPedidoHandler(categoria) {
     let resultadoCupom = validarCupomPedido({
       codigo: cupomCodigo,
       categoria,
-      valorOriginal: valorBaseParaCupom
+      valorOriginal: valorBaseParaCupom,
+      whatsapp
     });
 
     if (!resultadoCupom.ok && cupomCodigo && categoria === "jogador_escudo" && String(resultadoCupom.error || "").toLowerCase().includes("encontrado")) {
@@ -2893,6 +3355,7 @@ function criarPedidoHandler(categoria) {
           confirmado_em: confirmadoEm
         };
         aplicarResumoCupomNoPedido(draft.pedido, resultadoCupom);
+        registrarUsoCupomPedido(draft.pedido, whatsapp);
 
         if (cupomLegacyJogadorEscudo && cuponsJogadorEscudo) {
           cuponsJogadorEscudo[cupomCodigo] = {
@@ -2949,6 +3412,7 @@ function criarPedidoHandler(categoria) {
           origem: "desconto_automatico_criacao"
         };
         aplicarResumoCupomNoPedido(draft.pedido, resultadoCupom);
+        registrarUsoCupomPedido(draft.pedido, whatsapp);
 
         draft.pedido.mensagens_cliente = Array.isArray(draft.pedido.mensagens_cliente)
           ? draft.pedido.mensagens_cliente
@@ -3278,6 +3742,7 @@ app.post("/pedidos/:id/pagar-com-saldo", auth, (req, res) => {
     pedido_id: req.params.id,
     confirmado_em: confirmadoEm
   };
+  registrarUsoCupomPedido(pedido, whatsapp);
   pedido.mensagens_cliente = Array.isArray(pedido.mensagens_cliente)
     ? pedido.mensagens_cliente
     : [];
