@@ -517,6 +517,49 @@ function getCustoPedido(categoria, cliente) {
   return 0;
 }
 
+const CREDITOS_SALDO_PERMITIDOS = new Set([800, 1800, 2800, 4800]);
+
+function normalizarValorFinanceiro(valor) {
+  const numero = Number(valor || 0);
+  return Number.isFinite(numero) ? Number(numero.toFixed(2)) : 0;
+}
+
+function valorFinanceiroEmCentavos(valor) {
+  return Math.round(normalizarValorFinanceiro(valor) * 100);
+}
+
+function validarCreditoSaldoMercadoPago(valor) {
+  const credito = normalizarValorFinanceiro(valor);
+  const creditoCentavos = valorFinanceiroEmCentavos(credito);
+
+  return {
+    ok: CREDITOS_SALDO_PERMITIDOS.has(creditoCentavos),
+    credito,
+    acimaDoLimite: credito > 60
+  };
+}
+
+function calcularBonusPrimeiraCompraSeguro(pedido, pagamento) {
+  const valorInformado = normalizarValorFinanceiro(
+    pedido?.valor_pendente ||
+    pedido?.valor_final ||
+    pagamento?.metadata?.valor_pendente ||
+    0
+  );
+
+  const categoria = pedido?.categoria || pedido?.product_id || "";
+  const valorProduto = normalizarValorFinanceiro(getCustoPedido(categoria, null));
+  const limites = [
+    normalizarValorFinanceiro(pedido?.valor_pendente),
+    normalizarValorFinanceiro(pedido?.valor_final),
+    normalizarValorFinanceiro(pedido?.valor_original),
+    valorProduto
+  ].filter(valor => valor > 0 && valor <= 60);
+
+  const limitePedido = limites.length ? Math.min(...limites) : 18;
+  return normalizarValorFinanceiro(Math.min(valorInformado, limitePedido, 18));
+}
+
 function produtoAceitaCupom(cupom, categoria) {
   const produtos = cupom?.produtos;
 
@@ -3200,12 +3243,7 @@ app.post("/webhook/mercadopago", async (req, res) => {
         });
       }
 
-      const valorBonusPedido = Number(
-        pedido.valor_pendente ||
-        pagamento.metadata?.valor_pendente ||
-        pagamento.transaction_amount ||
-        0
-      );
+      const valorBonusPedido = calcularBonusPrimeiraCompraSeguro(pedido, pagamento);
 
       if (valorBonusPedido > 0) {
         const clientes = readClientes();
@@ -3241,10 +3279,34 @@ app.post("/webhook/mercadopago", async (req, res) => {
     }
 
     const whatsapp = pagamento.metadata?.whatsapp || external.split("|")[0];
-    const credito = Number(pagamento.metadata?.credito || 0);
+    const validacaoCredito = validarCreditoSaldoMercadoPago(pagamento.metadata?.credito);
+    const credito = validacaoCredito.credito;
 
     if (!whatsapp || !credito) {
       return res.json({ ok: true, error: "sem whatsapp ou credito" });
+    }
+
+    if (!validacaoCredito.ok || validacaoCredito.acimaDoLimite) {
+      console.warn("[MP_WEBHOOK] credito_saldo_rejeitado", {
+        payment_id: String(paymentId),
+        whatsapp,
+        credito_metadata: pagamento.metadata?.credito,
+        credito_normalizado: credito,
+        transaction_amount: pagamento.transaction_amount,
+        motivo: validacaoCredito.acimaDoLimite ? "credito_acima_60" : "credito_fora_dos_pacotes"
+      });
+
+      processados = readMpProcessados();
+      processados[paymentId] = {
+        whatsapp,
+        credito,
+        status: "credito_saldo_rejeitado",
+        motivo: validacaoCredito.acimaDoLimite ? "credito_acima_60" : "credito_fora_dos_pacotes",
+        criado_em: new Date().toISOString()
+      };
+
+      writeMpProcessados(processados);
+      return res.json({ ok: true, rejeitado: true });
     }
 
     const clientes = readClientes();
@@ -4095,6 +4157,16 @@ app.post("/pedidos/:id/aprovar", auth, (req, res) => {
   const pedidoPath = path.join(base, "pedido.json");
   const pedido = safeReadJson(pedidoPath) || {};
 
+  if (pedido.pagamento_pendente === true) {
+    return res.status(403).json({
+      ok: false,
+      error: "Pagamento pendente. Desbloqueie esta imagem antes de baixar.",
+      pagamento_pendente: true,
+      pode_baixar: false,
+      valor_pendente: Number(pedido.valor_pendente || 0)
+    });
+  }
+
   pedido.aprovado_cliente = true;
   pedido.baixado_cliente = false;
   pedido.aprovado_em = new Date().toISOString();
@@ -4268,7 +4340,7 @@ app.get("/pedidos/:id/info", auth, (req, res) => {
   });
 });
 
-// ===== PREVIEW DA IMAGEM FINAL =====
+// ===== PREVIEW PROTEGIDA =====
 app.get("/pedidos/:id/preview", (req, res) => {
   const pedidoId = req.params.id;
 
@@ -4299,22 +4371,15 @@ app.get("/pedidos/:id/preview", (req, res) => {
   }
 
   const previewProtegidaPath = path.join(base, "preview_ia4tube.jpg");
-  const resultadoFinalPath = path.join(base, "resultado_final.png");
-  const previewPath = fs.existsSync(previewProtegidaPath)
-    ? previewProtegidaPath
-    : resultadoFinalPath;
 
-  if (!fs.existsSync(previewPath)) {
+  if (!fs.existsSync(previewProtegidaPath)) {
     return res.status(404).json({ ok: false, error: "Imagem ainda não ficou pronta" });
   }
 
-  if (previewPath.endsWith(".jpg") || previewPath.endsWith(".jpeg")) {
-    res.setHeader("Content-Type", "image/jpeg");
-  } else {
-    res.setHeader("Content-Type", "image/png");
-  }
+  res.setHeader("Content-Type", "image/jpeg");
+  res.setHeader("Cache-Control", "no-store");
 
-  return res.sendFile(previewPath);
+  return res.sendFile(previewProtegidaPath);
 });
 
 // ===== BAIXAR ZIP =====
@@ -4324,6 +4389,23 @@ app.get("/pedidos/:id/zip", auth, (req, res) => {
 
   if (!base) {
     return res.status(404).json({ ok: false, error: "Pedido não encontrado" });
+  }
+
+  const pedidoPath = path.join(base, "pedido.json");
+  const pedido = safeReadJson(pedidoPath) || {};
+
+  if (pedido.pagamento_pendente === true) {
+    return res.status(403).json({
+      ok: false,
+      error: "Pagamento pendente. Desbloqueie esta imagem antes de baixar o ZIP."
+    });
+  }
+
+  if (pedido.aprovado_cliente !== true) {
+    return res.status(403).json({
+      ok: false,
+      error: "Aprove a previa antes de baixar o ZIP."
+    });
   }
 
   res.setHeader("Content-Type", "application/zip");
