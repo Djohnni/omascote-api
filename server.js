@@ -54,7 +54,7 @@ const CLIENTES_TESTE = [
 
 // CORS: permite seu site chamar a API
 app.use(cors({
-  origin: ["https://omascote.com.br"],
+  origin: ["https://omascote.com.br", "https://www.omascote.com.br"],
   credentials: false
 }));
 
@@ -1835,7 +1835,26 @@ const uploadCartaAppImagem = multer({
   }
 });
 
-const uploadResultado = multer({ storage });
+const uploadResultado = multer({
+  storage,
+  limits: {
+    fileSize: MAX_UPLOAD_FILE_SIZE
+  },
+  fileFilter: (req, file, cb) => {
+    const permitidos = [
+      "image/png",
+      "image/jpeg",
+      "image/jpg",
+      "image/webp"
+    ];
+
+    if (!permitidos.includes(String(file.mimetype || "").toLowerCase())) {
+      return cb(new Error("Apenas imagens PNG, JPG e WEBP sao permitidas."));
+    }
+
+    cb(null, true);
+  }
+});
 
 function uploadComErroControlado(middleware) {
   return (req, res, next) => {
@@ -4444,10 +4463,10 @@ app.post("/pedidos/:id/status", auth, (req, res) => {
 app.post(
   "/bot/pedidos/:id/upload-resultado",
   auth,
-  uploadResultado.fields([
+  uploadComErroControlado(uploadResultado.fields([
     { name: "resultado", maxCount: 1 },
     { name: "preview", maxCount: 1 }
-  ]),
+  ])),
   (req, res) => {
 
     const descricao_instagram = req.body?.descricao_instagram || "";
