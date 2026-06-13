@@ -6,6 +6,7 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const multer = require("multer");
 const archiver = require("archiver");
+const crypto = require("crypto");
 const productsRegistry = require("./src/products");
 const orderStorage = require("./src/orders/order.storage");
 const orderStatus = require("./src/orders/order.status");
@@ -37,6 +38,7 @@ const SUPORTE_ABERTAS_FILE = path.join(DATA_DIR, "suporte_conversas_abertas.json
 const SUPORTE_FINALIZADAS_FILE = path.join(DATA_DIR, "suporte_conversas_finalizadas.json");
 const PREVIEW_LIMITER_FILE = path.join(DATA_DIR, "preview_limiter.json");
 const ANALYTICS_DIR = path.join(DATA_DIR, "analytics");
+const PERFIS_DIR = path.join(DATA_DIR, "perfis");
 const EVENTOS_CLIENTES_FILE = path.join(DATA_DIR, "eventos_clientes.json");
 const CARTAS_APP_FILE = path.join(DATA_DIR, "cartas_app.json");
 const CARTAS_APP_IMAGENS_DIR = path.join(DATA_DIR, "cartas_app_imagens");
@@ -74,6 +76,7 @@ ensureDir(DATA_DIR);
 ensureDir(PEDIDOS_DIR);
 ensureDir(path.join(DATA_DIR, "tmp_uploads"));
 ensureDir(ANALYTICS_DIR);
+ensureDir(PERFIS_DIR);
 ensureDir(CARTAS_APP_IMAGENS_DIR);
 
 if (!fs.existsSync(CLIENTES_FILE)) {
@@ -995,6 +998,130 @@ function readJsonArraySafe(filePath) {
 
 function writeJsonSafe(filePath, data) {
   fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf8");
+}
+
+function normalizarPerfilId(value) {
+  return String(value || "").trim().replace(/[^\w-]+/g, "");
+}
+
+function gerarPerfilIdCliente(clienteId) {
+  const hash = crypto
+    .createHash("sha256")
+    .update(`${JWT_SECRET}|perfil|${String(clienteId || "")}`)
+    .digest("hex")
+    .slice(0, 20);
+
+  return `pf_${hash}`;
+}
+
+function getPerfilDir(perfilId) {
+  return path.join(PERFIS_DIR, normalizarPerfilId(perfilId));
+}
+
+function getPerfilFile(perfilId) {
+  return path.join(getPerfilDir(perfilId), "perfil.json");
+}
+
+function textoPerfil(value, max = 80) {
+  return String(value || "").trim().slice(0, max);
+}
+
+function normalizarInstagramPerfil(value) {
+  return textoPerfil(value, 80)
+    .replace(/^https?:\/\/(www\.)?instagram\.com\//i, "")
+    .replace(/^@+/, "")
+    .replace(/\/+$/g, "")
+    .trim();
+}
+
+function perfilDefault(cliente, perfilId) {
+  const agora = new Date().toISOString();
+
+  return {
+    perfil_id: perfilId,
+    nome_time: textoPerfil(cliente?.nome_time || "Meu time"),
+    cidade: "",
+    estado: "",
+    instagram: "",
+    publico: false,
+    criado_em: agora,
+    atualizado_em: agora
+  };
+}
+
+function normalizarPerfilPrivado(perfil, cliente, perfilId) {
+  const base = perfil && typeof perfil === "object" && !Array.isArray(perfil)
+    ? perfil
+    : {};
+  const agora = new Date().toISOString();
+
+  return {
+    perfil_id: perfilId,
+    nome_time: textoPerfil(base.nome_time || cliente?.nome_time || "Meu time"),
+    cidade: textoPerfil(base.cidade || ""),
+    estado: textoPerfil(base.estado || "", 40),
+    instagram: normalizarInstagramPerfil(base.instagram || ""),
+    publico: false,
+    criado_em: base.criado_em || agora,
+    atualizado_em: base.atualizado_em || agora
+  };
+}
+
+function ensurePerfilCliente(clientes, clienteId) {
+  const cliente = clientes[clienteId];
+
+  if (!cliente) {
+    const err = new Error("Cliente nao encontrado");
+    err.status = 404;
+    throw err;
+  }
+
+  let perfilId = normalizarPerfilId(cliente.perfil_id);
+  let clienteAlterado = false;
+
+  if (!perfilId) {
+    perfilId = gerarPerfilIdCliente(clienteId);
+    cliente.perfil_id = perfilId;
+    clienteAlterado = true;
+  }
+
+  const perfilDir = getPerfilDir(perfilId);
+  const perfilFile = getPerfilFile(perfilId);
+  ensureDir(perfilDir);
+
+  const perfilAtual = safeReadJson(perfilFile);
+  const perfil = perfilAtual
+    ? normalizarPerfilPrivado(perfilAtual, cliente, perfilId)
+    : perfilDefault(cliente, perfilId);
+
+  if (!perfilAtual) {
+    writeJsonSafe(perfilFile, perfil);
+  }
+
+  if (clienteAlterado) {
+    clientes[clienteId] = cliente;
+    writeClientes(clientes);
+  }
+
+  return {
+    cliente,
+    perfil,
+    perfil_id: perfilId,
+    perfil_file: perfilFile
+  };
+}
+
+function perfilResponse(perfil) {
+  return {
+    perfil_id: perfil.perfil_id,
+    nome_time: perfil.nome_time,
+    cidade: perfil.cidade,
+    estado: perfil.estado,
+    instagram: perfil.instagram,
+    publico: false,
+    criado_em: perfil.criado_em,
+    atualizado_em: perfil.atualizado_em
+  };
 }
 
 function readCartasApp() {
@@ -2377,8 +2504,21 @@ app.get("/me", auth, (req, res) => {
     return res.status(404).json({ ok: false, error: "Cliente não encontrado" });
   }
 
+  let perfilId = normalizarPerfilId(c.perfil_id);
+
+  try {
+    const perfilInfo = ensurePerfilCliente(clientes, req.user.whatsapp);
+    perfilId = perfilInfo.perfil_id;
+  } catch (err) {
+    console.warn("[perfil] falha ao garantir perfil no /me", {
+      cliente_id: req.user.whatsapp,
+      erro: err?.message || err
+    });
+  }
+
   return res.json({
     ok: true,
+    perfil_id: perfilId,
     nome_time: c.nome_time,
     plano: c.plano,
     saldo_mensal: Number(c.saldo_mensal || 0),
@@ -2396,6 +2536,72 @@ app.get("/me", auth, (req, res) => {
     brinde_escudo3d_app_usado: c.brinde_escudo3d_app_usado === true,
     ativo: c.ativo
   });
+});
+
+app.get("/me/perfil", auth, (req, res) => {
+  registrarOnline(req, { ultima_acao: "perfil_time" });
+
+  const clientes = readClientes();
+
+  try {
+    const perfilInfo = ensurePerfilCliente(clientes, req.user.whatsapp);
+
+    return res.json({
+      ok: true,
+      perfil: perfilResponse(perfilInfo.perfil)
+    });
+  } catch (err) {
+    const status = Number(err?.status || 500);
+
+    return res.status(status).json({
+      ok: false,
+      error: status === 404 ? "Cliente nao encontrado" : "Falha ao carregar perfil"
+    });
+  }
+});
+
+app.patch("/me/perfil", auth, (req, res) => {
+  registrarOnline(req, { ultima_acao: "perfil_time_editar" });
+
+  const clientes = readClientes();
+
+  try {
+    const perfilInfo = ensurePerfilCliente(clientes, req.user.whatsapp);
+    const perfilAtual = safeReadJson(perfilInfo.perfil_file) || perfilInfo.perfil;
+    const agora = new Date().toISOString();
+
+    const perfil = normalizarPerfilPrivado({
+      ...perfilAtual,
+      nome_time: textoPerfil(req.body?.nome_time ?? perfilAtual.nome_time),
+      cidade: textoPerfil(req.body?.cidade ?? perfilAtual.cidade),
+      estado: textoPerfil(req.body?.estado ?? perfilAtual.estado, 40),
+      instagram: normalizarInstagramPerfil(req.body?.instagram ?? perfilAtual.instagram),
+      publico: false,
+      atualizado_em: agora
+    }, perfilInfo.cliente, perfilInfo.perfil_id);
+
+    perfil.publico = false;
+    perfil.atualizado_em = agora;
+
+    perfilInfo.cliente.perfil_id = perfilInfo.perfil_id;
+    perfilInfo.cliente.nome_time = perfil.nome_time || perfilInfo.cliente.nome_time;
+    clientes[req.user.whatsapp] = perfilInfo.cliente;
+
+    writeJsonSafe(perfilInfo.perfil_file, perfil);
+    writeClientes(clientes);
+
+    return res.json({
+      ok: true,
+      perfil: perfilResponse(perfil)
+    });
+  } catch (err) {
+    const status = Number(err?.status || 500);
+
+    return res.status(status).json({
+      ok: false,
+      error: status === 404 ? "Cliente nao encontrado" : "Falha ao salvar perfil"
+    });
+  }
 });
 
 app.get("/cartas-app/ativas", auth, (req, res) => {
