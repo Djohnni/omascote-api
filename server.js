@@ -10,6 +10,7 @@ const productsRegistry = require("./src/products");
 const orderStorage = require("./src/orders/order.storage");
 const orderStatus = require("./src/orders/order.status");
 const orderService = require("./src/orders/order.service");
+const productAuditService = require("./src/orders/product-audit.service");
 const billingService = require("./src/billing/billing.service");
 
 const app = express();
@@ -43,6 +44,7 @@ const CUPONS_FILE = path.join(DATA_DIR, "cupons.json");
 const CUPONS_LOCK = path.join(DATA_DIR, "cupons.lock");
 const CUPONS_JOGADOR_ESCUDO_FILE = path.join(DATA_DIR, "cupons_jogador_escudo.json");
 const CUPONS_JOGADOR_ESCUDO_LOCK = path.join(DATA_DIR, "cupons_jogador_escudo.lock");
+const PRODUTO_AUDITORIA_FILE = path.join(DATA_DIR, "produto_auditoria.jsonl");
 const PREVIEW_LIMITER_MAX = 3;
 const PREVIEW_LIMITER_TTL_MS = 6 * 60 * 60 * 1000;
 
@@ -1885,6 +1887,85 @@ function uploadComErroControlado(middleware) {
   };
 }
 
+function listarArquivosUpload(files = {}) {
+  return Object.values(files || {})
+    .flat()
+    .filter(file => file && file.path);
+}
+
+function limparUploadsTemporarios(files = {}) {
+  for (const file of listarArquivosUpload(files)) {
+    try {
+      if (file.path && fs.existsSync(file.path)) fs.unlinkSync(file.path);
+    } catch (e) {
+      console.warn("[UPLOAD_CLEANUP] falha ao remover temporario", {
+        field: file.fieldname || "",
+        path: file.path || "",
+        erro: e.message
+      });
+    }
+  }
+}
+
+function appendJsonLineSafe(filePath, payload) {
+  try {
+    fs.appendFileSync(filePath, JSON.stringify(payload) + "\n", "utf8");
+  } catch (e) {
+    console.warn("[PRODUCT_AUDIT] falha ao gravar auditoria", {
+      arquivo: filePath,
+      erro: e.message
+    });
+  }
+}
+
+function readProdutoAuditoriaEntries(limit = 5000) {
+  try {
+    if (!fs.existsSync(PRODUTO_AUDITORIA_FILE)) return [];
+
+    const linhas = fs.readFileSync(PRODUTO_AUDITORIA_FILE, "utf8")
+      .split(/\r?\n/)
+      .filter(Boolean);
+    const limite = Math.max(1, Math.min(Number(limit || 5000) || 5000, 50000));
+
+    return linhas.slice(-limite).map(linha => {
+      try {
+        return JSON.parse(linha);
+      } catch {
+        return null;
+      }
+    }).filter(Boolean);
+  } catch (e) {
+    console.warn("[PRODUCT_AUDIT] falha ao ler auditoria", {
+      arquivo: PRODUTO_AUDITORIA_FILE,
+      erro: e.message
+    });
+    return [];
+  }
+}
+
+function registrarAuditoriaProdutoPedido({ categoria, fields, files, pedidoId }) {
+  const audit = productAuditService.auditProductOrder({ categoria, fields, files });
+  const entry = {
+    ...audit,
+    pedido_id: pedidoId || "",
+    registrado_em: new Date().toISOString()
+  };
+
+  appendJsonLineSafe(PRODUTO_AUDITORIA_FILE, entry);
+
+  if (entry.total_avisos > 0) {
+    console.warn("[PRODUCT_AUDIT]", entry);
+  } else {
+    console.log("[PRODUCT_AUDIT]", {
+      produto: entry.produto,
+      pedido_id: entry.pedido_id,
+      total_avisos: 0
+    });
+  }
+
+  return entry;
+}
+
 // ===== ROTAS =====
 
 // Health check
@@ -2509,6 +2590,28 @@ app.get("/bot/cartas-app/:id/debug-leituras", auth, (req, res) => {
     });
   } catch {
     return res.status(500).json({ ok: false, error: "erro_debug_leituras_carta_app" });
+  }
+});
+
+app.get("/admin/auditoria-produtos", auth, (req, res) => {
+  try {
+    if (!isBotAdmin(req)) {
+      return res.status(403).json({ ok: false, error: "Acesso negado" });
+    }
+
+    const limit = Math.max(1, Math.min(Number(req.query.limit || 5000) || 5000, 50000));
+    const entries = readProdutoAuditoriaEntries(limit);
+    const resumo = productAuditService.summarizeAuditEntries(entries);
+
+    return res.json({
+      ok: true,
+      modo: "log",
+      arquivo: PRODUTO_AUDITORIA_FILE,
+      limite: limit,
+      ...resumo
+    });
+  } catch {
+    return res.status(500).json({ ok: false, error: "Erro ao gerar relatorio de auditoria." });
   }
 });
 
@@ -3374,6 +3477,16 @@ function criarPedidoHandler(categoria) {
       return res.status(403).json({ ok: false, error: "Mensalidade inativa" });
     }
 
+    const jsonValidation = orderService.validateOrderJsonBody(req.body || {}, categoria);
+    if (!jsonValidation.ok) {
+      limparUploadsTemporarios(req.files);
+      return res.status(400).json({
+        ok: false,
+        error: "JSON invalido no pedido.",
+        detalhes: jsonValidation.errors
+      });
+    }
+
     const mesAtual = nowYYYYMM();
     billingService.ensureCurrentBillingCycle(c, mesAtual);
 
@@ -3501,6 +3614,7 @@ function criarPedidoHandler(categoria) {
     }
 
     const id = draft.id;
+    registrarAuditoriaProdutoPedido({ categoria, fields, files, pedidoId: id });
 
     if (temSaldoSuficiente) {
       billingService.applyOrderCharge(c, { custoPedido: custoEfetivoPedido, mesAtual, temBrindeMascote });
@@ -3756,7 +3870,17 @@ app.post(
     if (flyer_tipo === "jog_escudo") return criarPedidoHandler("jogador_escudo")(req, res);
     if (flyer_tipo === "mascote_uniforme") return criarPedidoHandler("mascote_uniforme")(req, res);
 
-    return criarPedidoHandler("pedido")(req, res);
+    limparUploadsTemporarios(req.files);
+    console.warn("[pedido] flyer_tipo desconhecido bloqueado", {
+      flyer_tipo,
+      product_id: req.body?.product_id || "",
+      categoria: req.body?.categoria || ""
+    });
+
+    return res.status(400).json({
+      ok: false,
+      error: "Produto invalido."
+    });
   }
 );
 

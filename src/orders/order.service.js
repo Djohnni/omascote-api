@@ -28,6 +28,39 @@ function safeParseJsonObject(value, fallback = {}) {
   }
 }
 
+function validateJsonField(value, fieldName, errors) {
+  if (value === undefined || value === null || value === "") return;
+  if (typeof value === "object") return;
+  if (typeof value !== "string") return;
+
+  try {
+    JSON.parse(value);
+  } catch {
+    errors.push(`${fieldName} contem JSON invalido`);
+  }
+}
+
+function validateOrderJsonBody(body = {}, categoria = "") {
+  const errors = [];
+  const categoriaNormalizada = String(categoria || "").trim().toLowerCase();
+
+  validateJsonField(body.fields_json || body.fields, "fields_json", errors);
+  validateJsonField(body.assets_json || body.assets, "assets_json", errors);
+
+  if (categoriaNormalizada === "resultado") {
+    validateJsonField(body.artilheiros, "artilheiros", errors);
+  }
+
+  if (["escalacao", "jogador_escudo", "mascote_uniforme"].includes(categoriaNormalizada)) {
+    validateJsonField(body.jogadores_json, "jogadores_json", errors);
+  }
+
+  return {
+    ok: errors.length === 0,
+    errors
+  };
+}
+
 function normalizeNewOrderModel(body = {}) {
   const schemaVersion = Number(body.schema_version || body.schemaVersion || 0);
 
@@ -309,6 +342,7 @@ module.exports = {
   buildOrderBasePath,
   ensureOrderDirectory,
   safeParseJsonObject,
+  validateOrderJsonBody,
   normalizeNewOrderModel,
   normalizeOrderBody,
   hasRequiredOrderFields,
