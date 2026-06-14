@@ -47,6 +47,8 @@ const CUPONS_LOCK = path.join(DATA_DIR, "cupons.lock");
 const CUPONS_JOGADOR_ESCUDO_FILE = path.join(DATA_DIR, "cupons_jogador_escudo.json");
 const CUPONS_JOGADOR_ESCUDO_LOCK = path.join(DATA_DIR, "cupons_jogador_escudo.lock");
 const PRODUTO_AUDITORIA_FILE = path.join(DATA_DIR, "produto_auditoria.jsonl");
+const SOLICITACOES_EXCLUSAO_CONTA_FILE = path.join(DATA_DIR, "solicitacoes_exclusao_conta.json");
+const DENUNCIAS_CONTEUDO_IA_FILE = path.join(DATA_DIR, "denuncias_conteudo_ia.json");
 const PREVIEW_LIMITER_MAX = 3;
 const PREVIEW_LIMITER_TTL_MS = 6 * 60 * 60 * 1000;
 
@@ -146,6 +148,14 @@ if (!fs.existsSync(CUPONS_FILE)) {
 
 if (!fs.existsSync(CUPONS_JOGADOR_ESCUDO_FILE)) {
   fs.writeFileSync(CUPONS_JOGADOR_ESCUDO_FILE, JSON.stringify({}, null, 2), "utf8");
+}
+
+if (!fs.existsSync(SOLICITACOES_EXCLUSAO_CONTA_FILE)) {
+  fs.writeFileSync(SOLICITACOES_EXCLUSAO_CONTA_FILE, JSON.stringify([], null, 2), "utf8");
+}
+
+if (!fs.existsSync(DENUNCIAS_CONTEUDO_IA_FILE)) {
+  fs.writeFileSync(DENUNCIAS_CONTEUDO_IA_FILE, JSON.stringify([], null, 2), "utf8");
 }
 
 ensureCuponsIniciais();
@@ -2568,6 +2578,64 @@ function auth(req, res, next) {
   }
 }
 
+function authOpcional(req, res, next) {
+  const h = req.headers.authorization || "";
+  const token = h.startsWith("Bearer ") ? h.slice(7) : "";
+
+  if (!token) {
+    req.user = null;
+    return next();
+  }
+
+  try {
+    req.user = jwt.verify(token, JWT_SECRET);
+  } catch {
+    req.user = null;
+  }
+
+  return next();
+}
+
+function textoLegal(value, max = 500) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, max);
+}
+
+function textoLegalMultilinha(value, max = 2000) {
+  return String(value || "")
+    .replace(/\r/g, "")
+    .trim()
+    .slice(0, max);
+}
+
+function urlLegal(value, max = 500) {
+  const raw = textoLegal(value, max);
+  if (!raw) return "";
+
+  try {
+    const url = new URL(raw, "https://omascote.com.br");
+    if (!["https:", "http:"].includes(url.protocol)) return "";
+    return url.href.slice(0, max);
+  } catch {
+    return "";
+  }
+}
+
+function clienteResumoParaSolicitacao(whatsapp) {
+  const clientes = readClientes();
+  const cliente = clientes[whatsapp] || {};
+
+  return {
+    cliente_id: String(whatsapp || ""),
+    whatsapp: String(whatsapp || ""),
+    nome_time: textoLegal(cliente.nome_time || cliente.nome || "", 120),
+    login_tipo: textoLegal(cliente.login_tipo || "whatsapp", 40),
+    perfil_id: normalizarPerfilId(cliente.perfil_id || "")
+  };
+}
+
 // ===== UPLOAD (multer) =====
 const MAX_UPLOAD_FILE_SIZE = 50 * 1024 * 1024;
 const MAX_PERFIL_IMAGE_SIZE = 8 * 1024 * 1024;
@@ -3226,6 +3294,121 @@ app.get("/me", auth, (req, res) => {
     brinde_escudo3d_app_usado: c.brinde_escudo3d_app_usado === true,
     ativo: c.ativo
   });
+});
+
+app.post("/me/conta/exclusao", auth, (req, res) => {
+  registrarOnline(req, { ultima_acao: "solicitou_exclusao_conta" });
+
+  try {
+    const whatsapp = req.user.whatsapp;
+    const cliente = clienteResumoParaSolicitacao(whatsapp);
+
+    if (!cliente.whatsapp) {
+      return res.status(401).json({ ok: false, error: "Sessao invalida." });
+    }
+
+    const agora = new Date().toISOString();
+    const solicitacoes = readJsonArraySafe(SOLICITACOES_EXCLUSAO_CONTA_FILE);
+    const pendente = solicitacoes.find(item =>
+      item &&
+      item.cliente_id === cliente.cliente_id &&
+      item.status === "pendente"
+    );
+
+    if (pendente) {
+      pendente.atualizado_em = agora;
+      pendente.motivo = textoLegalMultilinha(req.body?.motivo || pendente.motivo || "", 1000);
+      pendente.origem = "app";
+      writeJsonSafe(SOLICITACOES_EXCLUSAO_CONTA_FILE, solicitacoes);
+      return res.json({
+        ok: true,
+        status: "pendente",
+        solicitacao_id: pendente.id,
+        mensagem: "Sua solicitacao de exclusao ja esta registrada."
+      });
+    }
+
+    const solicitacao = {
+      id: `exc_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`,
+      status: "pendente",
+      origem: "app",
+      cliente,
+      cliente_id: cliente.cliente_id,
+      motivo: textoLegalMultilinha(req.body?.motivo || "", 1000),
+      criado_em: agora,
+      atualizado_em: agora
+    };
+
+    solicitacoes.push(solicitacao);
+    writeJsonSafe(SOLICITACOES_EXCLUSAO_CONTA_FILE, solicitacoes);
+
+    return res.json({
+      ok: true,
+      status: "pendente",
+      solicitacao_id: solicitacao.id,
+      mensagem: "Solicitacao de exclusao registrada."
+    });
+  } catch (err) {
+    console.warn("[conta_exclusao] falha ao registrar", {
+      erro: err?.message || err
+    });
+    return res.status(500).json({
+      ok: false,
+      error: "Falha ao registrar solicitacao de exclusao."
+    });
+  }
+});
+
+app.post("/denuncias/conteudo-ia", authOpcional, (req, res) => {
+  try {
+    const body = req.body || {};
+    const tipo = textoLegal(body.tipo || "conteudo_ia", 40);
+    const motivo = textoLegal(body.motivo || "", 160);
+    const descricao = textoLegalMultilinha(body.descricao || "", 2000);
+    const url = urlLegal(body.url || body.link || "", 500);
+    const contato = textoLegal(body.contato || "", 160);
+
+    if (!motivo && !descricao) {
+      return res.status(400).json({
+        ok: false,
+        error: "Informe o motivo da denuncia."
+      });
+    }
+
+    const agora = new Date().toISOString();
+    const denuncia = {
+      id: `den_ia_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`,
+      status: "pendente",
+      tipo,
+      motivo,
+      descricao,
+      url,
+      contato,
+      cliente_id: req.user?.whatsapp || "",
+      origem: "app",
+      user_agent: textoLegal(req.headers["user-agent"] || "", 300),
+      criado_em: agora,
+      atualizado_em: agora
+    };
+
+    const denuncias = readJsonArraySafe(DENUNCIAS_CONTEUDO_IA_FILE);
+    denuncias.push(denuncia);
+    writeJsonSafe(DENUNCIAS_CONTEUDO_IA_FILE, denuncias);
+
+    return res.json({
+      ok: true,
+      denuncia_id: denuncia.id,
+      mensagem: "Denuncia registrada para analise."
+    });
+  } catch (err) {
+    console.warn("[denuncia_ia] falha ao registrar", {
+      erro: err?.message || err
+    });
+    return res.status(500).json({
+      ok: false,
+      error: "Falha ao registrar denuncia."
+    });
+  }
 });
 
 function carregarPerfilTimePrivado(req, res) {
