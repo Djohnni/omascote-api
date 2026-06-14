@@ -1022,6 +1022,10 @@ function getPerfilFile(perfilId) {
   return path.join(getPerfilDir(perfilId), "perfil.json");
 }
 
+function getPerfilAssetsDir(perfilId) {
+  return path.join(getPerfilDir(perfilId), "assets");
+}
+
 function getPerfilJogadoresFile(perfilId) {
   return path.join(getPerfilDir(perfilId), "jogadores.json");
 }
@@ -1151,6 +1155,32 @@ function perfilResponse(perfil) {
     criado_em: perfil.criado_em,
     atualizado_em: perfil.atualizado_em
   };
+}
+
+const PERFIL_IMAGEM_TIPOS = new Set(["escudo", "mascote"]);
+
+function getExtensaoImagemPerfil(mimetype) {
+  const tipo = String(mimetype || "").toLowerCase();
+  if (tipo === "image/png") return ".png";
+  if (tipo === "image/jpeg" || tipo === "image/jpg") return ".jpg";
+  if (tipo === "image/webp") return ".webp";
+  return "";
+}
+
+function normalizarTipoImagemPerfil(value) {
+  const tipo = String(value || "").trim().toLowerCase();
+  return PERFIL_IMAGEM_TIPOS.has(tipo) ? tipo : "";
+}
+
+function getPerfilImagemFile(perfilId, tipo, ext = "") {
+  const safeTipo = normalizarTipoImagemPerfil(tipo);
+  if (!safeTipo) return "";
+  const safeExt = String(ext || "").match(/^\.(png|jpg|jpeg|webp)$/i) ? String(ext).toLowerCase() : "";
+  return path.join(getPerfilAssetsDir(perfilId), `${safeTipo}${safeExt}`);
+}
+
+function perfilImagemUrl(tipo) {
+  return `/me/time/perfil/${tipo}/imagem`;
 }
 
 function gerarJogadorId() {
@@ -2090,6 +2120,7 @@ function auth(req, res, next) {
 
 // ===== UPLOAD (multer) =====
 const MAX_UPLOAD_FILE_SIZE = 50 * 1024 * 1024;
+const MAX_PERFIL_IMAGE_SIZE = 8 * 1024 * 1024;
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) =>
@@ -2171,19 +2202,42 @@ const uploadResultado = multer({
   }
 });
 
+const uploadPerfilImagem = multer({
+  storage,
+  limits: {
+    fileSize: MAX_PERFIL_IMAGE_SIZE
+  },
+  fileFilter: (req, file, cb) => {
+    const permitidos = new Set([
+      "image/png",
+      "image/jpeg",
+      "image/jpg",
+      "image/webp"
+    ]);
+
+    if (!permitidos.has(String(file.mimetype || "").toLowerCase())) {
+      return cb(new Error("Apenas imagens PNG, JPG e WEBP sao permitidas."));
+    }
+
+    cb(null, true);
+  }
+});
+
 function uploadComErroControlado(middleware) {
   return (req, res, next) => {
     middleware(req, res, (err) => {
       if (!err) return next();
 
       if (err.code === "LIMIT_FILE_SIZE") {
+        const isPerfilUpload = String(req.originalUrl || req.url || "").includes("/me/time/perfil/");
+        const maxMb = isPerfilUpload ? Math.round(MAX_PERFIL_IMAGE_SIZE / (1024 * 1024)) : 50;
         console.warn("[UPLOAD_LIMIT] arquivo_maior_50mb", {
           field: err.field || "",
           url: req.originalUrl || req.url || ""
         });
         return res.status(400).json({
           ok: false,
-          error: "Arquivo muito grande. Envie imagens com até 50MB."
+          error: `Arquivo muito grande. Envie imagens com ate ${maxMb}MB.`
         });
       }
 
@@ -2805,10 +2859,129 @@ function salvarPerfilTimePrivado(req, res) {
   }
 }
 
+function caminhoImagemPerfilAtual(perfil, tipo) {
+  const pathKey = `${tipo}_path`;
+  const imagemPath = assetPerfil(perfil?.[pathKey] || "");
+  if (!imagemPath) return "";
+  if (path.isAbsolute(imagemPath)) return imagemPath;
+  return path.join(getPerfilDir(perfil.perfil_id), imagemPath);
+}
+
+function servirImagemPerfilPrivada(req, res, tipo) {
+  registrarOnline(req, { ultima_acao: `perfil_time_${tipo}_imagem` });
+
+  const clientes = readClientes();
+
+  try {
+    const perfilInfo = ensurePerfilCliente(clientes, req.user.whatsapp);
+    const perfilAtual = safeReadJson(perfilInfo.perfil_file) || perfilInfo.perfil;
+    const perfil = normalizarPerfilPrivado(perfilAtual, perfilInfo.cliente, perfilInfo.perfil_id);
+    const imagemPath = caminhoImagemPerfilAtual(perfil, tipo);
+    const perfilDir = getPerfilDir(perfilInfo.perfil_id);
+
+    const perfilDirResolvido = path.resolve(perfilDir);
+    const imagemResolvida = path.resolve(imagemPath || "");
+    const dentroDaPastaPerfil = imagemResolvida === perfilDirResolvido || imagemResolvida.startsWith(perfilDirResolvido + path.sep);
+
+    if (!imagemPath || !dentroDaPastaPerfil || !fs.existsSync(imagemResolvida)) {
+      return res.status(404).json({ ok: false, error: "Imagem nao encontrada" });
+    }
+
+    return res.sendFile(imagemResolvida);
+  } catch (err) {
+    const status = Number(err?.status || 500);
+
+    return res.status(status).json({
+      ok: false,
+      error: status === 404 ? "Cliente nao encontrado" : "Falha ao carregar imagem do perfil"
+    });
+  }
+}
+
+function uploadImagemPerfilPrivada(tipo) {
+  return (req, res) => {
+    registrarOnline(req, { ultima_acao: `perfil_time_${tipo}_upload` });
+
+    const imagem = req.file;
+
+    if (!imagem || !imagem.path) {
+      return res.status(400).json({ ok: false, error: "Envie uma imagem." });
+    }
+
+    const clientes = readClientes();
+
+    try {
+      const perfilInfo = ensurePerfilCliente(clientes, req.user.whatsapp);
+      const perfilAtual = safeReadJson(perfilInfo.perfil_file) || perfilInfo.perfil;
+      const agora = new Date().toISOString();
+      const ext = getExtensaoImagemPerfil(imagem.mimetype);
+
+      if (!ext) {
+        limparUploadsTemporarios({ imagem: [imagem] });
+        return res.status(400).json({ ok: false, error: "Formato de imagem invalido." });
+      }
+
+      const assetsDir = getPerfilAssetsDir(perfilInfo.perfil_id);
+      ensureDir(assetsDir);
+
+      const destino = getPerfilImagemFile(perfilInfo.perfil_id, tipo, ext);
+      const antigos = [".png", ".jpg", ".jpeg", ".webp"]
+        .map(oldExt => getPerfilImagemFile(perfilInfo.perfil_id, tipo, oldExt))
+        .filter(filePath => filePath && filePath !== destino);
+
+      fs.renameSync(imagem.path, destino);
+      antigos.forEach(filePath => {
+        try {
+          if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+        } catch (e) {
+          console.warn("[perfil_imagem] falha ao remover imagem antiga", {
+            tipo,
+            path: filePath,
+            erro: e.message
+          });
+        }
+      });
+
+      const perfil = normalizarPerfilPrivado({
+        ...perfilAtual,
+        [`${tipo}_path`]: path.join("assets", `${tipo}${ext}`).replace(/\\/g, "/"),
+        [`${tipo}_url`]: perfilImagemUrl(tipo),
+        atualizado_em: agora
+      }, perfilInfo.cliente, perfilInfo.perfil_id);
+
+      perfil.atualizado_em = agora;
+      perfil.publico = false;
+
+      writeJsonSafe(perfilInfo.perfil_file, perfil);
+
+      return res.json({
+        ok: true,
+        perfil: perfilResponse(perfil),
+        tipo,
+        path: perfil[`${tipo}_path`],
+        url: perfil[`${tipo}_url`]
+      });
+    } catch (err) {
+      limparUploadsTemporarios({ imagem: [imagem] });
+
+      const status = Number(err?.status || 500);
+
+      return res.status(status).json({
+        ok: false,
+        error: status === 404 ? "Cliente nao encontrado" : "Falha ao salvar imagem do perfil"
+      });
+    }
+  };
+}
+
 app.get("/me/perfil", auth, carregarPerfilTimePrivado);
 app.patch("/me/perfil", auth, salvarPerfilTimePrivado);
 app.get("/me/time/perfil", auth, carregarPerfilTimePrivado);
 app.patch("/me/time/perfil", auth, salvarPerfilTimePrivado);
+app.get("/me/time/perfil/escudo/imagem", auth, (req, res) => servirImagemPerfilPrivada(req, res, "escudo"));
+app.get("/me/time/perfil/mascote/imagem", auth, (req, res) => servirImagemPerfilPrivada(req, res, "mascote"));
+app.post("/me/time/perfil/escudo", auth, uploadComErroControlado(uploadPerfilImagem.single("imagem")), uploadImagemPerfilPrivada("escudo"));
+app.post("/me/time/perfil/mascote", auth, uploadComErroControlado(uploadPerfilImagem.single("imagem")), uploadImagemPerfilPrivada("mascote"));
 
 app.get("/me/time/jogadores", auth, (req, res) => {
   registrarOnline(req, { ultima_acao: "perfil_time_jogadores" });
