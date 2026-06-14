@@ -1022,8 +1022,22 @@ function getPerfilFile(perfilId) {
   return path.join(getPerfilDir(perfilId), "perfil.json");
 }
 
+function getPerfilJogadoresFile(perfilId) {
+  return path.join(getPerfilDir(perfilId), "jogadores.json");
+}
+
+function getPerfilJogosFile(perfilId) {
+  return path.join(getPerfilDir(perfilId), "jogos.json");
+}
+
 function textoPerfil(value, max = 80) {
   return String(value || "").trim().slice(0, max);
+}
+
+function assetPerfil(value) {
+  return textoPerfil(value, 260)
+    .replace(/[<>"']/g, "")
+    .trim();
 }
 
 function normalizarInstagramPerfil(value) {
@@ -1043,6 +1057,11 @@ function perfilDefault(cliente, perfilId) {
     cidade: "",
     estado: "",
     instagram: "",
+    escudo_url: "",
+    escudo_path: "",
+    mascote_url: "",
+    mascote_path: "",
+    descricao_curta: "",
     publico: false,
     criado_em: agora,
     atualizado_em: agora
@@ -1061,6 +1080,11 @@ function normalizarPerfilPrivado(perfil, cliente, perfilId) {
     cidade: textoPerfil(base.cidade || ""),
     estado: textoPerfil(base.estado || "", 40),
     instagram: normalizarInstagramPerfil(base.instagram || ""),
+    escudo_url: assetPerfil(base.escudo_url || ""),
+    escudo_path: assetPerfil(base.escudo_path || ""),
+    mascote_url: assetPerfil(base.mascote_url || ""),
+    mascote_path: assetPerfil(base.mascote_path || ""),
+    descricao_curta: textoPerfil(base.descricao_curta || "", 240),
     publico: false,
     criado_em: base.criado_em || agora,
     atualizado_em: base.atualizado_em || agora
@@ -1118,10 +1142,172 @@ function perfilResponse(perfil) {
     cidade: perfil.cidade,
     estado: perfil.estado,
     instagram: perfil.instagram,
+    escudo_url: perfil.escudo_url || "",
+    escudo_path: perfil.escudo_path || "",
+    mascote_url: perfil.mascote_url || "",
+    mascote_path: perfil.mascote_path || "",
+    descricao_curta: perfil.descricao_curta || "",
     publico: false,
     criado_em: perfil.criado_em,
     atualizado_em: perfil.atualizado_em
   };
+}
+
+function gerarJogadorId() {
+  return `jog_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`;
+}
+
+function normalizarJogadorId(value) {
+  return String(value || "").trim().replace(/[^\w-]+/g, "").slice(0, 80);
+}
+
+function jogadorResponse(jogador) {
+  return {
+    id: jogador.id,
+    nome: jogador.nome,
+    apelido: jogador.apelido || "",
+    numero: jogador.numero || "",
+    posicao: jogador.posicao || "",
+    foto_url: jogador.foto_url || "",
+    ativo: jogador.ativo !== false,
+    criado_em: jogador.criado_em,
+    atualizado_em: jogador.atualizado_em
+  };
+}
+
+function normalizarJogador(jogador) {
+  const base = jogador && typeof jogador === "object" && !Array.isArray(jogador)
+    ? jogador
+    : {};
+  const agora = new Date().toISOString();
+
+  return {
+    id: normalizarJogadorId(base.id) || gerarJogadorId(),
+    nome: textoPerfil(base.nome || "", 80),
+    apelido: textoPerfil(base.apelido || "", 60),
+    numero: textoPerfil(base.numero || "", 12),
+    posicao: textoPerfil(base.posicao || "", 40),
+    foto_url: assetPerfil(base.foto_url || ""),
+    ativo: base.ativo !== false,
+    criado_em: base.criado_em || agora,
+    atualizado_em: base.atualizado_em || agora
+  };
+}
+
+function readPerfilJogadores(perfilId) {
+  return readJsonArraySafe(getPerfilJogadoresFile(perfilId))
+    .map(normalizarJogador)
+    .filter(jogador => jogador.id);
+}
+
+function writePerfilJogadores(perfilId, jogadores) {
+  ensureDir(getPerfilDir(perfilId));
+  writeJsonSafe(getPerfilJogadoresFile(perfilId), jogadores.map(jogadorResponse));
+}
+
+function payloadJogador(body, jogadorAtual = {}) {
+  const payload = body && typeof body === "object" && !Array.isArray(body)
+    ? body
+    : {};
+  const agora = new Date().toISOString();
+
+  return normalizarJogador({
+    ...jogadorAtual,
+    nome: payload.nome ?? jogadorAtual.nome,
+    apelido: payload.apelido ?? jogadorAtual.apelido,
+    numero: payload.numero ?? jogadorAtual.numero,
+    posicao: payload.posicao ?? jogadorAtual.posicao,
+    foto_url: payload.foto_url ?? jogadorAtual.foto_url,
+    ativo: typeof payload.ativo === "boolean" ? payload.ativo : jogadorAtual.ativo,
+    atualizado_em: agora
+  });
+}
+
+function gerarJogoId() {
+  return `jogo_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`;
+}
+
+function normalizarJogoId(value) {
+  return String(value || "").trim().replace(/[^\w-]+/g, "").slice(0, 80);
+}
+
+function normalizarTipoJogo(value) {
+  const tipo = String(value || "").trim().toLowerCase();
+  return ["resultado", "proximo_jogo"].includes(tipo) ? tipo : "";
+}
+
+function jogoResponse(jogo) {
+  return {
+    id: jogo.id,
+    tipo: jogo.tipo,
+    adversario: jogo.adversario,
+    meu_time_gols: jogo.meu_time_gols || "",
+    adversario_gols: jogo.adversario_gols || "",
+    data: jogo.data || "",
+    horario: jogo.horario || "",
+    local: jogo.local || "",
+    campeonato: jogo.campeonato || "",
+    status: jogo.status || "",
+    ativo: jogo.ativo !== false,
+    criado_em: jogo.criado_em,
+    atualizado_em: jogo.atualizado_em
+  };
+}
+
+function normalizarJogo(jogo) {
+  const base = jogo && typeof jogo === "object" && !Array.isArray(jogo)
+    ? jogo
+    : {};
+  const agora = new Date().toISOString();
+
+  return {
+    id: normalizarJogoId(base.id) || gerarJogoId(),
+    tipo: normalizarTipoJogo(base.tipo) || "proximo_jogo",
+    adversario: textoPerfil(base.adversario || "", 80),
+    meu_time_gols: textoPerfil(base.meu_time_gols || "", 8),
+    adversario_gols: textoPerfil(base.adversario_gols || "", 8),
+    data: textoPerfil(base.data || "", 20),
+    horario: textoPerfil(base.horario || "", 20),
+    local: textoPerfil(base.local || "", 80),
+    campeonato: textoPerfil(base.campeonato || "", 80),
+    status: textoPerfil(base.status || "", 40),
+    ativo: base.ativo !== false,
+    criado_em: base.criado_em || agora,
+    atualizado_em: base.atualizado_em || agora
+  };
+}
+
+function readPerfilJogos(perfilId) {
+  return readJsonArraySafe(getPerfilJogosFile(perfilId))
+    .map(normalizarJogo)
+    .filter(jogo => jogo.id);
+}
+
+function writePerfilJogos(perfilId, jogos) {
+  ensureDir(getPerfilDir(perfilId));
+  writeJsonSafe(getPerfilJogosFile(perfilId), jogos.map(jogoResponse));
+}
+
+function payloadJogo(body, jogoAtual = {}) {
+  const payload = body && typeof body === "object" && !Array.isArray(body)
+    ? body
+    : {};
+  const agora = new Date().toISOString();
+
+  return normalizarJogo({
+    ...jogoAtual,
+    tipo: payload.tipo ?? jogoAtual.tipo,
+    adversario: payload.adversario ?? jogoAtual.adversario,
+    meu_time_gols: payload.meu_time_gols ?? jogoAtual.meu_time_gols,
+    adversario_gols: payload.adversario_gols ?? jogoAtual.adversario_gols,
+    data: payload.data ?? jogoAtual.data,
+    horario: payload.horario ?? jogoAtual.horario,
+    local: payload.local ?? jogoAtual.local,
+    campeonato: payload.campeonato ?? jogoAtual.campeonato,
+    status: payload.status ?? jogoAtual.status,
+    ativo: typeof payload.ativo === "boolean" ? payload.ativo : jogoAtual.ativo,
+    atualizado_em: agora
+  });
 }
 
 function readCartasApp() {
@@ -2538,7 +2724,7 @@ app.get("/me", auth, (req, res) => {
   });
 });
 
-app.get("/me/perfil", auth, (req, res) => {
+function carregarPerfilTimePrivado(req, res) {
   registrarOnline(req, { ultima_acao: "perfil_time" });
 
   const clientes = readClientes();
@@ -2558,12 +2744,22 @@ app.get("/me/perfil", auth, (req, res) => {
       error: status === 404 ? "Cliente nao encontrado" : "Falha ao carregar perfil"
     });
   }
-});
+}
 
-app.patch("/me/perfil", auth, (req, res) => {
+function salvarPerfilTimePrivado(req, res) {
   registrarOnline(req, { ultima_acao: "perfil_time_editar" });
 
   const clientes = readClientes();
+  const body = req.body && typeof req.body === "object" && !Array.isArray(req.body)
+    ? req.body
+    : {};
+
+  if (Object.prototype.hasOwnProperty.call(body, "nome_time") && !textoPerfil(body.nome_time)) {
+    return res.status(400).json({
+      ok: false,
+      error: "Nome do time obrigatorio"
+    });
+  }
 
   try {
     const perfilInfo = ensurePerfilCliente(clientes, req.user.whatsapp);
@@ -2572,10 +2768,15 @@ app.patch("/me/perfil", auth, (req, res) => {
 
     const perfil = normalizarPerfilPrivado({
       ...perfilAtual,
-      nome_time: textoPerfil(req.body?.nome_time ?? perfilAtual.nome_time),
-      cidade: textoPerfil(req.body?.cidade ?? perfilAtual.cidade),
-      estado: textoPerfil(req.body?.estado ?? perfilAtual.estado, 40),
-      instagram: normalizarInstagramPerfil(req.body?.instagram ?? perfilAtual.instagram),
+      nome_time: textoPerfil(body.nome_time ?? perfilAtual.nome_time),
+      cidade: textoPerfil(body.cidade ?? perfilAtual.cidade),
+      estado: textoPerfil(body.estado ?? perfilAtual.estado, 40),
+      instagram: normalizarInstagramPerfil(body.instagram ?? perfilAtual.instagram),
+      escudo_url: assetPerfil(body.escudo_url ?? perfilAtual.escudo_url),
+      escudo_path: assetPerfil(body.escudo_path ?? perfilAtual.escudo_path),
+      mascote_url: assetPerfil(body.mascote_url ?? perfilAtual.mascote_url),
+      mascote_path: assetPerfil(body.mascote_path ?? perfilAtual.mascote_path),
+      descricao_curta: textoPerfil(body.descricao_curta ?? perfilAtual.descricao_curta, 240),
       publico: false,
       atualizado_em: agora
     }, perfilInfo.cliente, perfilInfo.perfil_id);
@@ -2600,6 +2801,352 @@ app.patch("/me/perfil", auth, (req, res) => {
     return res.status(status).json({
       ok: false,
       error: status === 404 ? "Cliente nao encontrado" : "Falha ao salvar perfil"
+    });
+  }
+}
+
+app.get("/me/perfil", auth, carregarPerfilTimePrivado);
+app.patch("/me/perfil", auth, salvarPerfilTimePrivado);
+app.get("/me/time/perfil", auth, carregarPerfilTimePrivado);
+app.patch("/me/time/perfil", auth, salvarPerfilTimePrivado);
+
+app.get("/me/time/jogadores", auth, (req, res) => {
+  registrarOnline(req, { ultima_acao: "perfil_time_jogadores" });
+
+  const clientes = readClientes();
+
+  try {
+    const perfilInfo = ensurePerfilCliente(clientes, req.user.whatsapp);
+    const jogadores = readPerfilJogadores(perfilInfo.perfil_id);
+
+    return res.json({
+      ok: true,
+      jogadores: jogadores.map(jogadorResponse)
+    });
+  } catch (err) {
+    const status = Number(err?.status || 500);
+
+    return res.status(status).json({
+      ok: false,
+      error: status === 404 ? "Cliente nao encontrado" : "Falha ao carregar elenco"
+    });
+  }
+});
+
+app.post("/me/time/jogadores", auth, (req, res) => {
+  registrarOnline(req, { ultima_acao: "perfil_time_jogador_criar" });
+
+  const body = req.body && typeof req.body === "object" && !Array.isArray(req.body)
+    ? req.body
+    : {};
+  const nome = textoPerfil(body.nome || "", 80);
+
+  if (!nome) {
+    return res.status(400).json({
+      ok: false,
+      error: "Nome do jogador obrigatorio"
+    });
+  }
+
+  const clientes = readClientes();
+
+  try {
+    const perfilInfo = ensurePerfilCliente(clientes, req.user.whatsapp);
+    const jogadores = readPerfilJogadores(perfilInfo.perfil_id);
+    const jogador = payloadJogador({
+      ...body,
+      nome,
+      ativo: true
+    }, {
+      id: gerarJogadorId(),
+      ativo: true
+    });
+
+    jogadores.push(jogador);
+    writePerfilJogadores(perfilInfo.perfil_id, jogadores);
+
+    return res.status(201).json({
+      ok: true,
+      jogador: jogadorResponse(jogador)
+    });
+  } catch (err) {
+    const status = Number(err?.status || 500);
+
+    return res.status(status).json({
+      ok: false,
+      error: status === 404 ? "Cliente nao encontrado" : "Falha ao criar jogador"
+    });
+  }
+});
+
+app.patch("/me/time/jogadores/:id", auth, (req, res) => {
+  registrarOnline(req, { ultima_acao: "perfil_time_jogador_editar" });
+
+  const body = req.body && typeof req.body === "object" && !Array.isArray(req.body)
+    ? req.body
+    : {};
+  const jogadorId = normalizarJogadorId(req.params.id);
+
+  if (!jogadorId) {
+    return res.status(400).json({ ok: false, error: "Jogador invalido" });
+  }
+
+  if (Object.prototype.hasOwnProperty.call(body, "nome") && !textoPerfil(body.nome, 80)) {
+    return res.status(400).json({
+      ok: false,
+      error: "Nome do jogador obrigatorio"
+    });
+  }
+
+  const clientes = readClientes();
+
+  try {
+    const perfilInfo = ensurePerfilCliente(clientes, req.user.whatsapp);
+    const jogadores = readPerfilJogadores(perfilInfo.perfil_id);
+    const index = jogadores.findIndex(jogador => jogador.id === jogadorId);
+
+    if (index < 0) {
+      return res.status(404).json({ ok: false, error: "Jogador nao encontrado" });
+    }
+
+    const jogador = payloadJogador(body, jogadores[index]);
+    jogador.id = jogadores[index].id;
+    jogador.criado_em = jogadores[index].criado_em;
+    jogadores[index] = jogador;
+    writePerfilJogadores(perfilInfo.perfil_id, jogadores);
+
+    return res.json({
+      ok: true,
+      jogador: jogadorResponse(jogador)
+    });
+  } catch (err) {
+    const status = Number(err?.status || 500);
+
+    return res.status(status).json({
+      ok: false,
+      error: status === 404 ? "Cliente nao encontrado" : "Falha ao editar jogador"
+    });
+  }
+});
+
+app.delete("/me/time/jogadores/:id", auth, (req, res) => {
+  registrarOnline(req, { ultima_acao: "perfil_time_jogador_remover" });
+
+  const jogadorId = normalizarJogadorId(req.params.id);
+
+  if (!jogadorId) {
+    return res.status(400).json({ ok: false, error: "Jogador invalido" });
+  }
+
+  const clientes = readClientes();
+
+  try {
+    const perfilInfo = ensurePerfilCliente(clientes, req.user.whatsapp);
+    const jogadores = readPerfilJogadores(perfilInfo.perfil_id);
+    const index = jogadores.findIndex(jogador => jogador.id === jogadorId);
+
+    if (index < 0) {
+      return res.status(404).json({ ok: false, error: "Jogador nao encontrado" });
+    }
+
+    jogadores[index] = {
+      ...jogadores[index],
+      ativo: false,
+      atualizado_em: new Date().toISOString()
+    };
+    writePerfilJogadores(perfilInfo.perfil_id, jogadores);
+
+    return res.json({
+      ok: true,
+      jogador: jogadorResponse(jogadores[index])
+    });
+  } catch (err) {
+    const status = Number(err?.status || 500);
+
+    return res.status(status).json({
+      ok: false,
+      error: status === 404 ? "Cliente nao encontrado" : "Falha ao remover jogador"
+    });
+  }
+});
+
+app.get("/me/time/jogos", auth, (req, res) => {
+  registrarOnline(req, { ultima_acao: "perfil_time_jogos" });
+
+  const clientes = readClientes();
+
+  try {
+    const perfilInfo = ensurePerfilCliente(clientes, req.user.whatsapp);
+    const jogos = readPerfilJogos(perfilInfo.perfil_id);
+
+    return res.json({
+      ok: true,
+      jogos: jogos.map(jogoResponse)
+    });
+  } catch (err) {
+    const status = Number(err?.status || 500);
+
+    return res.status(status).json({
+      ok: false,
+      error: status === 404 ? "Cliente nao encontrado" : "Falha ao carregar jogos"
+    });
+  }
+});
+
+app.post("/me/time/jogos", auth, (req, res) => {
+  registrarOnline(req, { ultima_acao: "perfil_time_jogo_criar" });
+
+  const body = req.body && typeof req.body === "object" && !Array.isArray(req.body)
+    ? req.body
+    : {};
+  const tipo = normalizarTipoJogo(body.tipo);
+  const adversario = textoPerfil(body.adversario || "", 80);
+
+  if (!tipo) {
+    return res.status(400).json({
+      ok: false,
+      error: "Tipo de jogo invalido"
+    });
+  }
+
+  if (!adversario) {
+    return res.status(400).json({
+      ok: false,
+      error: "Adversario obrigatorio"
+    });
+  }
+
+  const clientes = readClientes();
+
+  try {
+    const perfilInfo = ensurePerfilCliente(clientes, req.user.whatsapp);
+    const jogos = readPerfilJogos(perfilInfo.perfil_id);
+    const jogo = payloadJogo({
+      ...body,
+      tipo,
+      adversario,
+      ativo: true
+    }, {
+      id: gerarJogoId(),
+      ativo: true
+    });
+
+    jogos.push(jogo);
+    writePerfilJogos(perfilInfo.perfil_id, jogos);
+
+    return res.status(201).json({
+      ok: true,
+      jogo: jogoResponse(jogo)
+    });
+  } catch (err) {
+    const status = Number(err?.status || 500);
+
+    return res.status(status).json({
+      ok: false,
+      error: status === 404 ? "Cliente nao encontrado" : "Falha ao criar jogo"
+    });
+  }
+});
+
+app.patch("/me/time/jogos/:id", auth, (req, res) => {
+  registrarOnline(req, { ultima_acao: "perfil_time_jogo_editar" });
+
+  const body = req.body && typeof req.body === "object" && !Array.isArray(req.body)
+    ? req.body
+    : {};
+  const jogoId = normalizarJogoId(req.params.id);
+
+  if (!jogoId) {
+    return res.status(400).json({ ok: false, error: "Jogo invalido" });
+  }
+
+  if (Object.prototype.hasOwnProperty.call(body, "tipo") && !normalizarTipoJogo(body.tipo)) {
+    return res.status(400).json({
+      ok: false,
+      error: "Tipo de jogo invalido"
+    });
+  }
+
+  if (Object.prototype.hasOwnProperty.call(body, "adversario") && !textoPerfil(body.adversario, 80)) {
+    return res.status(400).json({
+      ok: false,
+      error: "Adversario obrigatorio"
+    });
+  }
+
+  const clientes = readClientes();
+
+  try {
+    const perfilInfo = ensurePerfilCliente(clientes, req.user.whatsapp);
+    const jogos = readPerfilJogos(perfilInfo.perfil_id);
+    const index = jogos.findIndex(jogo => jogo.id === jogoId);
+
+    if (index < 0) {
+      return res.status(404).json({ ok: false, error: "Jogo nao encontrado" });
+    }
+
+    const jogo = payloadJogo({
+      ...body,
+      tipo: Object.prototype.hasOwnProperty.call(body, "tipo")
+        ? normalizarTipoJogo(body.tipo)
+        : jogos[index].tipo
+    }, jogos[index]);
+    jogo.id = jogos[index].id;
+    jogo.criado_em = jogos[index].criado_em;
+    jogos[index] = jogo;
+    writePerfilJogos(perfilInfo.perfil_id, jogos);
+
+    return res.json({
+      ok: true,
+      jogo: jogoResponse(jogo)
+    });
+  } catch (err) {
+    const status = Number(err?.status || 500);
+
+    return res.status(status).json({
+      ok: false,
+      error: status === 404 ? "Cliente nao encontrado" : "Falha ao editar jogo"
+    });
+  }
+});
+
+app.delete("/me/time/jogos/:id", auth, (req, res) => {
+  registrarOnline(req, { ultima_acao: "perfil_time_jogo_remover" });
+
+  const jogoId = normalizarJogoId(req.params.id);
+
+  if (!jogoId) {
+    return res.status(400).json({ ok: false, error: "Jogo invalido" });
+  }
+
+  const clientes = readClientes();
+
+  try {
+    const perfilInfo = ensurePerfilCliente(clientes, req.user.whatsapp);
+    const jogos = readPerfilJogos(perfilInfo.perfil_id);
+    const index = jogos.findIndex(jogo => jogo.id === jogoId);
+
+    if (index < 0) {
+      return res.status(404).json({ ok: false, error: "Jogo nao encontrado" });
+    }
+
+    jogos[index] = {
+      ...jogos[index],
+      ativo: false,
+      atualizado_em: new Date().toISOString()
+    };
+    writePerfilJogos(perfilInfo.perfil_id, jogos);
+
+    return res.json({
+      ok: true,
+      jogo: jogoResponse(jogos[index])
+    });
+  } catch (err) {
+    const status = Number(err?.status || 500);
+
+    return res.status(status).json({
+      ok: false,
+      error: status === 404 ? "Cliente nao encontrado" : "Falha ao remover jogo"
     });
   }
 });
