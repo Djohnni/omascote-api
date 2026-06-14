@@ -1052,6 +1052,10 @@ function getPerfilJogosFile(perfilId) {
   return path.join(getPerfilDir(perfilId), "jogos.json");
 }
 
+function getPerfilEscalacaoFile(perfilId) {
+  return path.join(getPerfilDir(perfilId), "escalacao.json");
+}
+
 function textoPerfil(value, max = 80) {
   return String(value || "").trim().slice(0, max);
 }
@@ -1276,6 +1280,88 @@ function payloadJogador(body, jogadorAtual = {}) {
     ativo: typeof payload.ativo === "boolean" ? payload.ativo : jogadorAtual.ativo,
     atualizado_em: agora
   });
+}
+
+function escalacaoDefault() {
+  return {
+    titulares: [],
+    reservas: [],
+    atualizado_em: ""
+  };
+}
+
+function escalacaoJogadoresMap(jogadores = []) {
+  const map = new Map();
+
+  for (const jogador of Array.isArray(jogadores) ? jogadores : []) {
+    if (!jogador || jogador.ativo === false || !jogador.id) continue;
+    map.set(jogador.id, jogador);
+  }
+
+  return map;
+}
+
+function normalizarEscalacaoGrupo(itens, tipo, jogadoresMap, usados) {
+  const lista = Array.isArray(itens) ? itens : [];
+  const normalizados = [];
+
+  for (const item of lista) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    if (normalizados.length >= 30) break;
+
+    const jogadorId = normalizarJogadorId(item.jogador_id || item.id);
+    if (jogadorId && usados.has(jogadorId)) continue;
+
+    const jogador = jogadorId ? jogadoresMap.get(jogadorId) : null;
+    if (jogadorId && !jogador) continue;
+
+    const nome = textoPerfil(jogador?.nome || item.nome || "", 80);
+
+    if (!nome) continue;
+
+    if (jogadorId) usados.add(jogadorId);
+
+    normalizados.push({
+      jogador_id: jogador?.id || jogadorId || "",
+      nome,
+      apelido: textoPerfil(jogador?.apelido || item.apelido || "", 60),
+      numero: textoPerfil(jogador?.numero || item.numero || "", 12),
+      posicao: textoPerfil(item.posicao || jogador?.posicao || "", 40),
+      tipo,
+      ordem: normalizados.length + 1
+    });
+  }
+
+  return normalizados;
+}
+
+function normalizarEscalacaoPerfil(raw = {}, jogadores = []) {
+  const base = raw && typeof raw === "object" && !Array.isArray(raw)
+    ? raw
+    : {};
+  const jogadoresMap = escalacaoJogadoresMap(jogadores);
+  const usados = new Set();
+
+  return {
+    titulares: normalizarEscalacaoGrupo(base.titulares, "titular", jogadoresMap, usados),
+    reservas: normalizarEscalacaoGrupo(base.reservas, "reserva", jogadoresMap, usados),
+    atualizado_em: base.atualizado_em || ""
+  };
+}
+
+function readPerfilEscalacao(perfilId, jogadores = []) {
+  const raw = safeReadJson(getPerfilEscalacaoFile(perfilId)) || escalacaoDefault();
+  return normalizarEscalacaoPerfil(raw, jogadores);
+}
+
+function writePerfilEscalacao(perfilId, escalacao) {
+  ensureDir(getPerfilDir(perfilId));
+  const payload = {
+    titulares: Array.isArray(escalacao?.titulares) ? escalacao.titulares : [],
+    reservas: Array.isArray(escalacao?.reservas) ? escalacao.reservas : [],
+    atualizado_em: escalacao?.atualizado_em || new Date().toISOString()
+  };
+  writeJsonSafe(getPerfilEscalacaoFile(perfilId), payload);
 }
 
 function gerarJogoId() {
@@ -3335,6 +3421,63 @@ app.get("/me/time/galeria", auth, (req, res) => {
 
 app.get("/me/time/galeria/:pedidoId/imagem", auth, (req, res) => {
   return servirImagemGaleriaPedido(req, res, req.user.whatsapp, req.params.pedidoId);
+});
+
+app.get("/me/time/escalacao", auth, (req, res) => {
+  registrarOnline(req, { ultima_acao: "perfil_time_escalacao" });
+
+  const clientes = readClientes();
+
+  try {
+    const perfilInfo = ensurePerfilCliente(clientes, req.user.whatsapp);
+    const jogadores = readPerfilJogadores(perfilInfo.perfil_id);
+    const escalacao = readPerfilEscalacao(perfilInfo.perfil_id, jogadores);
+
+    return res.json({
+      ok: true,
+      escalacao
+    });
+  } catch (err) {
+    const status = Number(err?.status || 500);
+
+    return res.status(status).json({
+      ok: false,
+      error: status === 404 ? "Cliente nao encontrado" : "Falha ao carregar escalacao"
+    });
+  }
+});
+
+app.patch("/me/time/escalacao", auth, (req, res) => {
+  registrarOnline(req, { ultima_acao: "perfil_time_escalacao_salvar" });
+
+  const body = req.body && typeof req.body === "object" && !Array.isArray(req.body)
+    ? req.body
+    : {};
+  const clientes = readClientes();
+
+  try {
+    const perfilInfo = ensurePerfilCliente(clientes, req.user.whatsapp);
+    const jogadores = readPerfilJogadores(perfilInfo.perfil_id);
+    const escalacao = normalizarEscalacaoPerfil({
+      titulares: body.titulares,
+      reservas: body.reservas,
+      atualizado_em: new Date().toISOString()
+    }, jogadores);
+
+    writePerfilEscalacao(perfilInfo.perfil_id, escalacao);
+
+    return res.json({
+      ok: true,
+      escalacao
+    });
+  } catch (err) {
+    const status = Number(err?.status || 500);
+
+    return res.status(status).json({
+      ok: false,
+      error: status === 404 ? "Cliente nao encontrado" : "Falha ao salvar escalacao"
+    });
+  }
 });
 
 app.get("/me/time/jogadores", auth, (req, res) => {
