@@ -1004,6 +1004,24 @@ function normalizarPerfilId(value) {
   return String(value || "").trim().replace(/[^\w-]+/g, "");
 }
 
+function normalizarPerfilSlug(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
+}
+
+function gerarPerfilSlug(nomeTime, perfilId) {
+  const base = normalizarPerfilSlug(nomeTime || "time") || "time";
+  const sufixo = normalizarPerfilId(perfilId).replace(/^pf_/, "").slice(0, 6) || crypto.randomBytes(3).toString("hex");
+  const baseCurta = base.slice(0, 58).replace(/-+$/g, "") || "time";
+  return `${baseCurta}-${sufixo}`;
+}
+
 function gerarPerfilIdCliente(clienteId) {
   const hash = crypto
     .createHash("sha256")
@@ -1054,10 +1072,12 @@ function normalizarInstagramPerfil(value) {
 
 function perfilDefault(cliente, perfilId) {
   const agora = new Date().toISOString();
+  const nomeTime = textoPerfil(cliente?.nome_time || "Meu time");
 
   return {
     perfil_id: perfilId,
-    nome_time: textoPerfil(cliente?.nome_time || "Meu time"),
+    slug: gerarPerfilSlug(nomeTime, perfilId),
+    nome_time: nomeTime,
     cidade: "",
     estado: "",
     instagram: "",
@@ -1077,10 +1097,13 @@ function normalizarPerfilPrivado(perfil, cliente, perfilId) {
     ? perfil
     : {};
   const agora = new Date().toISOString();
+  const nomeTime = textoPerfil(base.nome_time || cliente?.nome_time || "Meu time");
+  const slug = normalizarPerfilSlug(base.slug) || gerarPerfilSlug(nomeTime, perfilId);
 
   return {
     perfil_id: perfilId,
-    nome_time: textoPerfil(base.nome_time || cliente?.nome_time || "Meu time"),
+    slug,
+    nome_time: nomeTime,
     cidade: textoPerfil(base.cidade || ""),
     estado: textoPerfil(base.estado || "", 40),
     instagram: normalizarInstagramPerfil(base.instagram || ""),
@@ -1089,7 +1112,7 @@ function normalizarPerfilPrivado(perfil, cliente, perfilId) {
     mascote_url: assetPerfil(base.mascote_url || ""),
     mascote_path: assetPerfil(base.mascote_path || ""),
     descricao_curta: textoPerfil(base.descricao_curta || "", 240),
-    publico: false,
+    publico: base.publico === true,
     criado_em: base.criado_em || agora,
     atualizado_em: base.atualizado_em || agora
   };
@@ -1142,6 +1165,7 @@ function ensurePerfilCliente(clientes, clienteId) {
 function perfilResponse(perfil) {
   return {
     perfil_id: perfil.perfil_id,
+    slug: perfil.slug,
     nome_time: perfil.nome_time,
     cidade: perfil.cidade,
     estado: perfil.estado,
@@ -1151,7 +1175,8 @@ function perfilResponse(perfil) {
     mascote_url: perfil.mascote_url || "",
     mascote_path: perfil.mascote_path || "",
     descricao_curta: perfil.descricao_curta || "",
-    publico: false,
+    publico: perfil.publico === true,
+    public_url: perfil.publico === true && perfil.slug ? `/app.html?time=${encodeURIComponent(perfil.slug)}` : "",
     criado_em: perfil.criado_em,
     atualizado_em: perfil.atualizado_em
   };
@@ -2823,6 +2848,7 @@ function salvarPerfilTimePrivado(req, res) {
     const perfil = normalizarPerfilPrivado({
       ...perfilAtual,
       nome_time: textoPerfil(body.nome_time ?? perfilAtual.nome_time),
+      slug: perfilAtual.slug,
       cidade: textoPerfil(body.cidade ?? perfilAtual.cidade),
       estado: textoPerfil(body.estado ?? perfilAtual.estado, 40),
       instagram: normalizarInstagramPerfil(body.instagram ?? perfilAtual.instagram),
@@ -2831,11 +2857,10 @@ function salvarPerfilTimePrivado(req, res) {
       mascote_url: assetPerfil(body.mascote_url ?? perfilAtual.mascote_url),
       mascote_path: assetPerfil(body.mascote_path ?? perfilAtual.mascote_path),
       descricao_curta: textoPerfil(body.descricao_curta ?? perfilAtual.descricao_curta, 240),
-      publico: false,
+      publico: body.publico === true,
       atualizado_em: agora
     }, perfilInfo.cliente, perfilInfo.perfil_id);
 
-    perfil.publico = false;
     perfil.atualizado_em = agora;
 
     perfilInfo.cliente.perfil_id = perfilInfo.perfil_id;
@@ -2950,7 +2975,6 @@ function uploadImagemPerfilPrivada(tipo) {
       }, perfilInfo.cliente, perfilInfo.perfil_id);
 
       perfil.atualizado_em = agora;
-      perfil.publico = false;
 
       writeJsonSafe(perfilInfo.perfil_file, perfil);
 
@@ -2973,6 +2997,120 @@ function uploadImagemPerfilPrivada(tipo) {
     }
   };
 }
+
+function perfilPublicoImagemUrl(perfil, tipo) {
+  if (!perfil?.slug || !perfil?.[`${tipo}_path`]) return "";
+  return `/time/${encodeURIComponent(perfil.slug)}/${tipo}/imagem`;
+}
+
+function perfilPublicoResponse(perfil) {
+  return {
+    slug: perfil.slug,
+    nome_time: perfil.nome_time,
+    cidade: perfil.cidade,
+    estado: perfil.estado,
+    instagram: perfil.instagram,
+    escudo_url: perfilPublicoImagemUrl(perfil, "escudo"),
+    mascote_url: perfilPublicoImagemUrl(perfil, "mascote"),
+    descricao_curta: perfil.descricao_curta || "",
+    publico: perfil.publico === true,
+    atualizado_em: perfil.atualizado_em
+  };
+}
+
+function carregarPerfilPublicoPorSlug(slugParam) {
+  const slug = normalizarPerfilSlug(slugParam);
+  if (!slug || !fs.existsSync(PERFIS_DIR)) return null;
+
+  const entries = fs.readdirSync(PERFIS_DIR, { withFileTypes: true });
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+
+    const perfilId = normalizarPerfilId(entry.name);
+    if (!perfilId) continue;
+
+    const perfilFile = getPerfilFile(perfilId);
+    const perfilAtual = safeReadJson(perfilFile);
+    if (!perfilAtual) continue;
+
+    const perfil = normalizarPerfilPrivado(perfilAtual, { nome_time: perfilAtual.nome_time }, perfilId);
+    if (perfil.publico === true && perfil.slug === slug) {
+      return { perfil, perfil_id: perfilId, perfil_file: perfilFile };
+    }
+  }
+
+  return null;
+}
+
+function carregarPerfilTimePublico(req, res) {
+  try {
+    const perfilInfo = carregarPerfilPublicoPorSlug(req.params.slug);
+    if (!perfilInfo) {
+      return res.status(404).json({ ok: false, error: "Perfil publico nao encontrado" });
+    }
+
+    const jogadores = readPerfilJogadores(perfilInfo.perfil_id)
+      .filter(jogador => jogador && jogador.ativo !== false)
+      .map(jogadorResponse);
+    const jogos = readPerfilJogos(perfilInfo.perfil_id)
+      .filter(jogo => jogo && jogo.ativo !== false)
+      .map(jogoResponse);
+
+    return res.json({
+      ok: true,
+      perfil: perfilPublicoResponse(perfilInfo.perfil),
+      jogadores,
+      jogos
+    });
+  } catch (err) {
+    console.warn("[perfil_publico] falha ao carregar", {
+      slug: req.params.slug || "",
+      erro: err?.message || err
+    });
+
+    return res.status(500).json({
+      ok: false,
+      error: "Falha ao carregar perfil publico"
+    });
+  }
+}
+
+function servirImagemPerfilPublica(req, res, tipo) {
+  try {
+    const perfilInfo = carregarPerfilPublicoPorSlug(req.params.slug);
+    if (!perfilInfo) {
+      return res.status(404).json({ ok: false, error: "Perfil publico nao encontrado" });
+    }
+
+    const imagemPath = caminhoImagemPerfilAtual(perfilInfo.perfil, tipo);
+    const perfilDir = getPerfilDir(perfilInfo.perfil_id);
+    const perfilDirResolvido = path.resolve(perfilDir);
+    const imagemResolvida = path.resolve(imagemPath || "");
+    const dentroDaPastaPerfil = imagemResolvida === perfilDirResolvido || imagemResolvida.startsWith(perfilDirResolvido + path.sep);
+
+    if (!imagemPath || !dentroDaPastaPerfil || !fs.existsSync(imagemResolvida)) {
+      return res.status(404).json({ ok: false, error: "Imagem nao encontrada" });
+    }
+
+    return res.sendFile(imagemResolvida);
+  } catch (err) {
+    console.warn("[perfil_publico] falha ao servir imagem", {
+      slug: req.params.slug || "",
+      tipo,
+      erro: err?.message || err
+    });
+
+    return res.status(500).json({
+      ok: false,
+      error: "Falha ao carregar imagem do perfil"
+    });
+  }
+}
+
+app.get("/time/:slug", carregarPerfilTimePublico);
+app.get("/time/:slug/escudo/imagem", (req, res) => servirImagemPerfilPublica(req, res, "escudo"));
+app.get("/time/:slug/mascote/imagem", (req, res) => servirImagemPerfilPublica(req, res, "mascote"));
 
 app.get("/me/perfil", auth, carregarPerfilTimePrivado);
 app.patch("/me/perfil", auth, salvarPerfilTimePrivado);
