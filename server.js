@@ -3391,6 +3391,20 @@ function carregarPerfilTimePublico(req, res) {
     const jogos = readPerfilJogos(perfilInfo.perfil_id)
       .filter(jogo => jogo && jogo.ativo !== false)
       .map(jogoResponse);
+    const escalacaoPrivada = readPerfilEscalacao(perfilInfo.perfil_id, jogadores);
+    const escalacaoPublicaItem = item => ({
+      nome: item.nome || "",
+      apelido: item.apelido || "",
+      numero: item.numero || "",
+      posicao: item.posicao || "",
+      tipo: item.tipo || "",
+      ordem: item.ordem || 0
+    });
+    const escalacao = {
+      titulares: (escalacaoPrivada.titulares || []).map(escalacaoPublicaItem),
+      reservas: (escalacaoPrivada.reservas || []).map(escalacaoPublicaItem),
+      atualizado_em: escalacaoPrivada.atualizado_em || ""
+    };
     const galeria = listarGaleriaPerfilCliente(perfilInfo.cliente_id, {
       perfilSlug: perfilInfo.perfil.slug,
       modo: "publico",
@@ -3409,6 +3423,7 @@ function carregarPerfilTimePublico(req, res) {
       jogadores,
       jogos,
       estatisticas: calcularEstatisticasPerfil(jogos),
+      escalacao,
       galeria,
       patrocinadores
     });
