@@ -1205,52 +1205,95 @@ function perfilResponse(perfil) {
 }
 
 const PERFIL_IMAGEM_TIPOS = new Set(["escudo", "mascote"]);
+const IMAGEM_UPLOAD_MIMES = new Set(["image/png", "image/jpeg", "image/jpg", "image/webp"]);
 
-function getExtensaoImagemPerfil(mimetype) {
+function normalizarMimeImagem(mimetype) {
   const tipo = String(mimetype || "").toLowerCase();
+  return tipo === "image/jpg" ? "image/jpeg" : tipo;
+}
+
+function getExtensaoImagemSegura(mimetype) {
+  const tipo = normalizarMimeImagem(mimetype);
   if (tipo === "image/png") return ".png";
-  if (tipo === "image/jpeg" || tipo === "image/jpg") return ".jpg";
+  if (tipo === "image/jpeg") return ".jpg";
   if (tipo === "image/webp") return ".webp";
   return "";
 }
 
-function detectarImagemPerfilArquivo(filePath) {
+function getExtensaoImagemPerfil(mimetype) {
+  return getExtensaoImagemSegura(mimetype);
+}
+
+function detectarImagemArquivo(filePath) {
+  let fd = null;
+
   try {
-    const buffer = fs.readFileSync(filePath);
-    if (buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) {
+    fd = fs.openSync(filePath, "r");
+    const buffer = Buffer.alloc(16);
+    const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, 0);
+    const header = buffer.subarray(0, bytesRead);
+
+    if (!header.length) return null;
+
+    if (header.length >= 8 && header.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) {
       return { mime: "image/png", ext: ".png" };
     }
 
-    if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+    if (header.length >= 3 && header[0] === 0xff && header[1] === 0xd8 && header[2] === 0xff) {
       return { mime: "image/jpeg", ext: ".jpg" };
     }
 
     if (
-      buffer.length >= 12 &&
-      buffer.subarray(0, 4).toString("ascii") === "RIFF" &&
-      buffer.subarray(8, 12).toString("ascii") === "WEBP"
+      header.length >= 12 &&
+      header.subarray(0, 4).toString("ascii") === "RIFF" &&
+      header.subarray(8, 12).toString("ascii") === "WEBP"
     ) {
       return { mime: "image/webp", ext: ".webp" };
     }
-  } catch {}
+  } catch {
+  } finally {
+    if (fd !== null) {
+      try { fs.closeSync(fd); } catch {}
+    }
+  }
 
   return null;
 }
 
-function validarAssinaturaImagemPerfil(file) {
-  const detectada = file?.path ? detectarImagemPerfilArquivo(file.path) : null;
-  if (!detectada) {
-    return { ok: false, error: "Arquivo de imagem invalido." };
+function detectarImagemPerfilArquivo(filePath) {
+  return detectarImagemArquivo(filePath);
+}
+
+function validarAssinaturaImagem(file) {
+  if (!file?.path) {
+    return { ok: false, error: "Arquivo de imagem nao enviado." };
+  }
+
+  if (Number(file.size || 0) <= 0) {
+    return { ok: false, error: "Arquivo vazio. Envie uma imagem PNG, JPG ou WEBP." };
   }
 
   const mimeDeclarado = String(file?.mimetype || "").toLowerCase();
-  const mimeNormalizado = mimeDeclarado === "image/jpg" ? "image/jpeg" : mimeDeclarado;
+  if (!IMAGEM_UPLOAD_MIMES.has(mimeDeclarado)) {
+    return { ok: false, error: "Formato de imagem invalido. Envie PNG, JPG ou WEBP." };
+  }
+
+  const detectada = detectarImagemArquivo(file.path);
+  if (!detectada) {
+    return { ok: false, error: "Arquivo de imagem invalido. Envie PNG, JPG ou WEBP." };
+  }
+
+  const mimeNormalizado = normalizarMimeImagem(mimeDeclarado);
 
   if (mimeNormalizado && mimeNormalizado !== detectada.mime) {
-    return { ok: false, error: "Arquivo de imagem invalido ou MIME divergente." };
+    return { ok: false, error: "Arquivo de imagem invalido. O tipo declarado nao combina com o arquivo enviado." };
   }
 
   return { ok: true, ...detectada };
+}
+
+function validarAssinaturaImagemPerfil(file) {
+  return validarAssinaturaImagem(file);
 }
 
 function normalizarTipoImagemPerfil(value) {
@@ -1854,11 +1897,7 @@ function normalizarCartaAppPayload(body = {}) {
 }
 
 function getExtensaoImagemCarta(mimetype) {
-  const mime = String(mimetype || "").toLowerCase();
-  if (mime === "image/png") return ".png";
-  if (mime === "image/webp") return ".webp";
-  if (mime === "image/jpeg" || mime === "image/jpg") return ".jpg";
-  return "";
+  return getExtensaoImagemSegura(mimetype);
 }
 
 function sanitizeCartaApp(carta, cartasLidas = []) {
@@ -2744,7 +2783,7 @@ const uploadPerfilImagem = multer({
 function uploadComErroControlado(middleware) {
   return (req, res, next) => {
     middleware(req, res, (err) => {
-      if (!err) return next();
+      if (!err) return validarUploadsImagemSeguros(req, res, next);
 
       if (err.code === "LIMIT_FILE_SIZE") {
         const isPerfilUpload = String(req.originalUrl || req.url || "").includes("/me/time/perfil/");
@@ -2778,18 +2817,68 @@ function listarArquivosUpload(files = {}) {
     .filter(file => file && file.path);
 }
 
+function listarArquivosUploadRequest(req) {
+  const arquivos = [];
+
+  if (req?.file?.path) arquivos.push(req.file);
+  arquivos.push(...listarArquivosUpload(req?.files || {}));
+
+  return arquivos;
+}
+
+function removerArquivoUpload(file) {
+  try {
+    if (file?.path && fs.existsSync(file.path)) fs.unlinkSync(file.path);
+  } catch (e) {
+    console.warn("[UPLOAD_CLEANUP] falha ao remover temporario", {
+      field: file?.fieldname || "",
+      path: file?.path || "",
+      erro: e.message
+    });
+  }
+}
+
 function limparUploadsTemporarios(files = {}) {
   for (const file of listarArquivosUpload(files)) {
-    try {
-      if (file.path && fs.existsSync(file.path)) fs.unlinkSync(file.path);
-    } catch (e) {
-      console.warn("[UPLOAD_CLEANUP] falha ao remover temporario", {
+    removerArquivoUpload(file);
+  }
+}
+
+function limparUploadsRequest(req) {
+  for (const file of listarArquivosUploadRequest(req)) {
+    removerArquivoUpload(file);
+  }
+}
+
+function validarUploadsImagemSeguros(req, res, next) {
+  const arquivos = listarArquivosUploadRequest(req);
+
+  for (const file of arquivos) {
+    const validacao = validarAssinaturaImagem(file);
+
+    if (!validacao.ok) {
+      console.warn("[UPLOAD_SIGNATURE_INVALID]", {
         field: file.fieldname || "",
-        path: file.path || "",
-        erro: e.message
+        originalname: file.originalname || "",
+        mimetype: file.mimetype || "",
+        size: file.size || 0,
+        url: req.originalUrl || req.url || "",
+        erro: validacao.error
+      });
+
+      limparUploadsRequest(req);
+
+      return res.status(400).json({
+        ok: false,
+        error: validacao.error || "Arquivo de imagem invalido. Envie PNG, JPG ou WEBP."
       });
     }
+
+    file.detected_mimetype = validacao.mime;
+    file.detected_ext = validacao.ext;
   }
+
+  return next();
 }
 
 function appendJsonLineSafe(filePath, payload) {
@@ -5210,6 +5299,15 @@ app.post("/bot/cartas-app/:id/imagem", auth, (req, res) => {
 
       if (!req.file) {
         return res.status(400).json({ ok: false, error: "Imagem obrigatória" });
+      }
+
+      const validacaoImagem = validarAssinaturaImagem(req.file);
+      if (!validacaoImagem.ok) {
+        removerArquivoUpload(req.file);
+        return res.status(400).json({
+          ok: false,
+          error: validacaoImagem.error || "Arquivo de imagem invalido. Envie PNG, JPG ou WEBP."
+        });
       }
 
       const cartaId = String(req.params.id || "").trim();
