@@ -1056,6 +1056,14 @@ function getPerfilEscalacaoFile(perfilId) {
   return path.join(getPerfilDir(perfilId), "escalacao.json");
 }
 
+function getPerfilPatrocinadoresFile(perfilId) {
+  return path.join(getPerfilDir(perfilId), "patrocinadores.json");
+}
+
+function getPerfilPatrocinadoresAssetsDir(perfilId) {
+  return path.join(getPerfilAssetsDir(perfilId), "patrocinadores");
+}
+
 function textoPerfil(value, max = 80) {
   return String(value || "").trim().slice(0, max);
 }
@@ -1278,6 +1286,92 @@ function payloadJogador(body, jogadorAtual = {}) {
     posicao: payload.posicao ?? jogadorAtual.posicao,
     foto_url: payload.foto_url ?? jogadorAtual.foto_url,
     ativo: typeof payload.ativo === "boolean" ? payload.ativo : jogadorAtual.ativo,
+    atualizado_em: agora
+  });
+}
+
+function gerarPatrocinadorId() {
+  return `pat_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`;
+}
+
+function normalizarPatrocinadorId(value) {
+  return String(value || "").trim().replace(/[^\w-]+/g, "").slice(0, 80);
+}
+
+function normalizarSitePatrocinador(value) {
+  const raw = assetPerfil(value || "");
+  if (!raw) return "";
+  if (/^https?:\/\//i.test(raw)) return raw.slice(0, 220);
+  return `https://${raw}`.slice(0, 220);
+}
+
+function patrocinadorResponse(patrocinador, { publico = false, slug = "" } = {}) {
+  const logoUrl = patrocinador.logo_path
+    ? (
+        publico && slug
+          ? `/time/${encodeURIComponent(slug)}/patrocinadores/${encodeURIComponent(patrocinador.id)}/logo`
+          : `/me/time/patrocinadores/${encodeURIComponent(patrocinador.id)}/logo`
+      )
+    : "";
+
+  return {
+    id: patrocinador.id,
+    nome: patrocinador.nome,
+    instagram: patrocinador.instagram || "",
+    site: patrocinador.site || "",
+    logo_url: logoUrl,
+    ativo: patrocinador.ativo !== false,
+    criado_em: patrocinador.criado_em,
+    atualizado_em: patrocinador.atualizado_em
+  };
+}
+
+function normalizarPatrocinador(patrocinador) {
+  const base = patrocinador && typeof patrocinador === "object" && !Array.isArray(patrocinador)
+    ? patrocinador
+    : {};
+  const agora = new Date().toISOString();
+
+  return {
+    id: normalizarPatrocinadorId(base.id) || gerarPatrocinadorId(),
+    nome: textoPerfil(base.nome || "", 80),
+    instagram: normalizarInstagramPerfil(base.instagram || ""),
+    site: normalizarSitePatrocinador(base.site || ""),
+    logo_path: assetPerfil(base.logo_path || ""),
+    logo_mime: textoPerfil(base.logo_mime || "", 40),
+    ativo: base.ativo !== false,
+    criado_em: base.criado_em || agora,
+    atualizado_em: base.atualizado_em || agora
+  };
+}
+
+function readPerfilPatrocinadores(perfilId) {
+  return readJsonArraySafe(getPerfilPatrocinadoresFile(perfilId))
+    .map(normalizarPatrocinador)
+    .filter(patrocinador => patrocinador.id);
+}
+
+function writePerfilPatrocinadores(perfilId, patrocinadores) {
+  ensureDir(getPerfilDir(perfilId));
+  writeJsonSafe(getPerfilPatrocinadoresFile(perfilId), patrocinadores.map(patrocinador => ({
+    ...normalizarPatrocinador(patrocinador)
+  })));
+}
+
+function payloadPatrocinador(body, atual = {}) {
+  const payload = body && typeof body === "object" && !Array.isArray(body)
+    ? body
+    : {};
+  const agora = new Date().toISOString();
+
+  return normalizarPatrocinador({
+    ...atual,
+    nome: payload.nome ?? atual.nome,
+    instagram: payload.instagram ?? atual.instagram,
+    site: payload.site ?? atual.site,
+    logo_path: atual.logo_path,
+    logo_mime: atual.logo_mime,
+    ativo: typeof payload.ativo === "boolean" ? payload.ativo : atual.ativo,
     atualizado_em: agora
   });
 }
@@ -3302,6 +3396,12 @@ function carregarPerfilTimePublico(req, res) {
       modo: "publico",
       limit: 50
     });
+    const patrocinadores = readPerfilPatrocinadores(perfilInfo.perfil_id)
+      .filter(patrocinador => patrocinador && patrocinador.ativo !== false)
+      .map(patrocinador => patrocinadorResponse(patrocinador, {
+        publico: true,
+        slug: perfilInfo.perfil.slug
+      }));
 
     return res.json({
       ok: true,
@@ -3309,7 +3409,8 @@ function carregarPerfilTimePublico(req, res) {
       jogadores,
       jogos,
       estatisticas: calcularEstatisticasPerfil(jogos),
-      galeria
+      galeria,
+      patrocinadores
     });
   } catch (err) {
     console.warn("[perfil_publico] falha ao carregar", {
@@ -3356,6 +3457,52 @@ function servirImagemPerfilPublica(req, res, tipo) {
   }
 }
 
+function servirLogoPatrocinador(req, res, perfilId, patrocinadorId, { publico = false } = {}) {
+  const patrocinadores = readPerfilPatrocinadores(perfilId);
+  const id = normalizarPatrocinadorId(patrocinadorId);
+  const patrocinador = patrocinadores.find(item => item.id === id);
+
+  if (!patrocinador || (publico && patrocinador.ativo === false)) {
+    return res.status(404).json({ ok: false, error: "Patrocinador nao encontrado" });
+  }
+
+  const logoPath = patrocinador.logo_path || "";
+  const perfilDir = getPerfilDir(perfilId);
+  const perfilDirResolvido = path.resolve(perfilDir);
+  const logoResolvido = path.resolve(logoPath || "");
+  const dentroDaPastaPerfil = logoResolvido === perfilDirResolvido || logoResolvido.startsWith(perfilDirResolvido + path.sep);
+
+  if (!logoPath || !dentroDaPastaPerfil || !fs.existsSync(logoResolvido)) {
+    return res.status(404).json({ ok: false, error: "Logo nao encontrado" });
+  }
+
+  if (patrocinador.logo_mime) {
+    res.setHeader("Content-Type", patrocinador.logo_mime);
+  }
+  res.setHeader("Cache-Control", publico ? "public, max-age=300" : "private, no-store");
+
+  return res.sendFile(logoResolvido);
+}
+
+function servirLogoPatrocinadorPublico(req, res) {
+  try {
+    const perfilInfo = carregarPerfilPublicoPorSlug(req.params.slug);
+    if (!perfilInfo) {
+      return res.status(404).json({ ok: false, error: "Perfil publico nao encontrado" });
+    }
+
+    return servirLogoPatrocinador(req, res, perfilInfo.perfil_id, req.params.id, { publico: true });
+  } catch (err) {
+    console.warn("[perfil_publico] falha ao servir logo patrocinador", {
+      slug: req.params.slug || "",
+      patrocinador_id: req.params.id || "",
+      erro: err?.message || err
+    });
+
+    return res.status(500).json({ ok: false, error: "Falha ao carregar logo do patrocinador" });
+  }
+}
+
 function servirImagemGaleriaPublica(req, res) {
   try {
     const perfilInfo = carregarPerfilPublicoPorSlug(req.params.slug);
@@ -3382,6 +3529,7 @@ app.get("/time/:slug", carregarPerfilTimePublico);
 app.get("/time/:slug/escudo/imagem", (req, res) => servirImagemPerfilPublica(req, res, "escudo"));
 app.get("/time/:slug/mascote/imagem", (req, res) => servirImagemPerfilPublica(req, res, "mascote"));
 app.get("/time/:slug/galeria/:pedidoId/imagem", servirImagemGaleriaPublica);
+app.get("/time/:slug/patrocinadores/:id/logo", servirLogoPatrocinadorPublico);
 
 app.get("/me/perfil", auth, carregarPerfilTimePrivado);
 app.patch("/me/perfil", auth, salvarPerfilTimePrivado);
@@ -3421,6 +3569,246 @@ app.get("/me/time/galeria", auth, (req, res) => {
 
 app.get("/me/time/galeria/:pedidoId/imagem", auth, (req, res) => {
   return servirImagemGaleriaPedido(req, res, req.user.whatsapp, req.params.pedidoId);
+});
+
+app.get("/me/time/patrocinadores", auth, (req, res) => {
+  registrarOnline(req, { ultima_acao: "perfil_time_patrocinadores" });
+
+  const clientes = readClientes();
+
+  try {
+    const perfilInfo = ensurePerfilCliente(clientes, req.user.whatsapp);
+    const patrocinadores = readPerfilPatrocinadores(perfilInfo.perfil_id)
+      .map(patrocinador => patrocinadorResponse(patrocinador));
+
+    return res.json({ ok: true, patrocinadores });
+  } catch (err) {
+    const status = Number(err?.status || 500);
+    return res.status(status).json({
+      ok: false,
+      error: status === 404 ? "Cliente nao encontrado" : "Falha ao carregar patrocinadores"
+    });
+  }
+});
+
+app.post("/me/time/patrocinadores", auth, (req, res) => {
+  registrarOnline(req, { ultima_acao: "perfil_time_patrocinador_criar" });
+
+  const body = req.body && typeof req.body === "object" && !Array.isArray(req.body)
+    ? req.body
+    : {};
+  const nome = textoPerfil(body.nome || "", 80);
+
+  if (!nome) {
+    return res.status(400).json({ ok: false, error: "Nome do patrocinador obrigatorio" });
+  }
+
+  const clientes = readClientes();
+
+  try {
+    const perfilInfo = ensurePerfilCliente(clientes, req.user.whatsapp);
+    const patrocinadores = readPerfilPatrocinadores(perfilInfo.perfil_id);
+    const patrocinador = payloadPatrocinador({
+      ...body,
+      nome,
+      ativo: body.ativo !== false
+    }, {
+      id: gerarPatrocinadorId(),
+      ativo: true
+    });
+
+    patrocinadores.push(patrocinador);
+    writePerfilPatrocinadores(perfilInfo.perfil_id, patrocinadores);
+
+    return res.status(201).json({
+      ok: true,
+      patrocinador: patrocinadorResponse(patrocinador)
+    });
+  } catch (err) {
+    const status = Number(err?.status || 500);
+    return res.status(status).json({
+      ok: false,
+      error: status === 404 ? "Cliente nao encontrado" : "Falha ao criar patrocinador"
+    });
+  }
+});
+
+app.patch("/me/time/patrocinadores/:id", auth, (req, res) => {
+  registrarOnline(req, { ultima_acao: "perfil_time_patrocinador_editar" });
+
+  const patrocinadorId = normalizarPatrocinadorId(req.params.id);
+  const body = req.body && typeof req.body === "object" && !Array.isArray(req.body)
+    ? req.body
+    : {};
+
+  if (!patrocinadorId) {
+    return res.status(400).json({ ok: false, error: "Patrocinador invalido" });
+  }
+
+  if (Object.prototype.hasOwnProperty.call(body, "nome") && !textoPerfil(body.nome, 80)) {
+    return res.status(400).json({ ok: false, error: "Nome do patrocinador obrigatorio" });
+  }
+
+  const clientes = readClientes();
+
+  try {
+    const perfilInfo = ensurePerfilCliente(clientes, req.user.whatsapp);
+    const patrocinadores = readPerfilPatrocinadores(perfilInfo.perfil_id);
+    const index = patrocinadores.findIndex(item => item.id === patrocinadorId);
+
+    if (index < 0) {
+      return res.status(404).json({ ok: false, error: "Patrocinador nao encontrado" });
+    }
+
+    const patrocinador = payloadPatrocinador(body, patrocinadores[index]);
+    patrocinador.id = patrocinadores[index].id;
+    patrocinador.criado_em = patrocinadores[index].criado_em;
+    patrocinadores[index] = patrocinador;
+    writePerfilPatrocinadores(perfilInfo.perfil_id, patrocinadores);
+
+    return res.json({
+      ok: true,
+      patrocinador: patrocinadorResponse(patrocinador)
+    });
+  } catch (err) {
+    const status = Number(err?.status || 500);
+    return res.status(status).json({
+      ok: false,
+      error: status === 404 ? "Cliente nao encontrado" : "Falha ao editar patrocinador"
+    });
+  }
+});
+
+app.delete("/me/time/patrocinadores/:id", auth, (req, res) => {
+  registrarOnline(req, { ultima_acao: "perfil_time_patrocinador_remover" });
+
+  const patrocinadorId = normalizarPatrocinadorId(req.params.id);
+
+  if (!patrocinadorId) {
+    return res.status(400).json({ ok: false, error: "Patrocinador invalido" });
+  }
+
+  const clientes = readClientes();
+
+  try {
+    const perfilInfo = ensurePerfilCliente(clientes, req.user.whatsapp);
+    const patrocinadores = readPerfilPatrocinadores(perfilInfo.perfil_id);
+    const index = patrocinadores.findIndex(item => item.id === patrocinadorId);
+
+    if (index < 0) {
+      return res.status(404).json({ ok: false, error: "Patrocinador nao encontrado" });
+    }
+
+    patrocinadores[index] = {
+      ...patrocinadores[index],
+      ativo: false,
+      atualizado_em: new Date().toISOString()
+    };
+    writePerfilPatrocinadores(perfilInfo.perfil_id, patrocinadores);
+
+    return res.json({
+      ok: true,
+      patrocinador: patrocinadorResponse(patrocinadores[index])
+    });
+  } catch (err) {
+    const status = Number(err?.status || 500);
+    return res.status(status).json({
+      ok: false,
+      error: status === 404 ? "Cliente nao encontrado" : "Falha ao remover patrocinador"
+    });
+  }
+});
+
+app.get("/me/time/patrocinadores/:id/logo", auth, (req, res) => {
+  const clientes = readClientes();
+
+  try {
+    const perfilInfo = ensurePerfilCliente(clientes, req.user.whatsapp);
+    return servirLogoPatrocinador(req, res, perfilInfo.perfil_id, req.params.id);
+  } catch (err) {
+    const status = Number(err?.status || 500);
+    return res.status(status).json({
+      ok: false,
+      error: status === 404 ? "Cliente nao encontrado" : "Falha ao carregar logo"
+    });
+  }
+});
+
+app.post("/me/time/patrocinadores/:id/logo", auth, uploadComErroControlado(uploadPerfilImagem.single("logo")), (req, res) => {
+  registrarOnline(req, { ultima_acao: "perfil_time_patrocinador_logo" });
+
+  const patrocinadorId = normalizarPatrocinadorId(req.params.id);
+  const logo = req.file || null;
+
+  if (!patrocinadorId) {
+    limparUploadsTemporarios({ logo: logo ? [logo] : [] });
+    return res.status(400).json({ ok: false, error: "Patrocinador invalido" });
+  }
+
+  if (!logo) {
+    return res.status(400).json({ ok: false, error: "Logo nao enviado" });
+  }
+
+  const clientes = readClientes();
+
+  try {
+    const perfilInfo = ensurePerfilCliente(clientes, req.user.whatsapp);
+    const patrocinadores = readPerfilPatrocinadores(perfilInfo.perfil_id);
+    const index = patrocinadores.findIndex(item => item.id === patrocinadorId);
+
+    if (index < 0) {
+      limparUploadsTemporarios({ logo: [logo] });
+      return res.status(404).json({ ok: false, error: "Patrocinador nao encontrado" });
+    }
+
+    const ext = getExtensaoImagemPerfil(logo.mimetype);
+    if (!ext) {
+      limparUploadsTemporarios({ logo: [logo] });
+      return res.status(400).json({ ok: false, error: "Formato de logo invalido" });
+    }
+
+    const assetsDir = getPerfilPatrocinadoresAssetsDir(perfilInfo.perfil_id);
+    ensureDir(assetsDir);
+
+    const destino = path.join(assetsDir, `${patrocinadorId}${ext}`);
+    const destinoResolvido = path.resolve(destino);
+    const assetsResolvido = path.resolve(assetsDir);
+
+    if (!destinoResolvido.startsWith(assetsResolvido + path.sep)) {
+      limparUploadsTemporarios({ logo: [logo] });
+      return res.status(400).json({ ok: false, error: "Destino invalido" });
+    }
+
+    try {
+      const antigo = patrocinadores[index].logo_path;
+      if (antigo && path.resolve(antigo) !== destinoResolvido && fs.existsSync(antigo)) {
+        fs.unlinkSync(antigo);
+      }
+    } catch {}
+
+    if (fs.existsSync(destinoResolvido)) fs.unlinkSync(destinoResolvido);
+    fs.renameSync(logo.path, destinoResolvido);
+
+    patrocinadores[index] = {
+      ...patrocinadores[index],
+      logo_path: destinoResolvido,
+      logo_mime: logo.mimetype,
+      atualizado_em: new Date().toISOString()
+    };
+    writePerfilPatrocinadores(perfilInfo.perfil_id, patrocinadores);
+
+    return res.json({
+      ok: true,
+      patrocinador: patrocinadorResponse(patrocinadores[index])
+    });
+  } catch (err) {
+    limparUploadsTemporarios({ logo: [logo] });
+    const status = Number(err?.status || 500);
+    return res.status(status).json({
+      ok: false,
+      error: status === 404 ? "Cliente nao encontrado" : "Falha ao salvar logo"
+    });
+  }
 });
 
 app.get("/me/time/escalacao", auth, (req, res) => {
