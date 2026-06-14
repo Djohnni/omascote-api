@@ -1343,6 +1343,58 @@ function writePerfilJogos(perfilId, jogos) {
   writeJsonSafe(getPerfilJogosFile(perfilId), jogos.map(jogoResponse));
 }
 
+function numeroGolsPerfil(value) {
+  const texto = String(value ?? "").trim().replace(",", ".");
+  if (!texto) return null;
+  const numero = Number(texto);
+  if (!Number.isFinite(numero) || numero < 0) return null;
+  return Math.floor(numero);
+}
+
+function calcularEstatisticasPerfil(jogos = []) {
+  const stats = {
+    jogos: 0,
+    vitorias: 0,
+    empates: 0,
+    derrotas: 0,
+    gols_marcados: 0,
+    gols_sofridos: 0,
+    saldo_gols: 0,
+    pontos: 0,
+    aproveitamento: 0
+  };
+
+  for (const jogo of Array.isArray(jogos) ? jogos : []) {
+    if (!jogo || jogo.ativo === false || jogo.tipo !== "resultado") continue;
+
+    const golsMarcados = numeroGolsPerfil(jogo.meu_time_gols);
+    const golsSofridos = numeroGolsPerfil(jogo.adversario_gols);
+
+    if (golsMarcados === null || golsSofridos === null) continue;
+
+    stats.jogos += 1;
+    stats.gols_marcados += golsMarcados;
+    stats.gols_sofridos += golsSofridos;
+
+    if (golsMarcados > golsSofridos) {
+      stats.vitorias += 1;
+      stats.pontos += 3;
+    } else if (golsMarcados === golsSofridos) {
+      stats.empates += 1;
+      stats.pontos += 1;
+    } else {
+      stats.derrotas += 1;
+    }
+  }
+
+  stats.saldo_gols = stats.gols_marcados - stats.gols_sofridos;
+  stats.aproveitamento = stats.jogos
+    ? Math.round((stats.pontos / (stats.jogos * 3)) * 1000) / 10
+    : 0;
+
+  return stats;
+}
+
 function payloadJogo(body, jogoAtual = {}) {
   const payload = body && typeof body === "object" && !Array.isArray(body)
     ? body
@@ -3061,7 +3113,8 @@ function carregarPerfilTimePublico(req, res) {
       ok: true,
       perfil: perfilPublicoResponse(perfilInfo.perfil),
       jogadores,
-      jogos
+      jogos,
+      estatisticas: calcularEstatisticasPerfil(jogos)
     });
   } catch (err) {
     console.warn("[perfil_publico] falha ao carregar", {
@@ -3292,7 +3345,8 @@ app.get("/me/time/jogos", auth, (req, res) => {
 
     return res.json({
       ok: true,
-      jogos: jogos.map(jogoResponse)
+      jogos: jogos.map(jogoResponse),
+      estatisticas: calcularEstatisticasPerfil(jogos)
     });
   } catch (err) {
     const status = Number(err?.status || 500);
