@@ -1204,6 +1204,45 @@ function getExtensaoImagemPerfil(mimetype) {
   return "";
 }
 
+function detectarImagemPerfilArquivo(filePath) {
+  try {
+    const buffer = fs.readFileSync(filePath);
+    if (buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) {
+      return { mime: "image/png", ext: ".png" };
+    }
+
+    if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+      return { mime: "image/jpeg", ext: ".jpg" };
+    }
+
+    if (
+      buffer.length >= 12 &&
+      buffer.subarray(0, 4).toString("ascii") === "RIFF" &&
+      buffer.subarray(8, 12).toString("ascii") === "WEBP"
+    ) {
+      return { mime: "image/webp", ext: ".webp" };
+    }
+  } catch {}
+
+  return null;
+}
+
+function validarAssinaturaImagemPerfil(file) {
+  const detectada = file?.path ? detectarImagemPerfilArquivo(file.path) : null;
+  if (!detectada) {
+    return { ok: false, error: "Arquivo de imagem invalido." };
+  }
+
+  const mimeDeclarado = String(file?.mimetype || "").toLowerCase();
+  const mimeNormalizado = mimeDeclarado === "image/jpg" ? "image/jpeg" : mimeDeclarado;
+
+  if (mimeNormalizado && mimeNormalizado !== detectada.mime) {
+    return { ok: false, error: "Arquivo de imagem invalido ou MIME divergente." };
+  }
+
+  return { ok: true, ...detectada };
+}
+
 function normalizarTipoImagemPerfil(value) {
   const tipo = String(value || "").trim().toLowerCase();
   return PERFIL_IMAGEM_TIPOS.has(tipo) ? tipo : "";
@@ -1239,6 +1278,15 @@ function jogadorResponse(jogador) {
     ativo: jogador.ativo !== false,
     criado_em: jogador.criado_em,
     atualizado_em: jogador.atualizado_em
+  };
+}
+
+function jogadorPublicoResponse(jogador) {
+  return {
+    nome: jogador.nome,
+    apelido: jogador.apelido || "",
+    numero: jogador.numero || "",
+    posicao: jogador.posicao || ""
   };
 }
 
@@ -1323,6 +1371,19 @@ function patrocinadorResponse(patrocinador, { publico = false, slug = "" } = {})
     ativo: patrocinador.ativo !== false,
     criado_em: patrocinador.criado_em,
     atualizado_em: patrocinador.atualizado_em
+  };
+}
+
+function patrocinadorPublicoResponse(patrocinador, slug = "") {
+  const logoUrl = patrocinador.logo_path && slug
+    ? `/time/${encodeURIComponent(slug)}/patrocinadores/${encodeURIComponent(patrocinador.id)}/logo`
+    : "";
+
+  return {
+    nome: patrocinador.nome,
+    instagram: patrocinador.instagram || "",
+    site: patrocinador.site || "",
+    logo_url: logoUrl
   };
 }
 
@@ -1489,6 +1550,20 @@ function jogoResponse(jogo) {
   };
 }
 
+function jogoPublicoResponse(jogo) {
+  return {
+    tipo: jogo.tipo,
+    adversario: jogo.adversario,
+    meu_time_gols: jogo.meu_time_gols || "",
+    adversario_gols: jogo.adversario_gols || "",
+    data: jogo.data || "",
+    horario: jogo.horario || "",
+    local: jogo.local || "",
+    campeonato: jogo.campeonato || "",
+    status: jogo.status || ""
+  };
+}
+
 function normalizarJogo(jogo) {
   const base = jogo && typeof jogo === "object" && !Array.isArray(jogo)
     ? jogo
@@ -1633,16 +1708,36 @@ function galeriaItemResponse(item, perfilSlug = "", modo = "privado") {
   };
 }
 
-function listarGaleriaPerfilCliente(clienteId, { perfilSlug = "", modo = "privado", limit = 50 } = {}) {
+function galeriaItemPublicoResponse(item, perfilSlug = "") {
+  const categoria = categoriaPedidoGaleria(item.pedido);
+
+  return {
+    produto: categoria,
+    produto_nome: nomeCategoriaPedido(categoria),
+    data: item.pedido.data || item.criado_em || "",
+    imagem_url: `/time/${encodeURIComponent(perfilSlug)}/galeria/${encodeURIComponent(item.id)}/imagem`
+  };
+}
+
+function listarPedidosGaleriaPerfilCliente(clienteId) {
   const cliente = String(clienteId || "").trim();
   if (!cliente) return [];
 
-  const maxItens = Math.max(1, Math.min(Number(limit || 50) || 50, 50));
-
   return listPedidoBasesByWhatsapp(cliente)
-    .filter(pedidoLiberadoParaGaleria)
-    .slice(0, maxItens)
-    .map(item => galeriaItemResponse(item, perfilSlug, modo));
+    .filter(pedidoLiberadoParaGaleria);
+}
+
+function listarGaleriaPerfilCliente(clienteId, { perfilSlug = "", modo = "privado", limit = 50 } = {}) {
+  const maxItens = Math.max(1, Math.min(Number(limit || 50) || 50, 50));
+  const itens = listarPedidosGaleriaPerfilCliente(clienteId).slice(0, maxItens);
+
+  return modo === "publico"
+    ? itens.map(item => galeriaItemPublicoResponse(item, perfilSlug))
+    : itens.map(item => galeriaItemResponse(item, perfilSlug, modo));
+}
+
+function contarArtesPerfilCliente(clienteId) {
+  return listarPedidosGaleriaPerfilCliente(clienteId).length;
 }
 
 function servirImagemGaleriaPedido(req, res, clienteId, pedidoId) {
@@ -3269,11 +3364,12 @@ function uploadImagemPerfilPrivada(tipo) {
       const perfilInfo = ensurePerfilCliente(clientes, req.user.whatsapp);
       const perfilAtual = safeReadJson(perfilInfo.perfil_file) || perfilInfo.perfil;
       const agora = new Date().toISOString();
-      const ext = getExtensaoImagemPerfil(imagem.mimetype);
+      const validacaoImagem = validarAssinaturaImagemPerfil(imagem);
+      const ext = validacaoImagem.ext;
 
-      if (!ext) {
+      if (!validacaoImagem.ok || !ext) {
         limparUploadsTemporarios({ imagem: [imagem] });
-        return res.status(400).json({ ok: false, error: "Formato de imagem invalido." });
+        return res.status(400).json({ ok: false, error: validacaoImagem.error || "Formato de imagem invalido." });
       }
 
       const assetsDir = getPerfilAssetsDir(perfilInfo.perfil_id);
@@ -3342,9 +3438,19 @@ function perfilPublicoResponse(perfil) {
     instagram: perfil.instagram,
     escudo_url: perfilPublicoImagemUrl(perfil, "escudo"),
     mascote_url: perfilPublicoImagemUrl(perfil, "mascote"),
-    descricao_curta: perfil.descricao_curta || "",
-    publico: perfil.publico === true,
-    atualizado_em: perfil.atualizado_em
+    descricao_curta: perfil.descricao_curta || ""
+  };
+}
+
+function rankingTimePublicoResponse(item) {
+  return {
+    slug: item.slug || "",
+    nome_time: item.nome_time || "",
+    cidade: item.cidade || "",
+    estado: item.estado || "",
+    escudo_url: item.escudo_url || "",
+    estatisticas: item.estatisticas || calcularEstatisticasPerfil([]),
+    artes_total: Number(item.artes_total || 0)
   };
 }
 
@@ -3385,13 +3491,15 @@ function carregarPerfilTimePublico(req, res) {
       return res.status(404).json({ ok: false, error: "Perfil publico nao encontrado" });
     }
 
-    const jogadores = readPerfilJogadores(perfilInfo.perfil_id)
+    const jogadoresPrivados = readPerfilJogadores(perfilInfo.perfil_id)
       .filter(jogador => jogador && jogador.ativo !== false)
       .map(jogadorResponse);
-    const jogos = readPerfilJogos(perfilInfo.perfil_id)
+    const jogadores = jogadoresPrivados.map(jogadorPublicoResponse);
+    const jogosPrivados = readPerfilJogos(perfilInfo.perfil_id)
       .filter(jogo => jogo && jogo.ativo !== false)
       .map(jogoResponse);
-    const escalacaoPrivada = readPerfilEscalacao(perfilInfo.perfil_id, jogadores);
+    const jogos = jogosPrivados.map(jogoPublicoResponse);
+    const escalacaoPrivada = readPerfilEscalacao(perfilInfo.perfil_id, jogadoresPrivados);
     const escalacaoPublicaItem = item => ({
       nome: item.nome || "",
       apelido: item.apelido || "",
@@ -3402,8 +3510,7 @@ function carregarPerfilTimePublico(req, res) {
     });
     const escalacao = {
       titulares: (escalacaoPrivada.titulares || []).map(escalacaoPublicaItem),
-      reservas: (escalacaoPrivada.reservas || []).map(escalacaoPublicaItem),
-      atualizado_em: escalacaoPrivada.atualizado_em || ""
+      reservas: (escalacaoPrivada.reservas || []).map(escalacaoPublicaItem)
     };
     const galeria = listarGaleriaPerfilCliente(perfilInfo.cliente_id, {
       perfilSlug: perfilInfo.perfil.slug,
@@ -3412,17 +3519,14 @@ function carregarPerfilTimePublico(req, res) {
     });
     const patrocinadores = readPerfilPatrocinadores(perfilInfo.perfil_id)
       .filter(patrocinador => patrocinador && patrocinador.ativo !== false)
-      .map(patrocinador => patrocinadorResponse(patrocinador, {
-        publico: true,
-        slug: perfilInfo.perfil.slug
-      }));
+      .map(patrocinador => patrocinadorPublicoResponse(patrocinador, perfilInfo.perfil.slug));
 
     return res.json({
       ok: true,
       perfil: perfilPublicoResponse(perfilInfo.perfil),
       jogadores,
       jogos,
-      estatisticas: calcularEstatisticasPerfil(jogos),
+      estatisticas: calcularEstatisticasPerfil(jogosPrivados),
       escalacao,
       galeria,
       patrocinadores
@@ -3485,31 +3589,24 @@ function carregarRankingTimes(req, res) {
         .filter(jogo => jogo && jogo.ativo !== false)
         .map(jogoResponse);
       const estatisticas = calcularEstatisticasPerfil(jogos);
-      const galeria = clienteId
-        ? listarGaleriaPerfilCliente(clienteId, {
-            perfilSlug: perfil.slug,
-            modo: "publico",
-            limit: 50
-          })
-        : [];
+      const artesTotal = clienteId ? contarArtesPerfilCliente(clienteId) : 0;
       const perfilPublico = perfilPublicoResponse(perfil);
 
-      itens.push({
+      itens.push(rankingTimePublicoResponse({
         slug: perfilPublico.slug,
         nome_time: perfilPublico.nome_time,
         cidade: perfilPublico.cidade || "",
         estado: perfilPublico.estado || "",
         escudo_url: perfilPublico.escudo_url || "",
         estatisticas,
-        artes_total: galeria.length
-      });
+        artes_total: artesTotal
+      }));
     }
 
     const comJogos = itens.filter(item => Number(item.estatisticas?.jogos || 0) > 0);
 
     return res.json({
       ok: true,
-      atualizado_em: new Date().toISOString(),
       total_times: itens.length,
       rankings: {
         vitorias: ordenarRankingTimes(itens, item => item.estatisticas?.vitorias, item => item.estatisticas?.aproveitamento),
@@ -3867,10 +3964,11 @@ app.post("/me/time/patrocinadores/:id/logo", auth, uploadComErroControlado(uploa
       return res.status(404).json({ ok: false, error: "Patrocinador nao encontrado" });
     }
 
-    const ext = getExtensaoImagemPerfil(logo.mimetype);
-    if (!ext) {
+    const validacaoLogo = validarAssinaturaImagemPerfil(logo);
+    const ext = validacaoLogo.ext;
+    if (!validacaoLogo.ok || !ext) {
       limparUploadsTemporarios({ logo: [logo] });
-      return res.status(400).json({ ok: false, error: "Formato de logo invalido" });
+      return res.status(400).json({ ok: false, error: validacaoLogo.error || "Formato de logo invalido" });
     }
 
     const assetsDir = getPerfilPatrocinadoresAssetsDir(perfilInfo.perfil_id);
@@ -3898,7 +3996,7 @@ app.post("/me/time/patrocinadores/:id/logo", auth, uploadComErroControlado(uploa
     patrocinadores[index] = {
       ...patrocinadores[index],
       logo_path: destinoResolvido,
-      logo_mime: logo.mimetype,
+      logo_mime: validacaoLogo.mime,
       atualizado_em: new Date().toISOString()
     };
     writePerfilPatrocinadores(perfilInfo.perfil_id, patrocinadores);
