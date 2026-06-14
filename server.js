@@ -3440,6 +3440,96 @@ function carregarPerfilTimePublico(req, res) {
   }
 }
 
+function ordenarRankingTimes(lista, valorFn, desempateFn = null) {
+  return [...lista]
+    .sort((a, b) => {
+      const valorDiff = Number(valorFn(b) || 0) - Number(valorFn(a) || 0);
+      if (valorDiff) return valorDiff;
+
+      if (typeof desempateFn === "function") {
+        const desempateDiff = Number(desempateFn(b) || 0) - Number(desempateFn(a) || 0);
+        if (desempateDiff) return desempateDiff;
+      }
+
+      return String(a.nome_time || "").localeCompare(String(b.nome_time || ""), "pt-BR");
+    })
+    .slice(0, 20)
+    .map((item, index) => ({
+      posicao: index + 1,
+      ...item
+    }));
+}
+
+function carregarRankingTimes(req, res) {
+  try {
+    ensureDir(PERFIS_DIR);
+
+    const itens = [];
+    const entradas = fs.readdirSync(PERFIS_DIR, { withFileTypes: true });
+
+    for (const entrada of entradas) {
+      if (!entrada.isDirectory()) continue;
+
+      const perfilId = normalizarPerfilId(entrada.name);
+      if (!perfilId) continue;
+
+      const perfilFile = getPerfilFile(perfilId);
+      const perfilAtual = safeReadJson(perfilFile);
+      if (!perfilAtual) continue;
+
+      const perfil = normalizarPerfilPrivado(perfilAtual, { nome_time: perfilAtual.nome_time }, perfilId);
+      if (perfil.publico !== true || !perfil.slug) continue;
+
+      const clienteId = encontrarClienteIdPorPerfilId(perfilId);
+      const jogos = readPerfilJogos(perfilId)
+        .filter(jogo => jogo && jogo.ativo !== false)
+        .map(jogoResponse);
+      const estatisticas = calcularEstatisticasPerfil(jogos);
+      const galeria = clienteId
+        ? listarGaleriaPerfilCliente(clienteId, {
+            perfilSlug: perfil.slug,
+            modo: "publico",
+            limit: 50
+          })
+        : [];
+      const perfilPublico = perfilPublicoResponse(perfil);
+
+      itens.push({
+        slug: perfilPublico.slug,
+        nome_time: perfilPublico.nome_time,
+        cidade: perfilPublico.cidade || "",
+        estado: perfilPublico.estado || "",
+        escudo_url: perfilPublico.escudo_url || "",
+        estatisticas,
+        artes_total: galeria.length
+      });
+    }
+
+    const comJogos = itens.filter(item => Number(item.estatisticas?.jogos || 0) > 0);
+
+    return res.json({
+      ok: true,
+      atualizado_em: new Date().toISOString(),
+      total_times: itens.length,
+      rankings: {
+        vitorias: ordenarRankingTimes(itens, item => item.estatisticas?.vitorias, item => item.estatisticas?.aproveitamento),
+        gols_marcados: ordenarRankingTimes(itens, item => item.estatisticas?.gols_marcados, item => item.estatisticas?.vitorias),
+        aproveitamento: ordenarRankingTimes(comJogos, item => item.estatisticas?.aproveitamento, item => item.estatisticas?.jogos),
+        artes: ordenarRankingTimes(itens, item => item.artes_total, item => item.estatisticas?.vitorias)
+      }
+    });
+  } catch (err) {
+    console.warn("[ranking_times] falha ao carregar", {
+      erro: err?.message || err
+    });
+
+    return res.status(500).json({
+      ok: false,
+      error: "Falha ao carregar ranking dos times"
+    });
+  }
+}
+
 function servirImagemPerfilPublica(req, res, tipo) {
   try {
     const perfilInfo = carregarPerfilPublicoPorSlug(req.params.slug);
@@ -3540,6 +3630,7 @@ function servirImagemGaleriaPublica(req, res) {
   }
 }
 
+app.get("/ranking/times", carregarRankingTimes);
 app.get("/time/:slug", carregarPerfilTimePublico);
 app.get("/time/:slug/escudo/imagem", (req, res) => servirImagemPerfilPublica(req, res, "escudo"));
 app.get("/time/:slug/mascote/imagem", (req, res) => servirImagemPerfilPublica(req, res, "mascote"));
