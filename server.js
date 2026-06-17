@@ -791,12 +791,15 @@ function clienteElegivelBrindeEscudo3dApp(req, cliente, whatsapp, categoria) {
 function isModoAppRequest(req) {
   const headerModoApp = String(req.headers["x-omascote-app-mode"] || "").trim().toLowerCase();
   const origemAcesso = String(req.body?.origem_acesso || req.query?.origem_acesso || "").trim().toLowerCase();
-  const displayMode = String(req.body?.display_mode || req.query?.display_mode || "").trim().toLowerCase();
+  const omascoteApp = String(req.body?.omascote_app || req.query?.omascote_app || "").trim().toLowerCase();
+  const modoApp = String(req.body?.modo_app || req.query?.modo_app || "").trim().toLowerCase();
 
   return headerModoApp === "app" ||
     headerModoApp === "twa" ||
-    origemAcesso === "pwa" ||
-    displayMode === "standalone";
+    origemAcesso === "app" ||
+    origemAcesso === "twa" ||
+    omascoteApp === "1" ||
+    modoApp === "1";
 }
 
 function bloquearRecursoPagamentoNoApp(req, res) {
