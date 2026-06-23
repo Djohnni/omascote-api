@@ -1890,6 +1890,78 @@ function calcularScoresDivisao(jogadoresPresentes, votos) {
   return scores;
 }
 
+function normalizarTextoComparacaoDivisao(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+}
+
+function grupoPosicaoDivisao(posicao) {
+  const texto = normalizarTextoComparacaoDivisao(posicao);
+  if (!texto) return "";
+
+  if (/\b(goleiro|gol|keeper|guarda[\s-]?redes)\b/.test(texto)) return "goleiro";
+  if (/\b(zagueiro|zaga|defensor|defesa|lateral|beque|back)\b/.test(texto)) return "defesa";
+  if (/\b(meia|meio|volante|armador|central)\b/.test(texto)) return "meio";
+  if (/\b(atacante|ataque|ponta|centroavante|avante|ala)\b/.test(texto)) return "ataque";
+
+  return "";
+}
+
+function calcularPenalidadeTopDivisao(setTimeA, indicesOrdenados) {
+  const regras = [
+    { tamanho: 2, peso: 1000 },
+    { tamanho: 4, peso: 100 },
+    { tamanho: 6, peso: 50 }
+  ];
+
+  return regras.reduce((total, regra) => {
+    if (indicesOrdenados.length < regra.tamanho) return total;
+
+    const grupo = indicesOrdenados.slice(0, regra.tamanho);
+    const noTimeA = grupo.filter(index => setTimeA.has(index)).length;
+    const noTimeB = regra.tamanho - noTimeA;
+    const diferencaIdeal = regra.tamanho % 2;
+    const excesso = Math.max(0, Math.abs(noTimeA - noTimeB) - diferencaIdeal);
+
+    return total + excesso * regra.peso;
+  }, 0);
+}
+
+function calcularPenalidadePosicaoDivisao(jogadores, setTimeA) {
+  const grupos = new Map();
+
+  jogadores.forEach((jogador, index) => {
+    const grupo = grupoPosicaoDivisao(jogador?.posicao);
+    if (!grupo) return;
+    if (!grupos.has(grupo)) grupos.set(grupo, []);
+    grupos.get(grupo).push(index);
+  });
+
+  let penalidade = 0;
+
+  for (const [grupo, indices] of grupos.entries()) {
+    if (indices.length < 2) continue;
+
+    const noTimeA = indices.filter(index => setTimeA.has(index)).length;
+    const noTimeB = indices.length - noTimeA;
+    const diferencaIdeal = indices.length % 2;
+    const excesso = Math.max(0, Math.abs(noTimeA - noTimeB) - diferencaIdeal);
+    const peso = grupo === "goleiro" ? 20 : 4;
+
+    penalidade += excesso * peso;
+  }
+
+  return penalidade;
+}
+
+function calcularPenalidadeQuantidadeDivisao(totalJogadores, qtdeTimeA) {
+  const qtdeTimeB = totalJogadores - qtdeTimeA;
+  return Math.max(0, Math.abs(qtdeTimeA - qtdeTimeB) - 1);
+}
+
 function escolherTimesDivisao(jogadoresPresentes, scores) {
   const jogadores = Array.isArray(jogadoresPresentes) ? jogadoresPresentes : [];
   const totalJogadores = jogadores.length;
@@ -1906,15 +1978,46 @@ function escolherTimesDivisao(jogadoresPresentes, scores) {
   ])].filter(Boolean);
   const values = jogadores.map(jogador => Number(scores?.[jogador.id] || 0));
   const totalForca = values.reduce((sum, value) => sum + value, 0);
+  const indicesOrdenados = jogadores
+    .map((jogador, index) => ({
+      index,
+      nome: normalizarTextoComparacaoDivisao(jogador?.apelido || jogador?.nome || ""),
+      score: values[index]
+    }))
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return a.nome.localeCompare(b.nome);
+    })
+    .map(item => item.index);
   let best = null;
 
   function evaluate(indexes) {
+    const setTimeA = new Set(indexes);
     const forcaA = indexes.reduce((sum, index) => sum + values[index], 0);
     const forcaB = totalForca - forcaA;
     const diff = Math.abs(forcaA - forcaB);
+    const penalidadeTop = calcularPenalidadeTopDivisao(setTimeA, indicesOrdenados);
+    const penalidadePosicao = calcularPenalidadePosicaoDivisao(jogadores, setTimeA);
+    const penalidadeQuantidade = calcularPenalidadeQuantidadeDivisao(totalJogadores, indexes.length);
+    const scoreFinal = diff * 10 + penalidadeTop * 20 + penalidadePosicao * 5 + penalidadeQuantidade * 100;
 
-    if (!best || diff < best.diff) {
-      best = { indexes: new Set(indexes), diff, forcaA, forcaB };
+    if (
+      !best ||
+      scoreFinal < best.scoreFinal ||
+      scoreFinal === best.scoreFinal && diff < best.diff ||
+      scoreFinal === best.scoreFinal && diff === best.diff && penalidadeTop < best.penalidadeTop ||
+      scoreFinal === best.scoreFinal && diff === best.diff && penalidadeTop === best.penalidadeTop && penalidadePosicao < best.penalidadePosicao
+    ) {
+      best = {
+        indexes: setTimeA,
+        diff,
+        forcaA,
+        forcaB,
+        scoreFinal,
+        penalidadeTop,
+        penalidadePosicao,
+        penalidadeQuantidade
+      };
     }
   }
 
