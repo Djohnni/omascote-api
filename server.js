@@ -1090,6 +1090,10 @@ function getPerfilEscalacaoFile(perfilId) {
   return path.join(getPerfilDir(perfilId), "escalacao.json");
 }
 
+function getPerfilDivisoesFile(perfilId) {
+  return path.join(getPerfilDir(perfilId), "divisoes.json");
+}
+
 function getPerfilPatrocinadoresFile(perfilId) {
   return path.join(getPerfilDir(perfilId), "patrocinadores.json");
 }
@@ -1673,6 +1677,341 @@ function readPerfilJogos(perfilId) {
 function writePerfilJogos(perfilId, jogos) {
   ensureDir(getPerfilDir(perfilId));
   writeJsonSafe(getPerfilJogosFile(perfilId), jogos.map(jogoResponse));
+}
+
+function gerarDivisaoId() {
+  return `div_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`;
+}
+
+function gerarDivisaoVotoId() {
+  return `voto_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`;
+}
+
+function gerarDivisaoShareToken() {
+  return crypto
+    .randomBytes(24)
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+}
+
+function normalizarDivisaoId(value) {
+  return String(value || "").trim().replace(/[^\w-]+/g, "").slice(0, 80);
+}
+
+function normalizarDivisaoToken(value) {
+  return String(value || "").trim().replace(/[^A-Za-z0-9_-]+/g, "").slice(0, 120);
+}
+
+function hashVoterTokenDivisao(value) {
+  return crypto.createHash("sha256").update(String(value || "")).digest("hex");
+}
+
+function divisaoJogadorSnapshot(jogador) {
+  return {
+    id: normalizarJogadorId(jogador?.id),
+    nome: textoPerfil(jogador?.nome || "Jogador", 80),
+    apelido: textoPerfil(jogador?.apelido || "", 60),
+    numero: textoPerfil(jogador?.numero || "", 12),
+    posicao: textoPerfil(jogador?.posicao || "", 40)
+  };
+}
+
+function divisaoJogadorResponse(jogador) {
+  return divisaoJogadorSnapshot(jogador);
+}
+
+function normalizarRankingDivisao(ranking, jogadoresPresentes) {
+  const jogadores = Array.isArray(jogadoresPresentes) ? jogadoresPresentes : [];
+  const ids = jogadores.map(jogador => normalizarJogadorId(jogador?.id)).filter(Boolean);
+  const idsSet = new Set(ids);
+  const lista = Array.isArray(ranking) ? ranking : [];
+
+  if (lista.length !== ids.length) {
+    const err = new Error("O ranking precisa conter todos os jogadores presentes.");
+    err.status = 400;
+    throw err;
+  }
+
+  const vistos = new Set();
+
+  return lista.map((item, index) => {
+    const jogadorId = normalizarJogadorId(item?.jogador_id || item?.id);
+
+    if (!idsSet.has(jogadorId)) {
+      const err = new Error("Ranking contem jogador que nao faz parte desta votacao.");
+      err.status = 400;
+      throw err;
+    }
+
+    if (vistos.has(jogadorId)) {
+      const err = new Error("Ranking contem jogador repetido.");
+      err.status = 400;
+      throw err;
+    }
+
+    vistos.add(jogadorId);
+
+    return {
+      jogador_id: jogadorId,
+      posicao: index + 1
+    };
+  });
+}
+
+function normalizarVotoDivisao(voto) {
+  const base = voto && typeof voto === "object" && !Array.isArray(voto)
+    ? voto
+    : {};
+  const agora = new Date().toISOString();
+  const ranking = Array.isArray(base.ranking)
+    ? base.ranking
+    : Array.isArray(base.ranking_json)
+      ? base.ranking_json
+      : [];
+
+  return {
+    id: normalizarDivisaoId(base.id) || gerarDivisaoVotoId(),
+    voter_token_hash: String(base.voter_token_hash || "").trim().slice(0, 128),
+    nome_votante: textoPerfil(base.nome_votante || "", 80),
+    ranking: ranking.map((item, index) => ({
+      jogador_id: normalizarJogadorId(item?.jogador_id || item?.id),
+      posicao: Number(item?.posicao || index + 1) || index + 1
+    })).filter(item => item.jogador_id),
+    ranking_bruto: Array.isArray(base.ranking_bruto) ? base.ranking_bruto : ranking,
+    criado_em: base.criado_em || agora
+  };
+}
+
+function normalizarDivisao(sessao) {
+  const base = sessao && typeof sessao === "object" && !Array.isArray(sessao)
+    ? sessao
+    : {};
+  const agora = new Date().toISOString();
+  const jogadores = Array.isArray(base.jogadores_presentes)
+    ? base.jogadores_presentes
+    : Array.isArray(base.presentes)
+      ? base.presentes
+      : [];
+
+  return {
+    id: normalizarDivisaoId(base.id) || gerarDivisaoId(),
+    perfil_id: normalizarPerfilId(base.perfil_id || ""),
+    titulo: textoPerfil(base.titulo || "Dividir Times", 90) || "Dividir Times",
+    status: ["aberta", "fechada"].includes(base.status) ? base.status : "aberta",
+    share_token: normalizarDivisaoToken(base.share_token || base.token) || gerarDivisaoShareToken(),
+    jogadores_presentes: jogadores.map(divisaoJogadorSnapshot).filter(jogador => jogador.id && jogador.nome),
+    votos: (Array.isArray(base.votos) ? base.votos : []).map(normalizarVotoDivisao).filter(voto => voto.voter_token_hash),
+    resultado: base.resultado && typeof base.resultado === "object" && !Array.isArray(base.resultado) ? base.resultado : null,
+    criado_por: textoPerfil(base.criado_por || "", 120),
+    criado_em: base.criado_em || agora,
+    atualizado_em: base.atualizado_em || agora
+  };
+}
+
+function readPerfilDivisoes(perfilId) {
+  return readJsonArraySafe(getPerfilDivisoesFile(perfilId))
+    .map(sessao => normalizarDivisao({ ...sessao, perfil_id: perfilId }))
+    .filter(sessao => sessao.id && sessao.share_token);
+}
+
+function writePerfilDivisoes(perfilId, divisoes) {
+  ensureDir(getPerfilDir(perfilId));
+  const payload = (Array.isArray(divisoes) ? divisoes : [])
+    .map(sessao => normalizarDivisao({ ...sessao, perfil_id: perfilId }));
+  writeJsonSafe(getPerfilDivisoesFile(perfilId), payload);
+}
+
+function divisaoResponse(sessao, { publico = false } = {}) {
+  const normalizada = normalizarDivisao(sessao);
+  const response = {
+    id: normalizada.id,
+    titulo: normalizada.titulo,
+    status: normalizada.status,
+    jogadores_presentes: normalizada.jogadores_presentes.map(divisaoJogadorResponse),
+    votos_count: normalizada.votos.length,
+    criado_em: normalizada.criado_em,
+    atualizado_em: normalizada.atualizado_em
+  };
+
+  if (!publico) {
+    response.share_token = normalizada.share_token;
+    response.resultado = normalizada.resultado ? resultadoDivisaoResponse(normalizada.resultado) : null;
+  }
+
+  return response;
+}
+
+function resultadoDivisaoResponse(resultado) {
+  const base = resultado && typeof resultado === "object" && !Array.isArray(resultado)
+    ? resultado
+    : {};
+
+  return {
+    time_a: (Array.isArray(base.time_a) ? base.time_a : []).map(divisaoJogadorResponse),
+    time_b: (Array.isArray(base.time_b) ? base.time_b : []).map(divisaoJogadorResponse),
+    forca_a: Number(base.forca_a || 0),
+    forca_b: Number(base.forca_b || 0),
+    diferenca: Number(base.diferenca || 0),
+    votos_count: Number(base.votos_count || 0),
+    gerado_em: base.gerado_em || ""
+  };
+}
+
+function calcularScoresDivisao(jogadoresPresentes, votos) {
+  const jogadores = Array.isArray(jogadoresPresentes) ? jogadoresPresentes : [];
+  const totalJogadores = jogadores.length;
+  const acumulado = new Map(jogadores.map(jogador => [jogador.id, { soma: 0, votos: 0 }]));
+
+  for (const voto of Array.isArray(votos) ? votos : []) {
+    const ranking = Array.isArray(voto?.ranking) ? voto.ranking : [];
+
+    ranking.forEach((item, index) => {
+      const jogadorId = normalizarJogadorId(item?.jogador_id || item?.id);
+      const atual = acumulado.get(jogadorId);
+
+      if (atual) {
+        atual.soma += totalJogadores - index;
+        atual.votos += 1;
+      }
+    });
+  }
+
+  const fallback = totalJogadores ? (totalJogadores + 1) / 2 : 0;
+  const scores = {};
+
+  for (const jogador of jogadores) {
+    const atual = acumulado.get(jogador.id);
+    const media = atual?.votos ? atual.soma / atual.votos : fallback;
+    scores[jogador.id] = Math.round(media * 100) / 100;
+  }
+
+  return scores;
+}
+
+function escolherTimesDivisao(jogadoresPresentes, scores) {
+  const jogadores = Array.isArray(jogadoresPresentes) ? jogadoresPresentes : [];
+  const totalJogadores = jogadores.length;
+
+  if (totalJogadores < 2) {
+    const err = new Error("Selecione pelo menos 2 jogadores.");
+    err.status = 400;
+    throw err;
+  }
+
+  const targetSizes = [...new Set([
+    Math.floor(totalJogadores / 2),
+    Math.ceil(totalJogadores / 2)
+  ])].filter(Boolean);
+  const values = jogadores.map(jogador => Number(scores?.[jogador.id] || 0));
+  const totalForca = values.reduce((sum, value) => sum + value, 0);
+  let best = null;
+
+  function evaluate(indexes) {
+    const forcaA = indexes.reduce((sum, index) => sum + values[index], 0);
+    const forcaB = totalForca - forcaA;
+    const diff = Math.abs(forcaA - forcaB);
+
+    if (!best || diff < best.diff) {
+      best = { indexes: new Set(indexes), diff, forcaA, forcaB };
+    }
+  }
+
+  function combine(start, needed, picked) {
+    if (needed === 0) {
+      evaluate(picked);
+      return;
+    }
+
+    for (let i = start; i <= totalJogadores - needed; i += 1) {
+      picked.push(i);
+      combine(i + 1, needed - 1, picked);
+      picked.pop();
+    }
+  }
+
+  if (totalJogadores <= 22) {
+    targetSizes.forEach(size => combine(0, size, []));
+  } else {
+    const sorted = jogadores
+      .map((jogador, index) => ({ index, score: values[index] }))
+      .sort((a, b) => b.score - a.score);
+    const picked = [];
+    let sumA = 0;
+    let sumB = 0;
+
+    for (const item of sorted) {
+      if (picked.length < Math.ceil(totalJogadores / 2) && sumA <= sumB) {
+        picked.push(item.index);
+        sumA += item.score;
+      } else {
+        sumB += item.score;
+      }
+    }
+
+    evaluate(picked);
+  }
+
+  const timeA = [];
+  const timeB = [];
+
+  jogadores.forEach((jogador, index) => {
+    if (best.indexes.has(index)) timeA.push(jogador);
+    else timeB.push(jogador);
+  });
+
+  return {
+    time_a: timeA.map(divisaoJogadorResponse),
+    time_b: timeB.map(divisaoJogadorResponse),
+    forca_a: Math.round(best.forcaA * 100) / 100,
+    forca_b: Math.round(best.forcaB * 100) / 100,
+    diferenca: Math.round(best.diff * 100) / 100
+  };
+}
+
+function gerarResultadoDivisao(sessao) {
+  const normalizada = normalizarDivisao(sessao);
+
+  if (!normalizada.votos.length) {
+    const err = new Error("Receba pelo menos 1 voto antes de gerar os times.");
+    err.status = 400;
+    throw err;
+  }
+
+  const scores = calcularScoresDivisao(normalizada.jogadores_presentes, normalizada.votos);
+  const times = escolherTimesDivisao(normalizada.jogadores_presentes, scores);
+
+  return {
+    ...times,
+    votos_count: normalizada.votos.length,
+    gerado_em: new Date().toISOString()
+  };
+}
+
+function encontrarDivisaoPorToken(token) {
+  const shareToken = normalizarDivisaoToken(token);
+  if (!shareToken || !fs.existsSync(PERFIS_DIR)) return null;
+
+  const dirs = fs.readdirSync(PERFIS_DIR, { withFileTypes: true })
+    .filter(item => item.isDirectory())
+    .map(item => item.name);
+
+  for (const perfilId of dirs) {
+    const divisoes = readPerfilDivisoes(perfilId);
+    const index = divisoes.findIndex(sessao => sessao.share_token === shareToken);
+
+    if (index >= 0) {
+      return {
+        perfil_id: perfilId,
+        divisoes,
+        index,
+        sessao: divisoes[index]
+      };
+    }
+  }
+
+  return null;
 }
 
 function numeroGolsPerfil(value) {
@@ -4524,6 +4863,264 @@ app.delete("/me/time/jogadores/:id", auth, (req, res) => {
     return res.status(status).json({
       ok: false,
       error: status === 404 ? "Cliente nao encontrado" : "Falha ao remover jogador"
+    });
+  }
+});
+
+app.post("/me/time/divisoes", auth, (req, res) => {
+  registrarOnline(req, { ultima_acao: "perfil_time_divisao_criar" });
+
+  const body = req.body && typeof req.body === "object" && !Array.isArray(req.body)
+    ? req.body
+    : {};
+  const idsRecebidos = Array.isArray(body.jogadores_presentes)
+    ? body.jogadores_presentes
+    : Array.isArray(body.jogadores_ids)
+      ? body.jogadores_ids
+      : [];
+  const jogadoresIds = [...new Set(idsRecebidos.map(normalizarJogadorId).filter(Boolean))];
+
+  if (jogadoresIds.length < 2) {
+    return res.status(400).json({
+      ok: false,
+      error: "Selecione pelo menos 2 jogadores presentes."
+    });
+  }
+
+  if (jogadoresIds.length > 30) {
+    return res.status(400).json({
+      ok: false,
+      error: "Selecione no maximo 30 jogadores no MVP."
+    });
+  }
+
+  const clientes = readClientes();
+
+  try {
+    const perfilInfo = ensurePerfilCliente(clientes, req.user.whatsapp);
+    const jogadores = readPerfilJogadores(perfilInfo.perfil_id).filter(jogador => jogador.ativo !== false);
+    const jogadoresMap = new Map(jogadores.map(jogador => [jogador.id, jogador]));
+    const presentes = jogadoresIds.map(id => jogadoresMap.get(id)).filter(Boolean);
+
+    if (presentes.length !== jogadoresIds.length) {
+      return res.status(400).json({
+        ok: false,
+        error: "Um ou mais jogadores selecionados nao existem no elenco ativo."
+      });
+    }
+
+    let shareToken = gerarDivisaoShareToken();
+    for (let tentativas = 0; tentativas < 5 && encontrarDivisaoPorToken(shareToken); tentativas += 1) {
+      shareToken = gerarDivisaoShareToken();
+    }
+
+    const agora = new Date().toISOString();
+    const sessao = normalizarDivisao({
+      id: gerarDivisaoId(),
+      perfil_id: perfilInfo.perfil_id,
+      titulo: textoPerfil(body.titulo || "Dividir Times", 90) || "Dividir Times",
+      status: "aberta",
+      share_token: shareToken,
+      jogadores_presentes: presentes.map(divisaoJogadorSnapshot),
+      votos: [],
+      resultado: null,
+      criado_por: req.user.whatsapp || "",
+      criado_em: agora,
+      atualizado_em: agora
+    });
+    const divisoes = readPerfilDivisoes(perfilInfo.perfil_id);
+
+    divisoes.push(sessao);
+    writePerfilDivisoes(perfilInfo.perfil_id, divisoes);
+
+    return res.status(201).json({
+      ok: true,
+      sessao: divisaoResponse(sessao),
+      resultado: null
+    });
+  } catch (err) {
+    const status = Number(err?.status || 500);
+
+    return res.status(status).json({
+      ok: false,
+      error: status === 404 ? "Cliente nao encontrado" : (err?.message || "Falha ao criar votacao")
+    });
+  }
+});
+
+app.get("/me/time/divisoes/:id", auth, (req, res) => {
+  registrarOnline(req, { ultima_acao: "perfil_time_divisao" });
+
+  const divisaoId = normalizarDivisaoId(req.params.id);
+  const clientes = readClientes();
+
+  if (!divisaoId) {
+    return res.status(400).json({ ok: false, error: "Votacao invalida" });
+  }
+
+  try {
+    const perfilInfo = ensurePerfilCliente(clientes, req.user.whatsapp);
+    const divisoes = readPerfilDivisoes(perfilInfo.perfil_id);
+    const sessao = divisoes.find(item => item.id === divisaoId);
+
+    if (!sessao) {
+      return res.status(404).json({ ok: false, error: "Votacao nao encontrada." });
+    }
+
+    return res.json({
+      ok: true,
+      sessao: divisaoResponse(sessao),
+      resultado: sessao.resultado ? resultadoDivisaoResponse(sessao.resultado) : null
+    });
+  } catch (err) {
+    const status = Number(err?.status || 500);
+
+    return res.status(status).json({
+      ok: false,
+      error: status === 404 ? "Cliente nao encontrado" : "Falha ao carregar votacao"
+    });
+  }
+});
+
+app.post("/me/time/divisoes/:id/gerar-times", auth, (req, res) => {
+  registrarOnline(req, { ultima_acao: "perfil_time_divisao_gerar_times" });
+
+  const divisaoId = normalizarDivisaoId(req.params.id);
+  const clientes = readClientes();
+
+  if (!divisaoId) {
+    return res.status(400).json({ ok: false, error: "Votacao invalida" });
+  }
+
+  try {
+    const perfilInfo = ensurePerfilCliente(clientes, req.user.whatsapp);
+    const divisoes = readPerfilDivisoes(perfilInfo.perfil_id);
+    const index = divisoes.findIndex(item => item.id === divisaoId);
+
+    if (index < 0) {
+      return res.status(404).json({ ok: false, error: "Votacao nao encontrada." });
+    }
+
+    const sessao = divisoes[index];
+    const resultado = gerarResultadoDivisao(sessao);
+    const atualizada = normalizarDivisao({
+      ...sessao,
+      resultado,
+      atualizado_em: new Date().toISOString()
+    });
+
+    divisoes[index] = atualizada;
+    writePerfilDivisoes(perfilInfo.perfil_id, divisoes);
+
+    return res.json({
+      ok: true,
+      sessao: divisaoResponse(atualizada),
+      resultado: resultadoDivisaoResponse(resultado)
+    });
+  } catch (err) {
+    const status = Number(err?.status || 500);
+
+    return res.status(status).json({
+      ok: false,
+      error: err?.message || "Falha ao gerar times"
+    });
+  }
+});
+
+app.get("/dividir-times/:token", (req, res) => {
+  const tokenSessao = normalizarDivisaoToken(req.params.token);
+
+  if (!tokenSessao) {
+    return res.status(404).json({ ok: false, error: "Votacao nao encontrada." });
+  }
+
+  try {
+    const localizacao = encontrarDivisaoPorToken(tokenSessao);
+
+    if (!localizacao) {
+      return res.status(404).json({ ok: false, error: "Votacao nao encontrada." });
+    }
+
+    const voterToken = textoPerfil(req.query?.voter_token || "", 200);
+    const voterHash = voterToken ? hashVoterTokenDivisao(voterToken) : "";
+    const jaVotou = !!(voterHash && localizacao.sessao.votos.some(voto => voto.voter_token_hash === voterHash));
+
+    return res.json({
+      ok: true,
+      sessao: divisaoResponse(localizacao.sessao, { publico: true }),
+      ja_votou: jaVotou
+    });
+  } catch (err) {
+    return res.status(500).json({
+      ok: false,
+      error: "Falha ao carregar votacao."
+    });
+  }
+});
+
+app.post("/dividir-times/:token/votos", (req, res) => {
+  const tokenSessao = normalizarDivisaoToken(req.params.token);
+
+  if (!tokenSessao) {
+    return res.status(404).json({ ok: false, error: "Votacao nao encontrada." });
+  }
+
+  try {
+    const localizacao = encontrarDivisaoPorToken(tokenSessao);
+
+    if (!localizacao) {
+      return res.status(404).json({ ok: false, error: "Votacao nao encontrada." });
+    }
+
+    const sessao = localizacao.sessao;
+
+    if (sessao.status !== "aberta") {
+      return res.status(400).json({ ok: false, error: "Esta votacao nao esta aberta." });
+    }
+
+    const body = req.body && typeof req.body === "object" && !Array.isArray(req.body)
+      ? req.body
+      : {};
+    const voterToken = textoPerfil(body.voter_token || "", 200);
+
+    if (!voterToken) {
+      return res.status(400).json({ ok: false, error: "Token do votante ausente." });
+    }
+
+    const voterHash = hashVoterTokenDivisao(voterToken);
+
+    if (sessao.votos.some(voto => voto.voter_token_hash === voterHash)) {
+      return res.status(409).json({ ok: false, error: "Este aparelho ja votou nesta sessao." });
+    }
+
+    const ranking = normalizarRankingDivisao(body.ranking, sessao.jogadores_presentes);
+    const voto = normalizarVotoDivisao({
+      id: gerarDivisaoVotoId(),
+      voter_token_hash: voterHash,
+      nome_votante: textoPerfil(body.nome_votante || "", 80),
+      ranking,
+      ranking_bruto: ranking,
+      criado_em: new Date().toISOString()
+    });
+    const atualizada = normalizarDivisao({
+      ...sessao,
+      votos: [...sessao.votos, voto],
+      atualizado_em: new Date().toISOString()
+    });
+
+    localizacao.divisoes[localizacao.index] = atualizada;
+    writePerfilDivisoes(localizacao.perfil_id, localizacao.divisoes);
+
+    return res.status(201).json({
+      ok: true,
+      votos_count: atualizada.votos.length
+    });
+  } catch (err) {
+    const status = Number(err?.status || 500);
+
+    return res.status(status).json({
+      ok: false,
+      error: err?.message || "Falha ao salvar voto."
     });
   }
 });
