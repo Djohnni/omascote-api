@@ -1550,19 +1550,32 @@ function normalizarEscalacaoGrupo(itens, tipo, jogadoresMap, usados) {
 
     const jogador = jogadorId ? jogadoresMap.get(jogadorId) : null;
     if (jogadorId && !jogador) continue;
+    if (!jogador) continue;
 
-    const nome = textoPerfil(jogador?.nome || item.nome || "", 80);
+    const nome = textoPerfil(jogador.nome || "", 80);
 
     if (!nome) continue;
 
-    if (jogadorId) usados.add(jogadorId);
+    usados.add(jogadorId);
+
+    const posicaoElenco = textoPerfil(jogador.posicao || "", 40);
+    let posicaoOverride = textoPerfil(item.posicao_override || "", 40);
+
+    if (!posicaoOverride) {
+      const posicaoLegada = textoPerfil(item.posicao || "", 40);
+      if (posicaoLegada && posicaoLegada !== posicaoElenco) {
+        posicaoOverride = posicaoLegada;
+      }
+    }
 
     normalizados.push({
-      jogador_id: jogador?.id || jogadorId || "",
+      jogador_id: jogador.id,
       nome,
-      apelido: textoPerfil(jogador?.apelido || item.apelido || "", 60),
-      numero: textoPerfil(jogador?.numero || item.numero || "", 12),
-      posicao: textoPerfil(item.posicao || jogador?.posicao || "", 40),
+      apelido: textoPerfil(jogador.apelido || "", 60),
+      numero: textoPerfil(jogador.numero || "", 12),
+      posicao: posicaoOverride || posicaoElenco,
+      posicao_elenco: posicaoElenco,
+      posicao_override: posicaoOverride,
       tipo,
       ordem: normalizados.length + 1
     });
@@ -1592,9 +1605,17 @@ function readPerfilEscalacao(perfilId, jogadores = []) {
 
 function writePerfilEscalacao(perfilId, escalacao) {
   ensureDir(getPerfilDir(perfilId));
+  const limparGrupo = (itens, tipo) => (Array.isArray(itens) ? itens : [])
+    .map((item, index) => ({
+      jogador_id: normalizarJogadorId(item?.jogador_id || item?.id),
+      posicao_override: textoPerfil(item?.posicao_override || "", 40),
+      tipo,
+      ordem: Number(item?.ordem || index + 1) || index + 1
+    }))
+    .filter(item => item.jogador_id);
   const payload = {
-    titulares: Array.isArray(escalacao?.titulares) ? escalacao.titulares : [],
-    reservas: Array.isArray(escalacao?.reservas) ? escalacao.reservas : [],
+    titulares: limparGrupo(escalacao?.titulares, "titular"),
+    reservas: limparGrupo(escalacao?.reservas, "reserva"),
     atualizado_em: escalacao?.atualizado_em || new Date().toISOString()
   };
   writeJsonSafe(getPerfilEscalacaoFile(perfilId), payload);
@@ -4939,6 +4960,7 @@ app.get("/me/time/escalacao", auth, (req, res) => {
     const perfilInfo = ensurePerfilCliente(clientes, req.user.whatsapp);
     const jogadores = readPerfilJogadores(perfilInfo.perfil_id);
     const escalacao = readPerfilEscalacao(perfilInfo.perfil_id, jogadores);
+    writePerfilEscalacao(perfilInfo.perfil_id, escalacao);
 
     return res.json({
       ok: true,
@@ -5091,6 +5113,10 @@ app.patch("/me/time/jogadores/:id", auth, (req, res) => {
     jogador.criado_em = jogadores[index].criado_em;
     jogadores[index] = jogador;
     writePerfilJogadores(perfilInfo.perfil_id, jogadores);
+    writePerfilEscalacao(
+      perfilInfo.perfil_id,
+      readPerfilEscalacao(perfilInfo.perfil_id, jogadores)
+    );
 
     return res.json({
       ok: true,
@@ -5132,6 +5158,10 @@ app.delete("/me/time/jogadores/:id", auth, (req, res) => {
       atualizado_em: new Date().toISOString()
     };
     writePerfilJogadores(perfilInfo.perfil_id, jogadores);
+    writePerfilEscalacao(
+      perfilInfo.perfil_id,
+      readPerfilEscalacao(perfilInfo.perfil_id, jogadores)
+    );
 
     return res.json({
       ok: true,
