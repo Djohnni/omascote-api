@@ -1708,6 +1708,10 @@ function hashVoterTokenDivisao(value) {
   return crypto.createHash("sha256").update(String(value || "")).digest("hex");
 }
 
+function normalizarVotanteUsuarioDivisao(value) {
+  return textoPerfil(value || "", 120);
+}
+
 function divisaoJogadorSnapshot(jogador) {
   return {
     id: normalizarJogadorId(jogador?.id),
@@ -1773,6 +1777,7 @@ function normalizarVotoDivisao(voto) {
 
   return {
     id: normalizarDivisaoId(base.id) || gerarDivisaoVotoId(),
+    voter_user_id: normalizarVotanteUsuarioDivisao(base.voter_user_id || base.usuario_id || base.cliente_id || ""),
     voter_token_hash: String(base.voter_token_hash || "").trim().slice(0, 128),
     nome_votante: textoPerfil(base.nome_votante || "", 80),
     ranking: ranking.map((item, index) => ({
@@ -1802,7 +1807,7 @@ function normalizarDivisao(sessao) {
     status: ["aberta", "fechada"].includes(base.status) ? base.status : "aberta",
     share_token: normalizarDivisaoToken(base.share_token || base.token) || gerarDivisaoShareToken(),
     jogadores_presentes: jogadores.map(divisaoJogadorSnapshot).filter(jogador => jogador.id && jogador.nome),
-    votos: (Array.isArray(base.votos) ? base.votos : []).map(normalizarVotoDivisao).filter(voto => voto.voter_token_hash),
+    votos: (Array.isArray(base.votos) ? base.votos : []).map(normalizarVotoDivisao).filter(voto => voto.voter_user_id || voto.voter_token_hash),
     resultado: base.resultado && typeof base.resultado === "object" && !Array.isArray(base.resultado) ? base.resultado : null,
     criado_por: textoPerfil(base.criado_por || "", 120),
     criado_em: base.criado_em || agora,
@@ -5302,7 +5307,7 @@ app.post("/me/time/divisoes/:id/gerar-times", auth, (req, res) => {
   }
 });
 
-app.get("/dividir-times/:token", (req, res) => {
+app.get("/dividir-times/:token", auth, (req, res) => {
   const tokenSessao = normalizarDivisaoToken(req.params.token);
 
   if (!tokenSessao) {
@@ -5316,9 +5321,10 @@ app.get("/dividir-times/:token", (req, res) => {
       return res.status(404).json({ ok: false, error: "Votacao nao encontrada." });
     }
 
-    const voterToken = textoPerfil(req.query?.voter_token || "", 200);
-    const voterHash = voterToken ? hashVoterTokenDivisao(voterToken) : "";
-    const jaVotou = !!(voterHash && localizacao.sessao.votos.some(voto => voto.voter_token_hash === voterHash));
+    registrarOnline(req, { ultima_acao: "dividir_times_votacao" });
+
+    const voterUserId = normalizarVotanteUsuarioDivisao(req.user?.whatsapp);
+    const jaVotou = !!(voterUserId && localizacao.sessao.votos.some(voto => voto.voter_user_id === voterUserId));
 
     return res.json({
       ok: true,
@@ -5333,7 +5339,7 @@ app.get("/dividir-times/:token", (req, res) => {
   }
 });
 
-app.post("/dividir-times/:token/votos", (req, res) => {
+app.post("/dividir-times/:token/votos", auth, (req, res) => {
   const tokenSessao = normalizarDivisaoToken(req.params.token);
 
   if (!tokenSessao) {
@@ -5353,26 +5359,29 @@ app.post("/dividir-times/:token/votos", (req, res) => {
       return res.status(400).json({ ok: false, error: "Esta votacao nao esta aberta." });
     }
 
+    registrarOnline(req, { ultima_acao: "dividir_times_votar" });
+
     const body = req.body && typeof req.body === "object" && !Array.isArray(req.body)
       ? req.body
       : {};
+    const voterUserId = normalizarVotanteUsuarioDivisao(req.user?.whatsapp);
     const voterToken = textoPerfil(body.voter_token || "", 200);
+    const voterHash = voterToken ? hashVoterTokenDivisao(voterToken) : "";
 
-    if (!voterToken) {
-      return res.status(400).json({ ok: false, error: "Token do votante ausente." });
+    if (!voterUserId) {
+      return res.status(401).json({ ok: false, error: "Entre na sua conta ou crie um cadastro para votar." });
     }
 
-    const voterHash = hashVoterTokenDivisao(voterToken);
-
-    if (sessao.votos.some(voto => voto.voter_token_hash === voterHash)) {
-      return res.status(409).json({ ok: false, error: "Este aparelho ja votou nesta sessao." });
+    if (sessao.votos.some(voto => voto.voter_user_id === voterUserId)) {
+      return res.status(409).json({ ok: false, error: "Esta conta ja votou nesta sessao." });
     }
 
     const ranking = normalizarRankingDivisao(body.ranking, sessao.jogadores_presentes);
     const voto = normalizarVotoDivisao({
       id: gerarDivisaoVotoId(),
+      voter_user_id: voterUserId,
       voter_token_hash: voterHash,
-      nome_votante: textoPerfil(body.nome_votante || "", 80),
+      nome_votante: textoPerfil(body.nome_votante || req.user?.whatsapp || "", 80),
       ranking,
       ranking_bruto: ranking,
       criado_em: new Date().toISOString()
