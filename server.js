@@ -4188,7 +4188,14 @@ function rankingTimePublicoResponse(item) {
     estado: item.estado || "",
     escudo_url: item.escudo_url || "",
     estatisticas: item.estatisticas || calcularEstatisticasPerfil([]),
-    artes_total: Number(item.artes_total || 0)
+    artes_total: Number(item.artes_total || 0),
+    pontos_atividade: Number(item.pontos_atividade || 0),
+    perfil_completo_percentual: Number(item.perfil_completo_percentual || 0),
+    jogadores_ativos: Number(item.jogadores_ativos || 0),
+    patrocinadores_ativos: Number(item.patrocinadores_ativos || 0),
+    divisoes_criadas: Number(item.divisoes_criadas || 0),
+    votos_divisoes: Number(item.votos_divisoes || 0),
+    ranking_motivo: item.ranking_motivo || ""
   };
 }
 
@@ -4282,6 +4289,120 @@ function carregarPerfilTimePublico(req, res) {
   }
 }
 
+function perfilTemImagem(perfil, tipo) {
+  return !!(perfil?.[`${tipo}_url`] || perfil?.[`${tipo}_path`]);
+}
+
+function percentualPerfilCompleto(perfil) {
+  const checks = [
+    textoPerfil(perfil?.nome_time || ""),
+    textoPerfil(perfil?.cidade || ""),
+    textoPerfil(perfil?.estado || ""),
+    textoPerfil(perfil?.instagram || ""),
+    textoPerfil(perfil?.descricao_curta || ""),
+    perfilTemImagem(perfil, "escudo"),
+    perfilTemImagem(perfil, "mascote")
+  ];
+  const completos = checks.filter(Boolean).length;
+  return Math.round((completos / checks.length) * 100);
+}
+
+function contarVotosDivisoes(divisoes = []) {
+  return (Array.isArray(divisoes) ? divisoes : [])
+    .reduce((total, sessao) => total + (Array.isArray(sessao?.votos) ? sessao.votos.length : 0), 0);
+}
+
+function motivoRankingAtividade({
+  perfilCompletoPercentual = 0,
+  jogadoresAtivos = 0,
+  escalacaoTotal = 0,
+  jogosTotal = 0,
+  resultadosComPlacar = 0,
+  patrocinadoresAtivos = 0,
+  divisoesCriadas = 0,
+  votosDivisoes = 0,
+  artesTotal = 0,
+  temEscudo = false,
+  temMascote = false
+} = {}) {
+  const partes = [`perfil ${perfilCompletoPercentual}% completo`];
+
+  if (jogadoresAtivos) partes.push(`${jogadoresAtivos} jogador(es) ativo(s)`);
+  if (escalacaoTotal) partes.push("escalacao oficial cadastrada");
+  if (jogosTotal) partes.push(`${jogosTotal} jogo(s) cadastrado(s)`);
+  if (resultadosComPlacar) partes.push(`${resultadosComPlacar} resultado(s) com placar`);
+  if (patrocinadoresAtivos) partes.push(`${patrocinadoresAtivos} patrocinador(es) ativo(s)`);
+  if (divisoesCriadas) partes.push(`${divisoesCriadas} divisao(oes) criada(s)`);
+  if (votosDivisoes) partes.push(`${votosDivisoes} voto(s) em divisoes`);
+  if (artesTotal) partes.push(`${artesTotal} arte(s) na galeria`);
+  if (temEscudo) partes.push("escudo cadastrado");
+  if (temMascote) partes.push("mascote cadastrado");
+
+  return partes.slice(0, 6).join(" · ");
+}
+
+function calcularAtividadeRankingTime({
+  perfil,
+  jogadores = [],
+  escalacao = {},
+  jogos = [],
+  patrocinadores = [],
+  divisoes = [],
+  artesTotal = 0
+} = {}) {
+  const jogadoresAtivos = (Array.isArray(jogadores) ? jogadores : [])
+    .filter(jogador => jogador && jogador.ativo !== false).length;
+  const titulares = Array.isArray(escalacao?.titulares) ? escalacao.titulares.length : 0;
+  const reservas = Array.isArray(escalacao?.reservas) ? escalacao.reservas.length : 0;
+  const escalacaoTotal = titulares + reservas;
+  const jogosAtivos = (Array.isArray(jogos) ? jogos : [])
+    .filter(jogo => jogo && jogo.ativo !== false);
+  const stats = calcularEstatisticasPerfil(jogosAtivos);
+  const patrocinadoresAtivos = (Array.isArray(patrocinadores) ? patrocinadores : [])
+    .filter(patrocinador => patrocinador && patrocinador.ativo !== false).length;
+  const divisoesCriadas = (Array.isArray(divisoes) ? divisoes : []).length;
+  const votosDivisoes = contarVotosDivisoes(divisoes);
+  const temEscudo = perfilTemImagem(perfil, "escudo");
+  const temMascote = perfilTemImagem(perfil, "mascote");
+  const perfilCompletoPercentual = percentualPerfilCompleto(perfil);
+
+  let pontos = 0;
+  pontos += 10; // Todos os itens desta lista ja sao perfis publicos.
+  pontos += Math.round(perfilCompletoPercentual / 5);
+  if (temEscudo) pontos += 10;
+  if (temMascote) pontos += 8;
+  pontos += Math.min(jogadoresAtivos * 2, 24);
+  pontos += Math.min(escalacaoTotal * 2, 18);
+  pontos += Math.min(jogosAtivos.length * 3, 18);
+  pontos += Math.min(stats.jogos * 6, 30);
+  pontos += Math.min(patrocinadoresAtivos * 4, 16);
+  pontos += Math.min(divisoesCriadas * 5, 20);
+  pontos += Math.min(votosDivisoes * 2, 20);
+  pontos += Math.min(Number(artesTotal || 0) * 5, 30);
+
+  return {
+    pontos_atividade: pontos,
+    perfil_completo_percentual: perfilCompletoPercentual,
+    jogadores_ativos: jogadoresAtivos,
+    patrocinadores_ativos: patrocinadoresAtivos,
+    divisoes_criadas: divisoesCriadas,
+    votos_divisoes: votosDivisoes,
+    ranking_motivo: motivoRankingAtividade({
+      perfilCompletoPercentual,
+      jogadoresAtivos,
+      escalacaoTotal,
+      jogosTotal: jogosAtivos.length,
+      resultadosComPlacar: stats.jogos,
+      patrocinadoresAtivos,
+      divisoesCriadas,
+      votosDivisoes,
+      artesTotal: Number(artesTotal || 0),
+      temEscudo,
+      temMascote
+    })
+  };
+}
+
 function ordenarRankingTimes(lista, valorFn, desempateFn = null) {
   return [...lista]
     .sort((a, b) => {
@@ -4302,7 +4423,39 @@ function ordenarRankingTimes(lista, valorFn, desempateFn = null) {
     }));
 }
 
+function ordenarRankingAtividade(lista, limit = 20) {
+  const ordenados = [...lista]
+    .sort((a, b) => {
+      const atividadeDiff = Number(b.pontos_atividade || 0) - Number(a.pontos_atividade || 0);
+      if (atividadeDiff) return atividadeDiff;
+
+      const vitoriasDiff = Number(b.estatisticas?.vitorias || 0) - Number(a.estatisticas?.vitorias || 0);
+      if (vitoriasDiff) return vitoriasDiff;
+
+      const aproveitamentoDiff = Number(b.estatisticas?.aproveitamento || 0) - Number(a.estatisticas?.aproveitamento || 0);
+      if (aproveitamentoDiff) return aproveitamentoDiff;
+
+      const golsDiff = Number(b.estatisticas?.gols_marcados || 0) - Number(a.estatisticas?.gols_marcados || 0);
+      if (golsDiff) return golsDiff;
+
+      const artesDiff = Number(b.artes_total || 0) - Number(a.artes_total || 0);
+      if (artesDiff) return artesDiff;
+
+      return String(a.nome_time || "").localeCompare(String(b.nome_time || ""), "pt-BR");
+    });
+  const limite = Number(limit || 0);
+  const recorte = limite > 0 ? ordenados.slice(0, limite) : ordenados;
+
+  return recorte
+    .map((item, index) => ({
+      posicao: index + 1,
+      ...item
+    }));
+}
+
 function carregarRankingTimes(req, res) {
+  res.setHeader("Cache-Control", "no-store");
+
   try {
     ensureDir(PERFIS_DIR);
 
@@ -4323,12 +4476,25 @@ function carregarRankingTimes(req, res) {
       if (perfil.publico !== true || !perfil.slug) continue;
 
       const clienteId = encontrarClienteIdPorPerfilId(perfilId);
+      const jogadores = readPerfilJogadores(perfilId);
+      const escalacao = readPerfilEscalacao(perfilId, jogadores);
       const jogos = readPerfilJogos(perfilId)
         .filter(jogo => jogo && jogo.ativo !== false)
         .map(jogoResponse);
       const estatisticas = calcularEstatisticasPerfil(jogos);
+      const patrocinadores = readPerfilPatrocinadores(perfilId);
+      const divisoes = readPerfilDivisoes(perfilId);
       const artesTotal = clienteId ? contarArtesPerfilCliente(clienteId) : 0;
       const perfilPublico = perfilPublicoResponse(perfil);
+      const atividade = calcularAtividadeRankingTime({
+        perfil,
+        jogadores,
+        escalacao,
+        jogos,
+        patrocinadores,
+        divisoes,
+        artesTotal
+      });
 
       itens.push(rankingTimePublicoResponse({
         slug: perfilPublico.slug,
@@ -4337,16 +4503,22 @@ function carregarRankingTimes(req, res) {
         estado: perfilPublico.estado || "",
         escudo_url: perfilPublico.escudo_url || "",
         estatisticas,
-        artes_total: artesTotal
+        artes_total: artesTotal,
+        ...atividade
       }));
     }
 
     const comJogos = itens.filter(item => Number(item.estatisticas?.jogos || 0) > 0);
+    const timesOrdenados = ordenarRankingAtividade(itens, 0);
+    const rankingAtividade = timesOrdenados.slice(0, 20);
 
     return res.json({
       ok: true,
+      ranking_gerado_em: new Date().toISOString(),
       total_times: itens.length,
+      times: timesOrdenados,
       rankings: {
+        atividade: rankingAtividade,
         vitorias: ordenarRankingTimes(itens, item => item.estatisticas?.vitorias, item => item.estatisticas?.aproveitamento),
         gols_marcados: ordenarRankingTimes(itens, item => item.estatisticas?.gols_marcados, item => item.estatisticas?.vitorias),
         aproveitamento: ordenarRankingTimes(comJogos, item => item.estatisticas?.aproveitamento, item => item.estatisticas?.jogos),
