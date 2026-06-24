@@ -2159,7 +2159,7 @@ const AVALIACAO_JOGADORES_ATRIBUTOS = [
 const AVALIACAO_JOGADORES_BASE = 75;
 const AVALIACAO_JOGADORES_TETO = 99;
 const AVALIACAO_JOGADORES_PONTOS_TOTAL = 30;
-const AVALIACAO_JOGADORES_VALOR_PONTO = 0.3;
+const AVALIACAO_JOGADORES_VALOR_PONTO = 3;
 
 function gerarAvaliacaoJogadoresId() {
   return `avj_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`;
