@@ -1094,6 +1094,10 @@ function getPerfilDivisoesFile(perfilId) {
   return path.join(getPerfilDir(perfilId), "divisoes.json");
 }
 
+function getPerfilAvaliacoesJogadoresFile(perfilId) {
+  return path.join(getPerfilDir(perfilId), "avaliacoes-jogadores.json");
+}
+
 function getPerfilPatrocinadoresFile(perfilId) {
   return path.join(getPerfilDir(perfilId), "patrocinadores.json");
 }
@@ -2136,6 +2140,407 @@ function encontrarDivisaoPorToken(token) {
         divisoes,
         index,
         sessao: divisoes[index]
+      };
+    }
+  }
+
+  return null;
+}
+
+const AVALIACAO_JOGADORES_ATRIBUTOS = [
+  "velocidade",
+  "finalizacao",
+  "passe",
+  "drible",
+  "defesa",
+  "fisico",
+  "resistencia"
+];
+const AVALIACAO_JOGADORES_BASE = 75;
+const AVALIACAO_JOGADORES_PONTOS_NORMAIS = 20;
+const AVALIACAO_JOGADORES_PONTOS_ESPECIAIS = 5;
+const AVALIACAO_JOGADORES_VALOR_NORMAL = 0.2;
+const AVALIACAO_JOGADORES_VALOR_ESPECIAL = 0.5;
+
+function gerarAvaliacaoJogadoresId() {
+  return `avj_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`;
+}
+
+function gerarAvaliacaoJogadoresVotoId() {
+  return `avv_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`;
+}
+
+function gerarAvaliacaoJogadoresShareToken() {
+  return gerarDivisaoShareToken();
+}
+
+function normalizarAvaliacaoJogadoresId(value) {
+  return String(value || "").trim().replace(/[^\w-]+/g, "").slice(0, 80);
+}
+
+function normalizarAvaliacaoJogadoresToken(value) {
+  return normalizarDivisaoToken(value);
+}
+
+function hashVoterTokenAvaliacaoJogadores(value) {
+  return hashVoterTokenDivisao(value);
+}
+
+function avaliacaoJogadorSnapshot(jogador) {
+  return divisaoJogadorSnapshot(jogador);
+}
+
+function avaliacaoJogadorResponse(jogador) {
+  return avaliacaoJogadorSnapshot(jogador);
+}
+
+function pontosAvaliacaoDefault() {
+  return AVALIACAO_JOGADORES_ATRIBUTOS.reduce((acc, atributo) => {
+    acc[atributo] = 0;
+    return acc;
+  }, {});
+}
+
+function normalizarPontosAvaliacaoLeitura(raw) {
+  const base = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+  const pontos = {};
+
+  for (const atributo of AVALIACAO_JOGADORES_ATRIBUTOS) {
+    const value = Math.trunc(Number(base[atributo] || 0));
+    pontos[atributo] = Number.isFinite(value) && value > 0 ? value : 0;
+  }
+
+  return pontos;
+}
+
+function normalizarPontosAvaliacaoEnvio(raw, limite, nomeTipo) {
+  const base = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+  const pontos = {};
+  let total = 0;
+
+  for (const atributo of AVALIACAO_JOGADORES_ATRIBUTOS) {
+    const valueRaw = base[atributo] ?? 0;
+    const value = Math.trunc(Number(valueRaw));
+
+    if (!Number.isFinite(value) || value < 0) {
+      const err = new Error(`Pontuacao invalida em ${nomeTipo}.`);
+      err.status = 400;
+      throw err;
+    }
+
+    pontos[atributo] = value;
+    total += value;
+  }
+
+  if (total > limite) {
+    const err = new Error(`Voce passou do limite de ${limite} ponto(s) ${nomeTipo}.`);
+    err.status = 400;
+    throw err;
+  }
+
+  return { pontos, total };
+}
+
+function totalPontosAvaliacao(pontos) {
+  return Object.values(normalizarPontosAvaliacaoLeitura(pontos))
+    .reduce((sum, value) => sum + value, 0);
+}
+
+function normalizarAvaliacaoJogadorVotoItem(item = {}) {
+  const base = item && typeof item === "object" && !Array.isArray(item) ? item : {};
+
+  return {
+    jogador_id: normalizarJogadorId(base.jogador_id || base.id),
+    pontos_normais: normalizarPontosAvaliacaoLeitura(base.pontos_normais || base.normais || {}),
+    pontos_especiais: normalizarPontosAvaliacaoLeitura(base.pontos_especiais || base.especiais || {}),
+    pontos_normais_total: Number(base.pontos_normais_total ?? totalPontosAvaliacao(base.pontos_normais || base.normais || {})) || 0,
+    pontos_especiais_total: Number(base.pontos_especiais_total ?? totalPontosAvaliacao(base.pontos_especiais || base.especiais || {})) || 0
+  };
+}
+
+function normalizarAvaliacoesJogadoresPayload(avaliacoes, jogadoresSessao) {
+  const jogadores = Array.isArray(jogadoresSessao) ? jogadoresSessao : [];
+  const ids = jogadores.map(jogador => normalizarJogadorId(jogador?.id)).filter(Boolean);
+  const idsSet = new Set(ids);
+  const lista = Array.isArray(avaliacoes) ? avaliacoes : [];
+
+  if (lista.length !== ids.length) {
+    const err = new Error("A avaliacao precisa conter todos os jogadores selecionados.");
+    err.status = 400;
+    throw err;
+  }
+
+  const vistos = new Set();
+
+  return lista.map(item => {
+    const jogadorId = normalizarJogadorId(item?.jogador_id || item?.id);
+
+    if (!idsSet.has(jogadorId)) {
+      const err = new Error("Avaliacao contem jogador que nao faz parte desta sessao.");
+      err.status = 400;
+      throw err;
+    }
+
+    if (vistos.has(jogadorId)) {
+      const err = new Error("Avaliacao contem jogador repetido.");
+      err.status = 400;
+      throw err;
+    }
+
+    vistos.add(jogadorId);
+
+    const normais = normalizarPontosAvaliacaoEnvio(
+      item?.pontos_normais || item?.normais || {},
+      AVALIACAO_JOGADORES_PONTOS_NORMAIS,
+      "normais"
+    );
+    const especiais = normalizarPontosAvaliacaoEnvio(
+      item?.pontos_especiais || item?.especiais || {},
+      AVALIACAO_JOGADORES_PONTOS_ESPECIAIS,
+      "especiais"
+    );
+
+    return {
+      jogador_id: jogadorId,
+      pontos_normais: normais.pontos,
+      pontos_especiais: especiais.pontos,
+      pontos_normais_total: normais.total,
+      pontos_especiais_total: especiais.total
+    };
+  });
+}
+
+function normalizarVotoAvaliacaoJogadores(voto) {
+  const base = voto && typeof voto === "object" && !Array.isArray(voto) ? voto : {};
+  const avaliacoes = Array.isArray(base.avaliacoes)
+    ? base.avaliacoes
+    : Array.isArray(base.jogadores)
+      ? base.jogadores
+      : [];
+
+  return {
+    id: normalizarAvaliacaoJogadoresId(base.id) || gerarAvaliacaoJogadoresVotoId(),
+    voter_user_id: normalizarVotanteUsuarioDivisao(base.voter_user_id || base.usuario_id || base.cliente_id || ""),
+    voter_token_hash: String(base.voter_token_hash || "").trim().slice(0, 128),
+    nome_votante: textoPerfil(base.nome_votante || "", 80),
+    avaliacoes: avaliacoes
+      .map(normalizarAvaliacaoJogadorVotoItem)
+      .filter(item => item.jogador_id),
+    criado_em: base.criado_em || new Date().toISOString()
+  };
+}
+
+function normalizarAvaliacaoJogadoresSessao(sessao) {
+  const base = sessao && typeof sessao === "object" && !Array.isArray(sessao) ? sessao : {};
+  const jogadores = Array.isArray(base.jogadores_avaliados)
+    ? base.jogadores_avaliados
+    : Array.isArray(base.jogadores)
+      ? base.jogadores
+      : [];
+  const agora = new Date().toISOString();
+
+  return {
+    id: normalizarAvaliacaoJogadoresId(base.id) || gerarAvaliacaoJogadoresId(),
+    perfil_id: normalizarPerfilId(base.perfil_id || ""),
+    titulo: textoPerfil(base.titulo || "Avaliar Jogadores", 90) || "Avaliar Jogadores",
+    status: ["aberta", "fechada"].includes(base.status) ? base.status : "aberta",
+    share_token: normalizarAvaliacaoJogadoresToken(base.share_token || base.token) || gerarAvaliacaoJogadoresShareToken(),
+    jogadores_avaliados: jogadores.map(avaliacaoJogadorSnapshot).filter(jogador => jogador.id && jogador.nome),
+    votos: (Array.isArray(base.votos) ? base.votos : []).map(normalizarVotoAvaliacaoJogadores).filter(voto => voto.voter_user_id || voto.voter_token_hash),
+    criado_por: textoPerfil(base.criado_por || "", 120),
+    criado_em: base.criado_em || agora,
+    atualizado_em: base.atualizado_em || agora
+  };
+}
+
+function readPerfilAvaliacoesJogadores(perfilId) {
+  return readJsonArraySafe(getPerfilAvaliacoesJogadoresFile(perfilId))
+    .map(sessao => normalizarAvaliacaoJogadoresSessao({ ...sessao, perfil_id: perfilId }))
+    .filter(sessao => sessao.id && sessao.share_token);
+}
+
+function writePerfilAvaliacoesJogadores(perfilId, avaliacoes) {
+  ensureDir(getPerfilDir(perfilId));
+  const payload = (Array.isArray(avaliacoes) ? avaliacoes : [])
+    .map(sessao => normalizarAvaliacaoJogadoresSessao({ ...sessao, perfil_id: perfilId }));
+  writeJsonSafe(getPerfilAvaliacoesJogadoresFile(perfilId), payload);
+}
+
+function normalizarTextoPosicaoAvaliacao(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+}
+
+function pesosOverallAvaliacao(posicao) {
+  const texto = normalizarTextoPosicaoAvaliacao(posicao);
+  const base = {
+    velocidade: 1,
+    finalizacao: 1,
+    passe: 1,
+    drible: 1,
+    defesa: 1,
+    fisico: 1,
+    resistencia: 1
+  };
+
+  if (/\b(goleiro|gol|keeper|guarda[\s-]?redes)\b/.test(texto)) {
+    return { velocidade: 0.1, finalizacao: 0.05, passe: 0.1, drible: 0.05, defesa: 0.35, fisico: 0.2, resistencia: 0.15 };
+  }
+
+  if (/\b(zagueiro|zaga|defensor|defesa|fixo|beque)\b/.test(texto)) {
+    return { velocidade: 0.1, finalizacao: 0.025, passe: 0.15, drible: 0.025, defesa: 0.35, fisico: 0.2, resistencia: 0.15 };
+  }
+
+  if (/\b(lateral|ala)\b/.test(texto)) {
+    return { velocidade: 0.22, finalizacao: 0.03, passe: 0.15, drible: 0.15, defesa: 0.18, fisico: 0.07, resistencia: 0.2 };
+  }
+
+  if (/\b(volante|marcador)\b/.test(texto)) {
+    return { velocidade: 0.08, finalizacao: 0.05, passe: 0.22, drible: 0.07, defesa: 0.25, fisico: 0.15, resistencia: 0.18 };
+  }
+
+  if (/\b(meia|armador|meio)\b/.test(texto)) {
+    return { velocidade: 0.12, finalizacao: 0.15, passe: 0.25, drible: 0.2, defesa: 0.08, fisico: 0.08, resistencia: 0.12 };
+  }
+
+  if (/\b(pivo|pivô)\b/.test(texto)) {
+    return { velocidade: 0.07, finalizacao: 0.25, passe: 0.15, drible: 0.15, defesa: 0.08, fisico: 0.2, resistencia: 0.1 };
+  }
+
+  if (/\b(atacante|ataque|ponta|centroavante|avante)\b/.test(texto)) {
+    return { velocidade: 0.2, finalizacao: 0.25, passe: 0.1, drible: 0.2, defesa: 0.05, fisico: 0.1, resistencia: 0.1 };
+  }
+
+  return base;
+}
+
+function calcularOverallAvaliacao(atributos, posicao) {
+  const pesos = pesosOverallAvaliacao(posicao);
+  let soma = 0;
+  let totalPeso = 0;
+
+  for (const atributo of AVALIACAO_JOGADORES_ATRIBUTOS) {
+    const peso = Number(pesos[atributo] || 0);
+    soma += Number(atributos?.[atributo] || AVALIACAO_JOGADORES_BASE) * peso;
+    totalPeso += peso;
+  }
+
+  if (!totalPeso) return AVALIACAO_JOGADORES_BASE;
+  return Math.round((soma / totalPeso) * 10) / 10;
+}
+
+function calcularResultadosAvaliacaoJogadores(sessao) {
+  const normalizada = normalizarAvaliacaoJogadoresSessao(sessao);
+  const acumulado = new Map(normalizada.jogadores_avaliados.map(jogador => [
+    jogador.id,
+    {
+      jogador,
+      votos: 0,
+      normais: pontosAvaliacaoDefault(),
+      especiais: pontosAvaliacaoDefault()
+    }
+  ]));
+
+  for (const voto of normalizada.votos) {
+    const vistosNoVoto = new Set();
+
+    for (const avaliacao of Array.isArray(voto.avaliacoes) ? voto.avaliacoes : []) {
+      const jogadorId = normalizarJogadorId(avaliacao?.jogador_id);
+      const atual = acumulado.get(jogadorId);
+      if (!atual || vistosNoVoto.has(jogadorId)) continue;
+      vistosNoVoto.add(jogadorId);
+      atual.votos += 1;
+
+      for (const atributo of AVALIACAO_JOGADORES_ATRIBUTOS) {
+        atual.normais[atributo] += Number(avaliacao.pontos_normais?.[atributo] || 0);
+        atual.especiais[atributo] += Number(avaliacao.pontos_especiais?.[atributo] || 0);
+      }
+    }
+  }
+
+  return normalizada.jogadores_avaliados.map(jogador => {
+    const atual = acumulado.get(jogador.id);
+    const votos = Number(atual?.votos || 0);
+    const atributos = {};
+    const pontosNormaisMedios = {};
+    const pontosEspeciaisMedios = {};
+
+    for (const atributo of AVALIACAO_JOGADORES_ATRIBUTOS) {
+      const mediaNormal = votos ? atual.normais[atributo] / votos : 0;
+      const mediaEspecial = votos ? atual.especiais[atributo] / votos : 0;
+      const valor = AVALIACAO_JOGADORES_BASE +
+        mediaNormal * AVALIACAO_JOGADORES_VALOR_NORMAL +
+        mediaEspecial * AVALIACAO_JOGADORES_VALOR_ESPECIAL;
+
+      pontosNormaisMedios[atributo] = Math.round(mediaNormal * 100) / 100;
+      pontosEspeciaisMedios[atributo] = Math.round(mediaEspecial * 100) / 100;
+      atributos[atributo] = Math.round(valor * 10) / 10;
+    }
+
+    return {
+      jogador: avaliacaoJogadorResponse(jogador),
+      atributos,
+      overall: calcularOverallAvaliacao(atributos, jogador.posicao),
+      votos_count: votos,
+      pontos_normais_medios: pontosNormaisMedios,
+      pontos_especiais_medios: pontosEspeciaisMedios
+    };
+  });
+}
+
+function avaliacaoJogadoresConfigResponse() {
+  return {
+    base: AVALIACAO_JOGADORES_BASE,
+    pontos_normais_total: AVALIACAO_JOGADORES_PONTOS_NORMAIS,
+    pontos_especiais_total: AVALIACAO_JOGADORES_PONTOS_ESPECIAIS,
+    valor_ponto_normal: AVALIACAO_JOGADORES_VALOR_NORMAL,
+    valor_ponto_especial: AVALIACAO_JOGADORES_VALOR_ESPECIAL,
+    atributos: AVALIACAO_JOGADORES_ATRIBUTOS
+  };
+}
+
+function avaliacaoJogadoresResponse(sessao, { publico = false } = {}) {
+  const normalizada = normalizarAvaliacaoJogadoresSessao(sessao);
+  const response = {
+    id: normalizada.id,
+    titulo: normalizada.titulo,
+    status: normalizada.status,
+    jogadores_avaliados: normalizada.jogadores_avaliados.map(avaliacaoJogadorResponse),
+    votos_count: normalizada.votos.length,
+    config: avaliacaoJogadoresConfigResponse(),
+    criado_em: normalizada.criado_em,
+    atualizado_em: normalizada.atualizado_em
+  };
+
+  if (!publico) {
+    response.share_token = normalizada.share_token;
+    response.resultados = calcularResultadosAvaliacaoJogadores(normalizada);
+  }
+
+  return response;
+}
+
+function encontrarAvaliacaoJogadoresPorToken(token) {
+  const shareToken = normalizarAvaliacaoJogadoresToken(token);
+  if (!shareToken || !fs.existsSync(PERFIS_DIR)) return null;
+
+  const dirs = fs.readdirSync(PERFIS_DIR, { withFileTypes: true })
+    .filter(item => item.isDirectory())
+    .map(item => item.name);
+
+  for (const perfilId of dirs) {
+    const avaliacoes = readPerfilAvaliacoesJogadores(perfilId);
+    const index = avaliacoes.findIndex(sessao => sessao.share_token === shareToken);
+
+    if (index >= 0) {
+      return {
+        perfil_id: perfilId,
+        avaliacoes,
+        index,
+        sessao: avaliacoes[index]
       };
     }
   }
@@ -5435,6 +5840,220 @@ app.post("/dividir-times/:token/votos", auth, (req, res) => {
     return res.status(status).json({
       ok: false,
       error: err?.message || "Falha ao salvar voto."
+    });
+  }
+});
+
+app.post("/me/time/avaliacoes-jogadores", auth, (req, res) => {
+  registrarOnline(req, { ultima_acao: "perfil_time_avaliacao_jogadores_criar" });
+
+  const body = req.body && typeof req.body === "object" && !Array.isArray(req.body)
+    ? req.body
+    : {};
+  const idsRecebidos = Array.isArray(body.jogadores_avaliados)
+    ? body.jogadores_avaliados
+    : Array.isArray(body.jogadores_ids)
+      ? body.jogadores_ids
+      : [];
+  const jogadoresIds = [...new Set(idsRecebidos.map(normalizarJogadorId).filter(Boolean))];
+
+  if (jogadoresIds.length < 1) {
+    return res.status(400).json({
+      ok: false,
+      error: "Selecione pelo menos 1 jogador para avaliar."
+    });
+  }
+
+  if (jogadoresIds.length > 30) {
+    return res.status(400).json({
+      ok: false,
+      error: "Selecione no maximo 30 jogadores no MVP."
+    });
+  }
+
+  const clientes = readClientes();
+
+  try {
+    const perfilInfo = ensurePerfilCliente(clientes, req.user.whatsapp);
+    const jogadores = readPerfilJogadores(perfilInfo.perfil_id).filter(jogador => jogador.ativo !== false);
+    const jogadoresMap = new Map(jogadores.map(jogador => [jogador.id, jogador]));
+    const selecionados = jogadoresIds.map(id => jogadoresMap.get(id)).filter(Boolean);
+
+    if (selecionados.length !== jogadoresIds.length) {
+      return res.status(400).json({
+        ok: false,
+        error: "Um ou mais jogadores selecionados nao existem no elenco ativo."
+      });
+    }
+
+    let shareToken = gerarAvaliacaoJogadoresShareToken();
+    for (let tentativas = 0; tentativas < 5 && encontrarAvaliacaoJogadoresPorToken(shareToken); tentativas += 1) {
+      shareToken = gerarAvaliacaoJogadoresShareToken();
+    }
+
+    const agora = new Date().toISOString();
+    const sessao = normalizarAvaliacaoJogadoresSessao({
+      id: gerarAvaliacaoJogadoresId(),
+      perfil_id: perfilInfo.perfil_id,
+      titulo: textoPerfil(body.titulo || "Avaliar Jogadores", 90) || "Avaliar Jogadores",
+      status: "aberta",
+      share_token: shareToken,
+      jogadores_avaliados: selecionados.map(avaliacaoJogadorSnapshot),
+      votos: [],
+      criado_por: req.user.whatsapp || "",
+      criado_em: agora,
+      atualizado_em: agora
+    });
+    const avaliacoes = readPerfilAvaliacoesJogadores(perfilInfo.perfil_id);
+
+    avaliacoes.push(sessao);
+    writePerfilAvaliacoesJogadores(perfilInfo.perfil_id, avaliacoes);
+
+    return res.status(201).json({
+      ok: true,
+      sessao: avaliacaoJogadoresResponse(sessao)
+    });
+  } catch (err) {
+    const status = Number(err?.status || 500);
+
+    return res.status(status).json({
+      ok: false,
+      error: status === 404 ? "Cliente nao encontrado" : (err?.message || "Falha ao criar avaliacao")
+    });
+  }
+});
+
+app.get("/me/time/avaliacoes-jogadores/:id", auth, (req, res) => {
+  registrarOnline(req, { ultima_acao: "perfil_time_avaliacao_jogadores" });
+
+  const avaliacaoId = normalizarAvaliacaoJogadoresId(req.params.id);
+  const clientes = readClientes();
+
+  if (!avaliacaoId) {
+    return res.status(400).json({ ok: false, error: "Avaliacao invalida" });
+  }
+
+  try {
+    const perfilInfo = ensurePerfilCliente(clientes, req.user.whatsapp);
+    const avaliacoes = readPerfilAvaliacoesJogadores(perfilInfo.perfil_id);
+    const sessao = avaliacoes.find(item => item.id === avaliacaoId);
+
+    if (!sessao) {
+      return res.status(404).json({ ok: false, error: "Avaliacao nao encontrada." });
+    }
+
+    return res.json({
+      ok: true,
+      sessao: avaliacaoJogadoresResponse(sessao)
+    });
+  } catch (err) {
+    const status = Number(err?.status || 500);
+
+    return res.status(status).json({
+      ok: false,
+      error: status === 404 ? "Cliente nao encontrado" : "Falha ao carregar avaliacao"
+    });
+  }
+});
+
+app.get("/avaliar-jogadores/:token", auth, (req, res) => {
+  const tokenSessao = normalizarAvaliacaoJogadoresToken(req.params.token);
+
+  if (!tokenSessao) {
+    return res.status(404).json({ ok: false, error: "Avaliacao nao encontrada." });
+  }
+
+  try {
+    const localizacao = encontrarAvaliacaoJogadoresPorToken(tokenSessao);
+
+    if (!localizacao) {
+      return res.status(404).json({ ok: false, error: "Avaliacao nao encontrada." });
+    }
+
+    registrarOnline(req, { ultima_acao: "avaliacao_jogadores_votacao" });
+
+    const voterUserId = normalizarVotanteUsuarioDivisao(req.user?.whatsapp);
+    const jaAvaliou = !!(voterUserId && localizacao.sessao.votos.some(voto => voto.voter_user_id === voterUserId));
+
+    return res.json({
+      ok: true,
+      sessao: avaliacaoJogadoresResponse(localizacao.sessao, { publico: true }),
+      ja_avaliou: jaAvaliou
+    });
+  } catch (err) {
+    return res.status(500).json({
+      ok: false,
+      error: "Falha ao carregar avaliacao."
+    });
+  }
+});
+
+app.post("/avaliar-jogadores/:token/votos", auth, (req, res) => {
+  const tokenSessao = normalizarAvaliacaoJogadoresToken(req.params.token);
+
+  if (!tokenSessao) {
+    return res.status(404).json({ ok: false, error: "Avaliacao nao encontrada." });
+  }
+
+  try {
+    const localizacao = encontrarAvaliacaoJogadoresPorToken(tokenSessao);
+
+    if (!localizacao) {
+      return res.status(404).json({ ok: false, error: "Avaliacao nao encontrada." });
+    }
+
+    const sessao = localizacao.sessao;
+
+    if (sessao.status !== "aberta") {
+      return res.status(400).json({ ok: false, error: "Esta avaliacao nao esta aberta." });
+    }
+
+    registrarOnline(req, { ultima_acao: "avaliacao_jogadores_votar" });
+
+    const body = req.body && typeof req.body === "object" && !Array.isArray(req.body)
+      ? req.body
+      : {};
+    const voterUserId = normalizarVotanteUsuarioDivisao(req.user?.whatsapp);
+    const voterToken = textoPerfil(body.voter_token || "", 200);
+    const voterHash = voterToken ? hashVoterTokenAvaliacaoJogadores(voterToken) : "";
+
+    if (!voterUserId) {
+      return res.status(401).json({ ok: false, error: "Entre na sua conta ou crie um cadastro para votar." });
+    }
+
+    if (sessao.votos.some(voto => voto.voter_user_id === voterUserId)) {
+      return res.status(409).json({ ok: false, error: "Esta conta ja avaliou esta sessao." });
+    }
+
+    const avaliacoes = normalizarAvaliacoesJogadoresPayload(body.avaliacoes, sessao.jogadores_avaliados);
+    const voto = normalizarVotoAvaliacaoJogadores({
+      id: gerarAvaliacaoJogadoresVotoId(),
+      voter_user_id: voterUserId,
+      voter_token_hash: voterHash,
+      nome_votante: textoPerfil(body.nome_votante || req.user?.whatsapp || "", 80),
+      avaliacoes,
+      criado_em: new Date().toISOString()
+    });
+    const atualizada = normalizarAvaliacaoJogadoresSessao({
+      ...sessao,
+      votos: [...sessao.votos, voto],
+      atualizado_em: new Date().toISOString()
+    });
+
+    localizacao.avaliacoes[localizacao.index] = atualizada;
+    writePerfilAvaliacoesJogadores(localizacao.perfil_id, localizacao.avaliacoes);
+
+    return res.status(201).json({
+      ok: true,
+      votos_count: atualizada.votos.length,
+      resultados: calcularResultadosAvaliacaoJogadores(atualizada)
+    });
+  } catch (err) {
+    const status = Number(err?.status || 500);
+
+    return res.status(status).json({
+      ok: false,
+      error: err?.message || "Falha ao salvar avaliacao."
     });
   }
 });
