@@ -2158,10 +2158,8 @@ const AVALIACAO_JOGADORES_ATRIBUTOS = [
 ];
 const AVALIACAO_JOGADORES_BASE = 75;
 const AVALIACAO_JOGADORES_TETO = 99;
-const AVALIACAO_JOGADORES_PONTOS_NORMAIS = 20;
-const AVALIACAO_JOGADORES_PONTOS_ESPECIAIS = 5;
-const AVALIACAO_JOGADORES_VALOR_NORMAL = 2;
-const AVALIACAO_JOGADORES_VALOR_ESPECIAL = 5;
+const AVALIACAO_JOGADORES_PONTOS_TOTAL = 30;
+const AVALIACAO_JOGADORES_VALOR_PONTO = 0.3;
 
 function gerarAvaliacaoJogadoresId() {
   return `avj_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`;
@@ -2214,7 +2212,7 @@ function normalizarPontosAvaliacaoLeitura(raw) {
   return pontos;
 }
 
-function normalizarPontosAvaliacaoEnvio(raw, limite, nomeTipo) {
+function normalizarPontosAvaliacaoEnvio(raw, nomeTipo) {
   const base = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
   const pontos = {};
   let total = 0;
@@ -2224,19 +2222,13 @@ function normalizarPontosAvaliacaoEnvio(raw, limite, nomeTipo) {
     const value = Math.trunc(Number(valueRaw));
 
     if (!Number.isFinite(value) || value < 0) {
-      const err = new Error(`Pontuacao invalida em ${nomeTipo}.`);
+      const err = new Error(nomeTipo ? `Pontuacao invalida em ${nomeTipo}.` : "Pontuacao invalida.");
       err.status = 400;
       throw err;
     }
 
     pontos[atributo] = value;
     total += value;
-  }
-
-  if (total > limite) {
-    const err = new Error(`Voce passou do limite de ${limite} ponto(s) ${nomeTipo}.`);
-    err.status = 400;
-    throw err;
   }
 
   return { pontos, total };
@@ -2249,13 +2241,13 @@ function totalPontosAvaliacao(pontos) {
 
 function normalizarAvaliacaoJogadorVotoItem(item = {}) {
   const base = item && typeof item === "object" && !Array.isArray(item) ? item : {};
+  const pontosBase = base.pontos || base.pontos_normais || base.normais || {};
+  const pontos = normalizarPontosAvaliacaoLeitura(pontosBase);
 
   return {
     jogador_id: normalizarJogadorId(base.jogador_id || base.id),
-    pontos_normais: normalizarPontosAvaliacaoLeitura(base.pontos_normais || base.normais || {}),
-    pontos_especiais: normalizarPontosAvaliacaoLeitura(base.pontos_especiais || base.especiais || {}),
-    pontos_normais_total: Number(base.pontos_normais_total ?? totalPontosAvaliacao(base.pontos_normais || base.normais || {})) || 0,
-    pontos_especiais_total: Number(base.pontos_especiais_total ?? totalPontosAvaliacao(base.pontos_especiais || base.especiais || {})) || 0
+    pontos,
+    pontos_total: Number(base.pontos_total ?? totalPontosAvaliacao(pontos)) || 0
   };
 }
 
@@ -2290,21 +2282,14 @@ function normalizarAvaliacoesJogadoresPayload(avaliacoes, jogadoresSessao) {
 
     vistos.add(jogadorId);
 
-    const normais = normalizarPontosAvaliacaoEnvio(
-      item?.pontos_normais || item?.normais || {},
-      AVALIACAO_JOGADORES_PONTOS_NORMAIS,
-      "normais"
-    );
-    const especiais = normalizarPontosAvaliacaoEnvio(
-      item?.pontos_especiais || item?.especiais || {},
-      AVALIACAO_JOGADORES_PONTOS_ESPECIAIS,
-      "especiais"
+    const pontos = normalizarPontosAvaliacaoEnvio(
+      item?.pontos || item?.pontos_normais || item?.normais || {},
+      ""
     );
 
     for (const atributo of AVALIACAO_JOGADORES_ATRIBUTOS) {
       const valorFinal = AVALIACAO_JOGADORES_BASE +
-        Number(normais.pontos[atributo] || 0) * AVALIACAO_JOGADORES_VALOR_NORMAL +
-        Number(especiais.pontos[atributo] || 0) * AVALIACAO_JOGADORES_VALOR_ESPECIAL;
+        Number(pontos.pontos[atributo] || 0) * AVALIACAO_JOGADORES_VALOR_PONTO;
 
       if (valorFinal > AVALIACAO_JOGADORES_TETO) {
         const err = new Error("Nenhum atributo pode passar de 99.");
@@ -2313,12 +2298,16 @@ function normalizarAvaliacoesJogadoresPayload(avaliacoes, jogadoresSessao) {
       }
     }
 
+    if (pontos.total > AVALIACAO_JOGADORES_PONTOS_TOTAL) {
+      const err = new Error(`Voce passou do limite de ${AVALIACAO_JOGADORES_PONTOS_TOTAL} ponto(s).`);
+      err.status = 400;
+      throw err;
+    }
+
     return {
       jogador_id: jogadorId,
-      pontos_normais: normais.pontos,
-      pontos_especiais: especiais.pontos,
-      pontos_normais_total: normais.total,
-      pontos_especiais_total: especiais.total
+      pontos: pontos.pontos,
+      pontos_total: pontos.total
     };
   });
 }
@@ -2452,8 +2441,7 @@ function calcularResultadosAvaliacaoJogadores(sessao) {
     {
       jogador,
       votos: 0,
-      normais: pontosAvaliacaoDefault(),
-      especiais: pontosAvaliacaoDefault()
+      pontos: pontosAvaliacaoDefault()
     }
   ]));
 
@@ -2468,8 +2456,7 @@ function calcularResultadosAvaliacaoJogadores(sessao) {
       atual.votos += 1;
 
       for (const atributo of AVALIACAO_JOGADORES_ATRIBUTOS) {
-        atual.normais[atributo] += Number(avaliacao.pontos_normais?.[atributo] || 0);
-        atual.especiais[atributo] += Number(avaliacao.pontos_especiais?.[atributo] || 0);
+        atual.pontos[atributo] += Number(avaliacao.pontos?.[atributo] || 0);
       }
     }
   }
@@ -2478,18 +2465,14 @@ function calcularResultadosAvaliacaoJogadores(sessao) {
     const atual = acumulado.get(jogador.id);
     const votos = Number(atual?.votos || 0);
     const atributos = {};
-    const pontosNormaisMedios = {};
-    const pontosEspeciaisMedios = {};
+    const pontosMedios = {};
 
     for (const atributo of AVALIACAO_JOGADORES_ATRIBUTOS) {
-      const mediaNormal = votos ? atual.normais[atributo] / votos : 0;
-      const mediaEspecial = votos ? atual.especiais[atributo] / votos : 0;
+      const mediaPontos = votos ? atual.pontos[atributo] / votos : 0;
       const valor = AVALIACAO_JOGADORES_BASE +
-        mediaNormal * AVALIACAO_JOGADORES_VALOR_NORMAL +
-        mediaEspecial * AVALIACAO_JOGADORES_VALOR_ESPECIAL;
+        mediaPontos * AVALIACAO_JOGADORES_VALOR_PONTO;
 
-      pontosNormaisMedios[atributo] = Math.round(mediaNormal * 100) / 100;
-      pontosEspeciaisMedios[atributo] = Math.round(mediaEspecial * 100) / 100;
+      pontosMedios[atributo] = Math.round(mediaPontos * 100) / 100;
       atributos[atributo] = Math.round(Math.min(AVALIACAO_JOGADORES_TETO, valor) * 10) / 10;
     }
 
@@ -2498,8 +2481,7 @@ function calcularResultadosAvaliacaoJogadores(sessao) {
       atributos,
       overall: calcularOverallAvaliacao(atributos, jogador.posicao),
       votos_count: votos,
-      pontos_normais_medios: pontosNormaisMedios,
-      pontos_especiais_medios: pontosEspeciaisMedios
+      pontos_medios: pontosMedios
     };
   });
 }
@@ -2508,10 +2490,8 @@ function avaliacaoJogadoresConfigResponse() {
   return {
     base: AVALIACAO_JOGADORES_BASE,
     teto: AVALIACAO_JOGADORES_TETO,
-    pontos_normais_total: AVALIACAO_JOGADORES_PONTOS_NORMAIS,
-    pontos_especiais_total: AVALIACAO_JOGADORES_PONTOS_ESPECIAIS,
-    valor_ponto_normal: AVALIACAO_JOGADORES_VALOR_NORMAL,
-    valor_ponto_especial: AVALIACAO_JOGADORES_VALOR_ESPECIAL,
+    pontos_total: AVALIACAO_JOGADORES_PONTOS_TOTAL,
+    valor_ponto: AVALIACAO_JOGADORES_VALOR_PONTO,
     atributos: AVALIACAO_JOGADORES_ATRIBUTOS
   };
 }
