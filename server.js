@@ -2157,10 +2157,11 @@ const AVALIACAO_JOGADORES_ATRIBUTOS = [
   "resistencia"
 ];
 const AVALIACAO_JOGADORES_BASE = 75;
+const AVALIACAO_JOGADORES_TETO = 99;
 const AVALIACAO_JOGADORES_PONTOS_NORMAIS = 20;
 const AVALIACAO_JOGADORES_PONTOS_ESPECIAIS = 5;
-const AVALIACAO_JOGADORES_VALOR_NORMAL = 0.2;
-const AVALIACAO_JOGADORES_VALOR_ESPECIAL = 0.5;
+const AVALIACAO_JOGADORES_VALOR_NORMAL = 2;
+const AVALIACAO_JOGADORES_VALOR_ESPECIAL = 5;
 
 function gerarAvaliacaoJogadoresId() {
   return `avj_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`;
@@ -2299,6 +2300,18 @@ function normalizarAvaliacoesJogadoresPayload(avaliacoes, jogadoresSessao) {
       AVALIACAO_JOGADORES_PONTOS_ESPECIAIS,
       "especiais"
     );
+
+    for (const atributo of AVALIACAO_JOGADORES_ATRIBUTOS) {
+      const valorFinal = AVALIACAO_JOGADORES_BASE +
+        Number(normais.pontos[atributo] || 0) * AVALIACAO_JOGADORES_VALOR_NORMAL +
+        Number(especiais.pontos[atributo] || 0) * AVALIACAO_JOGADORES_VALOR_ESPECIAL;
+
+      if (valorFinal > AVALIACAO_JOGADORES_TETO) {
+        const err = new Error("Nenhum atributo pode passar de 99.");
+        err.status = 400;
+        throw err;
+      }
+    }
 
     return {
       jogador_id: jogadorId,
@@ -2477,7 +2490,7 @@ function calcularResultadosAvaliacaoJogadores(sessao) {
 
       pontosNormaisMedios[atributo] = Math.round(mediaNormal * 100) / 100;
       pontosEspeciaisMedios[atributo] = Math.round(mediaEspecial * 100) / 100;
-      atributos[atributo] = Math.round(valor * 10) / 10;
+      atributos[atributo] = Math.round(Math.min(AVALIACAO_JOGADORES_TETO, valor) * 10) / 10;
     }
 
     return {
@@ -2494,6 +2507,7 @@ function calcularResultadosAvaliacaoJogadores(sessao) {
 function avaliacaoJogadoresConfigResponse() {
   return {
     base: AVALIACAO_JOGADORES_BASE,
+    teto: AVALIACAO_JOGADORES_TETO,
     pontos_normais_total: AVALIACAO_JOGADORES_PONTOS_NORMAIS,
     pontos_especiais_total: AVALIACAO_JOGADORES_PONTOS_ESPECIAIS,
     valor_ponto_normal: AVALIACAO_JOGADORES_VALOR_NORMAL,
