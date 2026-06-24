@@ -2159,7 +2159,6 @@ const AVALIACAO_JOGADORES_ATRIBUTOS = [
 const AVALIACAO_JOGADORES_BASE = 75;
 const AVALIACAO_JOGADORES_TETO = 99;
 const AVALIACAO_JOGADORES_PONTOS_TOTAL = 30;
-const AVALIACAO_JOGADORES_VALOR_PONTO = 3;
 
 function gerarAvaliacaoJogadoresId() {
   return `avj_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`;
@@ -2234,6 +2233,36 @@ function normalizarPontosAvaliacaoEnvio(raw, nomeTipo) {
   return { pontos, total };
 }
 
+function incrementoAvaliacaoPorValor(valor) {
+  const atual = Number(valor || AVALIACAO_JOGADORES_BASE);
+
+  if (atual >= AVALIACAO_JOGADORES_TETO) return 0;
+  if (atual <= 80) return 4;
+  if (atual <= 88) return 3;
+  if (atual <= 92) return 2;
+  return 1;
+}
+
+function calcularValorAtributoAvaliacao(pontos, { rejeitarExcesso = false } = {}) {
+  const total = Math.trunc(Number(pontos || 0));
+  let valor = AVALIACAO_JOGADORES_BASE;
+
+  for (let i = 0; i < total; i += 1) {
+    if (valor >= AVALIACAO_JOGADORES_TETO) {
+      if (rejeitarExcesso) {
+        const err = new Error("Nenhum atributo pode passar de 99.");
+        err.status = 400;
+        throw err;
+      }
+      return AVALIACAO_JOGADORES_TETO;
+    }
+
+    valor += incrementoAvaliacaoPorValor(valor);
+  }
+
+  return Math.min(AVALIACAO_JOGADORES_TETO, valor);
+}
+
 function totalPontosAvaliacao(pontos) {
   return Object.values(normalizarPontosAvaliacaoLeitura(pontos))
     .reduce((sum, value) => sum + value, 0);
@@ -2288,14 +2317,7 @@ function normalizarAvaliacoesJogadoresPayload(avaliacoes, jogadoresSessao) {
     );
 
     for (const atributo of AVALIACAO_JOGADORES_ATRIBUTOS) {
-      const valorFinal = AVALIACAO_JOGADORES_BASE +
-        Number(pontos.pontos[atributo] || 0) * AVALIACAO_JOGADORES_VALOR_PONTO;
-
-      if (valorFinal > AVALIACAO_JOGADORES_TETO) {
-        const err = new Error("Nenhum atributo pode passar de 99.");
-        err.status = 400;
-        throw err;
-      }
+      calcularValorAtributoAvaliacao(pontos.pontos[atributo] || 0, { rejeitarExcesso: true });
     }
 
     if (pontos.total > AVALIACAO_JOGADORES_PONTOS_TOTAL) {
@@ -2441,7 +2463,8 @@ function calcularResultadosAvaliacaoJogadores(sessao) {
     {
       jogador,
       votos: 0,
-      pontos: pontosAvaliacaoDefault()
+      pontos: pontosAvaliacaoDefault(),
+      valores: pontosAvaliacaoDefault()
     }
   ]));
 
@@ -2456,7 +2479,9 @@ function calcularResultadosAvaliacaoJogadores(sessao) {
       atual.votos += 1;
 
       for (const atributo of AVALIACAO_JOGADORES_ATRIBUTOS) {
-        atual.pontos[atributo] += Number(avaliacao.pontos?.[atributo] || 0);
+        const pontos = Number(avaliacao.pontos?.[atributo] || 0);
+        atual.pontos[atributo] += pontos;
+        atual.valores[atributo] += calcularValorAtributoAvaliacao(pontos);
       }
     }
   }
@@ -2469,8 +2494,7 @@ function calcularResultadosAvaliacaoJogadores(sessao) {
 
     for (const atributo of AVALIACAO_JOGADORES_ATRIBUTOS) {
       const mediaPontos = votos ? atual.pontos[atributo] / votos : 0;
-      const valor = AVALIACAO_JOGADORES_BASE +
-        mediaPontos * AVALIACAO_JOGADORES_VALOR_PONTO;
+      const valor = votos ? atual.valores[atributo] / votos : AVALIACAO_JOGADORES_BASE;
 
       pontosMedios[atributo] = Math.round(mediaPontos * 100) / 100;
       atributos[atributo] = Math.round(Math.min(AVALIACAO_JOGADORES_TETO, valor) * 10) / 10;
@@ -2491,7 +2515,12 @@ function avaliacaoJogadoresConfigResponse() {
     base: AVALIACAO_JOGADORES_BASE,
     teto: AVALIACAO_JOGADORES_TETO,
     pontos_total: AVALIACAO_JOGADORES_PONTOS_TOTAL,
-    valor_ponto: AVALIACAO_JOGADORES_VALOR_PONTO,
+    regra_pontos: [
+      { de: 75, ate: 80, incremento: 4 },
+      { de: 81, ate: 88, incremento: 3 },
+      { de: 89, ate: 92, incremento: 2 },
+      { de: 93, ate: 99, incremento: 1 }
+    ],
     atributos: AVALIACAO_JOGADORES_ATRIBUTOS
   };
 }
