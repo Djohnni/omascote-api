@@ -1236,6 +1236,25 @@ function perfilResponse(perfil) {
   };
 }
 
+function perfilPublicoResumoPorId(perfilId) {
+  const perfilIdNormalizado = normalizarPerfilId(perfilId);
+  if (!perfilIdNormalizado) return null;
+
+  const perfilAtual = safeReadJson(getPerfilFile(perfilIdNormalizado));
+  if (!perfilAtual) return null;
+
+  const perfil = normalizarPerfilPrivado(perfilAtual, { nome_time: perfilAtual.nome_time }, perfilIdNormalizado);
+  const publico = perfil.publico === true && !!perfil.slug;
+  const publicUrl = publico ? `/app.html?time=${encodeURIComponent(perfil.slug)}` : "";
+
+  return {
+    nome_time: perfil.nome_time,
+    slug: publico ? perfil.slug : "",
+    publico,
+    public_url: publicUrl
+  };
+}
+
 const PERFIL_IMAGEM_TIPOS = new Set(["escudo", "mascote"]);
 const IMAGEM_UPLOAD_MIMES = new Set(["image/png", "image/jpeg", "image/jpg", "image/webp"]);
 
@@ -2527,6 +2546,7 @@ function avaliacaoJogadoresConfigResponse() {
 
 function avaliacaoJogadoresResponse(sessao, { publico = false } = {}) {
   const normalizada = normalizarAvaliacaoJogadoresSessao(sessao);
+  const perfilPublico = perfilPublicoResumoPorId(normalizada.perfil_id);
   const response = {
     id: normalizada.id,
     titulo: normalizada.titulo,
@@ -2534,6 +2554,8 @@ function avaliacaoJogadoresResponse(sessao, { publico = false } = {}) {
     jogadores_avaliados: normalizada.jogadores_avaliados.map(avaliacaoJogadorResponse),
     votos_count: normalizada.votos.length,
     config: avaliacaoJogadoresConfigResponse(),
+    time: perfilPublico,
+    perfil_publico: perfilPublico,
     criado_em: normalizada.criado_em,
     atualizado_em: normalizada.atualizado_em
   };
