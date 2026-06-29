@@ -91,6 +91,8 @@ function normalizeOrderBody(body = {}) {
     time_adversario: body.time_adversario,
     origem_acesso: body.origem_acesso,
     display_mode: body.display_mode,
+    titulo_secao_resultados: body.titulo_secao_resultados,
+    titulo_secao_proximo_jogo: body.titulo_secao_proximo_jogo,
     new_model: newModel
   };
 }
@@ -113,6 +115,35 @@ function getMaxFotosMascote(categoria) {
   if (["proximo_jogo", "resultado"].includes(categoria)) return 4;
   if (["proximo_jogo_jogador", "resultado_jogo_jogador"].includes(categoria)) return 3;
   return 1;
+}
+
+function textoTituloSecaoArte(value, fallback) {
+  const text = String(value ?? "").trim();
+  return text || fallback;
+}
+
+function tituloSecaoPedido({ categoria, fields, newModel }) {
+  if (categoria === "resultado") {
+    return {
+      key: "titulo_secao_resultados",
+      value: textoTituloSecaoArte(
+        fields.titulo_secao_resultados ?? newModel?.fields?.titulo_secao_resultados,
+        "Últimos Resultados"
+      )
+    };
+  }
+
+  if (categoria === "proximo_jogo") {
+    return {
+      key: "titulo_secao_proximo_jogo",
+      value: textoTituloSecaoArte(
+        fields.titulo_secao_proximo_jogo ?? newModel?.fields?.titulo_secao_proximo_jogo,
+        "Próximo Jogo"
+      )
+    };
+  }
+
+  return null;
 }
 
 function moveUploadedFileObject({ file, base, field, destName }) {
@@ -227,8 +258,18 @@ function buildPedidoData({
     time_adversario,
     origem_acesso,
     display_mode,
+    titulo_secao_resultados,
+    titulo_secao_proximo_jogo,
     new_model
   } = fields;
+  const tituloSecao = tituloSecaoPedido({
+    categoria,
+    fields: {
+      titulo_secao_resultados,
+      titulo_secao_proximo_jogo
+    },
+    newModel: new_model || {}
+  });
 
   const pedido = {
     time_principal: ["resultado", "proximo_jogo", "proximo_jogo_jogador", "resultado_jogo_jogador"].includes(categoria) ? (time_principal || "") : "",
@@ -265,12 +306,21 @@ function buildPedidoData({
     criado_em: new Date().toISOString()
   };
 
+  if (tituloSecao) {
+    pedido[tituloSecao.key] = tituloSecao.value;
+    pedido.titulo_secao_arte = tituloSecao.value;
+  }
+
   const cleanModel = new_model || {};
 
   if (cleanModel.schema_version || cleanModel.product_id || Object.keys(cleanModel.fields || {}).length || Object.keys(cleanModel.assets || {}).length) {
     pedido.schema_version = cleanModel.schema_version || 1;
     pedido.product_id = cleanModel.product_id || categoria;
     pedido.fields = cleanModel.fields || {};
+    if (tituloSecao) {
+      pedido.fields[tituloSecao.key] = tituloSecao.value;
+      pedido.fields.titulo_secao_arte = tituloSecao.value;
+    }
     pedido.assets = cleanModel.assets || {};
     pedido.legacy = {
       time_principal: pedido.time_principal,
@@ -290,7 +340,11 @@ function buildPedidoData({
       hora: pedido.hora,
       arena: pedido.arena,
       mascote_tipo: pedido.mascote_tipo,
-      patrocinadores_qtd: pedido.patrocinadores_qtd
+      patrocinadores_qtd: pedido.patrocinadores_qtd,
+      ...(tituloSecao ? {
+        [tituloSecao.key]: tituloSecao.value,
+        titulo_secao_arte: tituloSecao.value
+      } : {})
     };
   }
 
