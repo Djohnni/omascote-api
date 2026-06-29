@@ -1140,6 +1140,8 @@ function perfilDefault(cliente, perfilId) {
     mascote_url: "",
     mascote_path: "",
     descricao_curta: "",
+    titulo_secao_resultados: "",
+    titulo_secao_proximo_jogo: "",
     publico: false,
     criado_em: agora,
     atualizado_em: agora
@@ -1166,6 +1168,8 @@ function normalizarPerfilPrivado(perfil, cliente, perfilId) {
     mascote_url: assetPerfil(base.mascote_url || ""),
     mascote_path: assetPerfil(base.mascote_path || ""),
     descricao_curta: textoPerfil(base.descricao_curta || "", 240),
+    titulo_secao_resultados: textoPerfil(base.titulo_secao_resultados || "", 80),
+    titulo_secao_proximo_jogo: textoPerfil(base.titulo_secao_proximo_jogo || "", 80),
     publico: base.publico === true,
     criado_em: base.criado_em || agora,
     atualizado_em: base.atualizado_em || agora
@@ -1229,6 +1233,8 @@ function perfilResponse(perfil) {
     mascote_url: perfil.mascote_url || "",
     mascote_path: perfil.mascote_path || "",
     descricao_curta: perfil.descricao_curta || "",
+    titulo_secao_resultados: perfil.titulo_secao_resultados || "",
+    titulo_secao_proximo_jogo: perfil.titulo_secao_proximo_jogo || "",
     publico: perfil.publico === true,
     public_url: perfil.publico === true && perfil.slug ? `/app.html?time=${encodeURIComponent(perfil.slug)}` : "",
     criado_em: perfil.criado_em,
@@ -4496,6 +4502,8 @@ function salvarPerfilTimePrivado(req, res) {
       mascote_url: assetPerfil(body.mascote_url ?? perfilAtual.mascote_url),
       mascote_path: assetPerfil(body.mascote_path ?? perfilAtual.mascote_path),
       descricao_curta: textoPerfil(body.descricao_curta ?? perfilAtual.descricao_curta, 240),
+      titulo_secao_resultados: textoPerfil(body.titulo_secao_resultados ?? perfilAtual.titulo_secao_resultados, 80),
+      titulo_secao_proximo_jogo: textoPerfil(body.titulo_secao_proximo_jogo ?? perfilAtual.titulo_secao_proximo_jogo, 80),
       publico: body.publico === true,
       atualizado_em: agora
     }, perfilInfo.cliente, perfilInfo.perfil_id);
@@ -4652,7 +4660,9 @@ function perfilPublicoResponse(perfil) {
     instagram: perfil.instagram,
     escudo_url: perfilPublicoImagemUrl(perfil, "escudo"),
     mascote_url: perfilPublicoImagemUrl(perfil, "mascote"),
-    descricao_curta: perfil.descricao_curta || ""
+    descricao_curta: perfil.descricao_curta || "",
+    titulo_secao_resultados: perfil.titulo_secao_resultados || "",
+    titulo_secao_proximo_jogo: perfil.titulo_secao_proximo_jogo || ""
   };
 }
 
