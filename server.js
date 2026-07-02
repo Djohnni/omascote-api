@@ -7469,13 +7469,6 @@ function criarPedidoHandler(categoria) {
 
     const cupomAplicado = resultadoCupom.cupomAplicado === true;
     let custoEfetivoPedido = brindeEscudo3dApp ? 0 : resultadoCupom.valorFinal;
-    if (isModoAppRequest(req) && custoEfetivoPedido > 0) {
-      limparUploadsRequest(req);
-      return res.status(403).json({
-        ok: false,
-        error: "Este recurso não está disponível no app."
-      });
-    }
 
     const temSaldoSuficiente = billingService.hasEnoughBalance(c, custoEfetivoPedido);
 
