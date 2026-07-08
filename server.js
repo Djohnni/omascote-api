@@ -3798,6 +3798,138 @@ function limparUploadsRequest(req) {
   }
 }
 
+const ORDER_CREATE_DEDUPE_TTL_MS = 30 * 1000;
+const orderCreateDedupe = new Map();
+
+function stableOrderJson(value) {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+
+  if (Array.isArray(value)) {
+    return `[${value.map(item => stableOrderJson(item)).join(",")}]`;
+  }
+
+  return `{${Object.keys(value)
+    .sort()
+    .map(key => `${JSON.stringify(key)}:${stableOrderJson(value[key])}`)
+    .join(",")}}`;
+}
+
+function getRequestIdempotencyKey(req) {
+  const headerKey =
+    req.get("X-Idempotency-Key") ||
+    req.get("Idempotency-Key") ||
+    "";
+  const bodyKey = req.body?.client_request_id || "";
+
+  return String(headerKey || bodyKey || "").trim().slice(0, 180);
+}
+
+function getUploadedFilesFingerprint(files = {}) {
+  return Object.entries(files || {})
+    .sort(([a], [b]) => String(a).localeCompare(String(b)))
+    .flatMap(([field, values]) => {
+      const list = Array.isArray(values) ? values : [values];
+      return list
+        .filter(Boolean)
+        .map((file, index) => ({
+          field,
+          index,
+          originalname: String(file.originalname || ""),
+          mimetype: String(file.mimetype || ""),
+          size: Number(file.size || 0)
+        }));
+    });
+}
+
+function buildOrderCreateDedupeMeta(req, categoria, whatsapp, fields) {
+  const userKey = String(whatsapp || req.user?.whatsapp || "").trim();
+  const clientRequestId = getRequestIdempotencyKey(req);
+  const payloadHash = crypto
+    .createHash("sha256")
+    .update(stableOrderJson({
+      user: userKey,
+      categoria,
+      fields,
+      files: getUploadedFilesFingerprint(req.files || {})
+    }))
+    .digest("hex");
+
+  return {
+    key: `pedido:${userKey}:${clientRequestId || "auto"}:${payloadHash}`,
+    clientRequestId,
+    payloadHash
+  };
+}
+
+function cleanupOrderCreateDedupe(now = Date.now()) {
+  for (const [key, entry] of orderCreateDedupe.entries()) {
+    if (!entry || entry.expiresAt <= now) {
+      if (entry?.watchdogTimer) clearTimeout(entry.watchdogTimer);
+      orderCreateDedupe.delete(key);
+    }
+  }
+}
+
+function getOrderCreateDedupeEntry(key) {
+  cleanupOrderCreateDedupe();
+
+  const entry = orderCreateDedupe.get(key);
+  if (!entry) return null;
+
+  if (entry.expiresAt <= Date.now()) {
+    if (entry.watchdogTimer) clearTimeout(entry.watchdogTimer);
+    orderCreateDedupe.delete(key);
+    return null;
+  }
+
+  return entry;
+}
+
+function beginOrderCreateDedupe(key) {
+  const entry = {
+    expiresAt: Date.now() + ORDER_CREATE_DEDUPE_TTL_MS,
+    responsePayload: null,
+    settled: false,
+    resolve: null,
+    reject: null,
+    watchdogTimer: null
+  };
+
+  entry.promise = new Promise((resolve, reject) => {
+    entry.resolve = resolve;
+    entry.reject = reject;
+  });
+  entry.promise.catch(() => {});
+
+  entry.watchdogTimer = setTimeout(() => {
+    if (entry.settled) return;
+    entry.settled = true;
+    entry.reject(new Error("order_create_dedupe_timeout"));
+    orderCreateDedupe.delete(key);
+  }, ORDER_CREATE_DEDUPE_TTL_MS);
+
+  orderCreateDedupe.set(key, entry);
+  return entry;
+}
+
+function resolveOrderCreateDedupe(entry, payload) {
+  if (!entry || entry.settled) return;
+
+  entry.responsePayload = payload;
+  entry.settled = true;
+  if (entry.watchdogTimer) clearTimeout(entry.watchdogTimer);
+  entry.resolve(payload);
+}
+
+function rejectOrderCreateDedupe(key, entry, error) {
+  if (!entry || entry.settled) return;
+
+  entry.settled = true;
+  if (entry.watchdogTimer) clearTimeout(entry.watchdogTimer);
+  entry.reject(error);
+  orderCreateDedupe.delete(key);
+}
+
 function validarUploadsImagemSeguros(req, res, next) {
   const arquivos = listarArquivosUploadRequest(req);
 
@@ -7495,6 +7627,25 @@ function criarPedidoHandler(categoria) {
 
     const files = req.files || {};
     let draft;
+    const dedupeMeta = buildOrderCreateDedupeMeta(req, categoria, whatsapp, fields);
+    const existingDedupe = getOrderCreateDedupeEntry(dedupeMeta.key);
+
+    if (existingDedupe) {
+      limparUploadsTemporarios(req.files);
+
+      if (existingDedupe.responsePayload) {
+        return res.json({ ...existingDedupe.responsePayload, idempotent: true });
+      }
+
+      return existingDedupe.promise
+        .then(payload => res.json({ ...payload, idempotent: true }))
+        .catch(() => res.status(409).json({
+          ok: false,
+          error: "Pedido duplicado ainda em confirmacao. Aguarde alguns segundos e confira Meus pedidos."
+        }));
+    }
+
+    const dedupeEntry = beginOrderCreateDedupe(dedupeMeta.key);
 
     try {
       draft = orderService.createOrderDraft({
@@ -7510,8 +7661,10 @@ function criarPedidoHandler(categoria) {
         categoria,
         whatsapp,
         erro: e.message,
-        code: e.code
+          code: e.code
       });
+
+      rejectOrderCreateDedupe(dedupeMeta.key, dedupeEntry, e);
 
       return res.status(400).json({
         ok: false,
@@ -7525,6 +7678,9 @@ function criarPedidoHandler(categoria) {
     }
 
     const id = draft.id;
+    draft.pedido.client_request_id = dedupeMeta.clientRequestId;
+    draft.pedido.idempotency_key = dedupeMeta.key;
+    draft.pedido.idempotency_payload_hash = dedupeMeta.payloadHash;
     registrarAuditoriaProdutoPedido({ categoria, fields, files, pedidoId: id });
 
     if (temSaldoSuficiente) {
@@ -7641,6 +7797,8 @@ function criarPedidoHandler(categoria) {
       registrarPreviewPendente({ identifiers: previewLimiterIdentifiers, whatsapp, pedidoId: id });
     }
 
+    orderService.orderStorage.writeOrder(draft.base, draft.pedido);
+
     clientes[whatsapp] = c;
     writeClientes(clientes);
 
@@ -7651,7 +7809,7 @@ function criarPedidoHandler(categoria) {
 
     removeOldPedidos(whatsapp, 15);
 
-    return res.json({
+    const responsePayload = {
       ok: true,
       pedido_id: id,
       pagamento_pendente: draft.pedido.pagamento_pendente === true,
@@ -7664,7 +7822,11 @@ function criarPedidoHandler(categoria) {
       mensagem: cupomAplicado
         ? `Cupom ${resultadoCupom.resumo.codigo} aplicado. Valor final: R$ ${resultadoCupom.valorFinal.toFixed(2).replace(".", ",")}.`
         : undefined
-    });
+    };
+
+    resolveOrderCreateDedupe(dedupeEntry, responsePayload);
+
+    return res.json(responsePayload);
   };
 }
 
