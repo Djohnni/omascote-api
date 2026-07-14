@@ -124,12 +124,14 @@ function textoTituloSecaoArte(value, fallback) {
 
 function tituloSecaoPedido({ categoria, fields, newModel }) {
   if (categoria === "resultado") {
+    const tituloResultados = String(
+      fields.titulo_secao_resultados ?? newModel?.fields?.titulo_secao_resultados ?? ""
+    ).trim();
+    if (!tituloResultados) return null;
+
     return {
       key: "titulo_secao_resultados",
-      value: textoTituloSecaoArte(
-        fields.titulo_secao_resultados ?? newModel?.fields?.titulo_secao_resultados,
-        "Últimos Resultados"
-      )
+      value: tituloResultados
     };
   }
 
