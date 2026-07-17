@@ -358,7 +358,17 @@ function persistNewOrder({ base, pedido }) {
   orderStorage.writeStatus(base, orderStatus.ORDER_STATUS.NOVO);
 }
 
-function createOrderDraft({ categoria, pedidosDir, whatsapp, mesAtual, fields, files }) {
+function createOrderDraft({
+  categoria,
+  pedidosDir,
+  whatsapp,
+  mesAtual,
+  fields,
+  files,
+  clientRequestId = "",
+  idempotencyKey = "",
+  idempotencyPayloadHash = ""
+}) {
   const id = orderStorage.newPedidoId();
   const base = buildOrderBasePath({ pedidosDir, whatsapp, mesAtual, id });
 
@@ -380,6 +390,10 @@ function createOrderDraft({ categoria, pedidosDir, whatsapp, mesAtual, fields, f
     podeUsarMascote: uploadResult.podeUsarMascote,
     fotosExtras: uploadResult.fotosExtras
   });
+
+  if (clientRequestId) pedido.client_request_id = clientRequestId;
+  if (idempotencyKey) pedido.idempotency_key = idempotencyKey;
+  if (idempotencyPayloadHash) pedido.idempotency_payload_hash = idempotencyPayloadHash;
 
   persistNewOrder({ base, pedido });
 

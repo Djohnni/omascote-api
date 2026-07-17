@@ -1,5 +1,6 @@
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 
 function ensureDir(dirPath) {
   if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
@@ -20,7 +21,9 @@ function newPedidoId() {
   const hh = String(d.getHours()).padStart(2, "0");
   const mm = String(d.getMinutes()).padStart(2, "0");
   const ss = String(d.getSeconds()).padStart(2, "0");
-  return `${y}${mo}${da}_${hh}${mm}${ss}`;
+  const ms = String(d.getMilliseconds()).padStart(3, "0");
+  const rand = crypto.randomBytes(4).toString("hex");
+  return `${y}${mo}${da}_${hh}${mm}${ss}_${ms}_${rand}`;
 }
 
 function safeReadJson(filePath) {
@@ -102,6 +105,21 @@ function listPedidoBasesByWhatsapp(pedidosDir, whatsapp) {
   return pedidos;
 }
 
+function findPedidoByClientRequestId(pedidosDir, whatsapp, clientRequestId) {
+  const wanted = String(clientRequestId || "").trim();
+  if (!wanted) return null;
+
+  const pedidos = listPedidoBasesByWhatsapp(pedidosDir, whatsapp);
+
+  for (const item of pedidos) {
+    if (String(item.pedido?.client_request_id || "").trim() === wanted) {
+      return item;
+    }
+  }
+
+  return null;
+}
+
 function removeOldPedidos(pedidosDir, whatsapp, maxKeep = 15) {
   const pedidos = listPedidoBasesByWhatsapp(pedidosDir, whatsapp);
 
@@ -156,6 +174,7 @@ module.exports = {
   getPedidoBase,
   getPedidoBaseGlobal,
   listPedidoBasesByWhatsapp,
+  findPedidoByClientRequestId,
   removeOldPedidos,
   getOrderJsonPath,
   getStatusPath,

@@ -2,8 +2,37 @@ function hasMascoteUniformeGift(categoria, cliente) {
   return false;
 }
 
+function normalizeBalanceValue(value) {
+  if (value === null || value === undefined || value === "") return 0;
+
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return 0;
+    // Valores com virgula exigem migracao explicita antes de virarem saldo.
+    if (trimmed.includes(",")) return 0;
+
+    const numeric = Number(trimmed);
+    return Number.isFinite(numeric) ? Number(numeric.toFixed(2)) : 0;
+  }
+
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? Number(numeric.toFixed(2)) : 0;
+}
+
+function getBalanceFields(cliente = {}) {
+  const source = cliente && typeof cliente === "object" ? cliente : {};
+  const saldo_mensal = normalizeBalanceValue(source.saldo_mensal);
+  const saldo_extra = normalizeBalanceValue(source.saldo_extra);
+
+  return {
+    saldo_mensal,
+    saldo_extra,
+    saldo: Number((saldo_mensal + saldo_extra).toFixed(2))
+  };
+}
+
 function getAvailableBalance(cliente) {
-  return Number(cliente.saldo_mensal || 0) + Number(cliente.saldo_extra || 0);
+  return getBalanceFields(cliente).saldo;
 }
 
 function hasEnoughBalance(cliente, custoPedido) {
@@ -49,6 +78,8 @@ function applyOrderCharge(cliente, { custoPedido, mesAtual, temBrindeMascote }) 
 
 module.exports = {
   hasMascoteUniformeGift,
+  normalizeBalanceValue,
+  getBalanceFields,
   getAvailableBalance,
   hasEnoughBalance,
   ensureCurrentBillingCycle,

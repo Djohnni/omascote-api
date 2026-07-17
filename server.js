@@ -37,6 +37,7 @@ const ONLINE_FILE = path.join(DATA_DIR, "usuarios_online.json");
 const SUPORTE_ABERTAS_FILE = path.join(DATA_DIR, "suporte_conversas_abertas.json");
 const SUPORTE_FINALIZADAS_FILE = path.join(DATA_DIR, "suporte_conversas_finalizadas.json");
 const PREVIEW_LIMITER_FILE = path.join(DATA_DIR, "preview_limiter.json");
+const SALDO_TRANSACOES_FILE = path.join(DATA_DIR, "saldo_transacoes.json");
 const ANALYTICS_DIR = path.join(DATA_DIR, "analytics");
 const PERFIS_DIR = path.join(DATA_DIR, "perfis");
 const EVENTOS_CLIENTES_FILE = path.join(DATA_DIR, "eventos_clientes.json");
@@ -889,6 +890,10 @@ function listPedidoBasesByWhatsapp(whatsapp) {
   return orderStorage.listPedidoBasesByWhatsapp(PEDIDOS_DIR, whatsapp);
 }
 
+function findPedidoByClientRequestId(whatsapp, clientRequestId) {
+  return orderStorage.findPedidoByClientRequestId(PEDIDOS_DIR, whatsapp, clientRequestId);
+}
+
 function removeOldPedidos(whatsapp, maxKeep = 15) {
   return orderStorage.removeOldPedidos(PEDIDOS_DIR, whatsapp, maxKeep);
 }
@@ -1032,6 +1037,150 @@ function readJsonArraySafe(filePath) {
 
 function writeJsonSafe(filePath, data) {
   fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf8");
+}
+
+function getOrderRequestLogContext(req, extra = {}) {
+  return {
+    evento: extra.evento || "pedido",
+    etapa: extra.etapa || "",
+    data_hora: new Date().toISOString(),
+    metodo: req.method,
+    endpoint: req.originalUrl || req.url || "",
+    user_id: req.user?.cliente_id || req.user?.id || req.user?.whatsapp || "",
+    whatsapp: req.user?.whatsapp || "",
+    ip: getPreviewLimiterIp(req),
+    x_forwarded_for: req.headers["x-forwarded-for"] || "",
+    user_agent: req.headers["user-agent"] || "",
+    origin: req.headers.origin || "",
+    referer: req.headers.referer || "",
+    client_request_id: extra.client_request_id || "",
+    pedido_id: extra.pedido_id || "",
+    categoria: extra.categoria || "",
+    status_code: extra.status_code || "",
+    idempotent_replay: extra.idempotent_replay === true,
+    detalhe: extra.detalhe || ""
+  };
+}
+
+function logOrderRequestEvent(req, etapa, extra = {}) {
+  try {
+    console.log("[pedido_fluxo]", JSON.stringify(getOrderRequestLogContext(req, {
+      ...extra,
+      etapa
+    })));
+  } catch (e) {
+    console.warn("[pedido_fluxo] falha ao registrar log", e.message);
+  }
+}
+
+function normalizarClientRequestId(value) {
+  return String(value || "").trim().slice(0, 180);
+}
+
+function buildOrderResponsePayloadFromItem(item, extra = {}) {
+  const pedido = item?.pedido || {};
+  const pedidoId = pedido.id || item?.id || "";
+  const descontoInfo = pedido.desconto_info || null;
+  const valorPago = Number(pedido.pagamento_info?.valor_pago || 0);
+  const valorProduto = Number(getCustoPedido(pedido.categoria || pedido.product_id || "", null) || 0);
+  const valorOriginal = Number(pedido.valor_original || valorProduto || 0);
+
+  return {
+    ok: true,
+    pedido_id: pedidoId,
+    client_request_id: pedido.client_request_id || "",
+    pagamento_pendente: pedido.pagamento_pendente === true,
+    valor_pendente: Number(pedido.valor_pendente || 0),
+    cupom_aplicado: pedido.cupom_aplicado === true,
+    desconto: descontoInfo,
+    valor_original: valorOriginal,
+    valor_desconto: Number(pedido.valor_desconto || 0),
+    valor_final: Number(pedido.valor_final || pedido.valor_pendente || valorPago || valorOriginal || 0),
+    status: pedido.status || "",
+    criado_em: pedido.criado_em || item?.criado_em || "",
+    ...extra
+  };
+}
+
+function readSaldoTransacoes() {
+  return readJsonArraySafe(SALDO_TRANSACOES_FILE);
+}
+
+function writeSaldoTransacoes(lista) {
+  writeJsonSafe(SALDO_TRANSACOES_FILE, Array.isArray(lista) ? lista : []);
+}
+
+function getClienteUserId(cliente, whatsapp) {
+  return String(cliente?.cliente_id || cliente?.id || whatsapp || "").trim();
+}
+
+function findSaldoDebitTransaction(userId, clientRequestId, valor) {
+  const wantedUser = String(userId || "").trim();
+  const wantedRequest = normalizarClientRequestId(clientRequestId);
+  const wantedValor = Number(Number(valor || 0).toFixed(2));
+
+  if (!wantedUser || !wantedRequest || wantedValor <= 0) return null;
+
+  return readSaldoTransacoes().find(tx =>
+    tx &&
+    tx.tipo === "saldo_ia4tube" &&
+    String(tx.user_id || "").trim() === wantedUser &&
+    String(tx.client_request_id || "").trim() === wantedRequest &&
+    Math.abs(Number(tx.valor || 0) - wantedValor) < 0.01
+  ) || null;
+}
+
+function appendSaldoTransaction(tx) {
+  const lista = readSaldoTransacoes();
+  lista.push(tx);
+  writeSaldoTransacoes(lista);
+  return tx;
+}
+
+function aplicarCobrancaPedidoComLedger({ cliente, whatsapp, pedidoId, clientRequestId, custoPedido, mesAtual, temBrindeMascote }) {
+  const valor = Number(Number(custoPedido || 0).toFixed(2));
+  const userId = getClienteUserId(cliente, whatsapp);
+  const existente = findSaldoDebitTransaction(userId, clientRequestId, valor);
+
+  if (existente) {
+    return {
+      reused: true,
+      transacao: existente
+    };
+  }
+
+  const saldoAntes = billingService.getBalanceFields(cliente);
+  billingService.applyOrderCharge(cliente, { custoPedido: valor, mesAtual, temBrindeMascote });
+  const saldoDepois = billingService.getBalanceFields(cliente);
+
+  if (valor <= 0 || !clientRequestId) {
+    return {
+      reused: false,
+      transacao: null,
+      saldo_antes: saldoAntes,
+      saldo_depois: saldoDepois
+    };
+  }
+
+  const transacao = appendSaldoTransaction({
+    id: `saldo_${Date.now()}_${crypto.randomBytes(3).toString("hex")}`,
+    tipo: "saldo_ia4tube",
+    user_id: userId,
+    whatsapp,
+    client_request_id: normalizarClientRequestId(clientRequestId),
+    pedido_id: pedidoId,
+    valor,
+    data_hora: new Date().toISOString(),
+    saldo_antes: saldoAntes,
+    saldo_depois: saldoDepois
+  });
+
+  return {
+    reused: false,
+    transacao,
+    saldo_antes: saldoAntes,
+    saldo_depois: saldoDepois
+  };
 }
 
 function normalizarPerfilId(value) {
@@ -3376,6 +3525,7 @@ function salvarEventosCliente(req, eventos = []) {
 function getClienteResumo(whatsapp) {
   const clientes = readClientes();
   const c = clientes[whatsapp] || {};
+  const saldoInfo = billingService.getBalanceFields(c);
 
   return {
     whatsapp,
@@ -3384,7 +3534,7 @@ function getClienteResumo(whatsapp) {
     login_tipo: c.login_tipo || "whatsapp",
     email: c.email || "",
     foto_google: c.foto_google || "",
-    saldo: Number(c.saldo_mensal || 0) + Number(c.saldo_extra || 0),
+    saldo: saldoInfo.saldo,
     usados_no_ciclo: Number(c.usados_no_ciclo || 0)
   };
 }
@@ -3821,7 +3971,7 @@ function getRequestIdempotencyKey(req) {
     "";
   const bodyKey = req.body?.client_request_id || "";
 
-  return String(headerKey || bodyKey || "").trim().slice(0, 180);
+  return normalizarClientRequestId(headerKey || bodyKey || "");
 }
 
 function getUploadedFilesFingerprint(files = {}) {
@@ -3855,7 +4005,9 @@ function buildOrderCreateDedupeMeta(req, categoria, whatsapp, fields) {
     .digest("hex");
 
   return {
-    key: `pedido:${userKey}:${clientRequestId || "auto"}:${payloadHash}`,
+    key: clientRequestId
+      ? `pedido:${userKey}:${clientRequestId}`
+      : `pedido:${userKey}:auto:${payloadHash}`,
     clientRequestId,
     payloadHash
   };
@@ -4154,15 +4306,14 @@ app.post("/auth/google", async (req, res) => {
     }
 
     const token = jwt.sign({ whatsapp: chaveCliente }, JWT_SECRET, { expiresIn: "7d" });
+    const saldoInfo = billingService.getBalanceFields(c);
 
     return res.json({
       ok: true,
       token,
       nome_time: c.nome_time,
       plano: c.plano,
-      saldo_mensal: Number(c.saldo_mensal || 0),
-      saldo_extra: Number(c.saldo_extra || 0),
-      saldo: Number(c.saldo_mensal || 0) + Number(c.saldo_extra || 0),
+      ...saldoInfo,
       usados_no_ciclo: c.usados_no_ciclo
     });
 
@@ -4215,6 +4366,7 @@ app.post("/auth/auto-register", (req, res) => {
     writeClientes(clientes);
 
     const token = jwt.sign({ whatsapp: login }, JWT_SECRET, { expiresIn: "7d" });
+    const saldoInfo = billingService.getBalanceFields(novo);
 
     return res.json({
       ok: true,
@@ -4223,9 +4375,7 @@ app.post("/auth/auto-register", (req, res) => {
       whatsapp: login,
       nome_time: novo.nome_time,
       plano: novo.plano,
-      saldo_mensal: Number(novo.saldo_mensal || 0),
-      saldo_extra: Number(novo.saldo_extra || 0),
-      saldo: Number(novo.saldo_mensal || 0) + Number(novo.saldo_extra || 0),
+      ...saldoInfo,
       usados_no_ciclo: novo.usados_no_ciclo
     });
   } catch (e) {
@@ -4286,12 +4436,14 @@ app.post("/auth/register", (req, res) => {
   writeClientes(clientesAtualizados);
 
   const token = jwt.sign({ whatsapp }, JWT_SECRET, { expiresIn: "7d" });
+  const saldoInfo = billingService.getBalanceFields(novo);
 
   return res.json({
     ok: true,
     token,
     nome_time: novo.nome_time,
     plano: novo.plano,
+    ...saldoInfo,
     usados_no_ciclo: novo.usados_no_ciclo
   });
 });
@@ -4352,6 +4504,7 @@ app.post("/auth/finalizar-conta-auto", auth, (req, res) => {
     writeClientes(clientes);
 
     const token = jwt.sign({ whatsapp: novoLogin }, JWT_SECRET, { expiresIn: "7d" });
+    const saldoInfo = billingService.getBalanceFields(clienteAtual);
 
     return res.json({
       ok:true,
@@ -4359,9 +4512,7 @@ app.post("/auth/finalizar-conta-auto", auth, (req, res) => {
       whatsapp: novoLogin,
       nome_time: clienteAtual.nome_time,
       plano: clienteAtual.plano,
-      saldo_mensal: Number(clienteAtual.saldo_mensal || 0),
-      saldo_extra: Number(clienteAtual.saldo_extra || 0),
-      saldo: Number(clienteAtual.saldo_mensal || 0) + Number(clienteAtual.saldo_extra || 0),
+      ...saldoInfo,
       usados_no_ciclo: clienteAtual.usados_no_ciclo
     });
 
@@ -4407,21 +4558,21 @@ app.post("/auth/login", (req, res) => {
   }
 
   const token = jwt.sign({ whatsapp }, JWT_SECRET, { expiresIn: "7d" });
+  const saldoInfo = billingService.getBalanceFields(c);
 
   return res.json({
     ok: true,
     token,
     nome_time: c.nome_time,
     plano: c.plano,
-    saldo_mensal: Number(c.saldo_mensal || 0),
-    saldo_extra: Number(c.saldo_extra || 0),
-    saldo: Number(c.saldo_mensal || 0) + Number(c.saldo_extra || 0),
+    ...saldoInfo,
     usados_no_ciclo: c.usados_no_ciclo
   });
 });
 
 // Perfil
 app.get("/me", auth, (req, res) => {
+  res.setHeader("Cache-Control", "private, no-store");
   registrarOnline(req, { ultima_acao: "perfil" });
 
   const clientes = readClientes();
@@ -4443,20 +4594,20 @@ app.get("/me", auth, (req, res) => {
     });
   }
 
+  const saldoInfo = billingService.getBalanceFields(c);
+
   return res.json({
     ok: true,
     perfil_id: perfilId,
     nome_time: c.nome_time,
     plano: c.plano,
-    saldo_mensal: Number(c.saldo_mensal || 0),
-    saldo_extra: Number(c.saldo_extra || 0),
-    saldo: Number(c.saldo_mensal || 0) + Number(c.saldo_extra || 0),
+    ...saldoInfo,
     usados_no_ciclo: c.usados_no_ciclo,
     brinde_mascote_disponivel: c.brinde_mascote_disponivel === true,
     brinde_escudo3d_app_disponivel: (
       c.brinde_escudo3d_app_usado !== true &&
       Number(c.usados_no_ciclo || 0) === 0 &&
-      Number(c.saldo_mensal || 0) + Number(c.saldo_extra || 0) <= 0 &&
+      saldoInfo.saldo <= 0 &&
       c.brinde_mascote_ja_liberado !== true &&
       listPedidoBasesByWhatsapp(req.user.whatsapp).length === 0
     ),
@@ -7122,6 +7273,11 @@ app.post("/comprar-creditos", auth, async (req, res) => {
 
     const { pacote } = req.body || {};
     const whatsapp = req.user.whatsapp;
+    const clientes = readClientes();
+
+    if (!clientes[whatsapp]) {
+      return res.status(404).json({ ok: false, error: "Cliente nao encontrado" });
+    }
 
     const pacotes = {
       saldo_800: { titulo: "Saldo IA4Tube - R$8", valor_pago: 8.00, credito: 8.00 },
@@ -7195,6 +7351,11 @@ app.post("/comprar-creditos-pix", auth, async (req, res) => {
 
     const { pacote } = req.body || {};
     const whatsapp = req.user.whatsapp;
+    const clientes = readClientes();
+
+    if (!clientes[whatsapp]) {
+      return res.status(404).json({ ok: false, error: "Cliente nao encontrado" });
+    }
 
     const pacotes = {
       saldo_800: { titulo: "Saldo IA4Tube Pix - pague R$8 e receba R$10", valor_pago: 8.00, credito: 10.00 },
@@ -7529,6 +7690,64 @@ function criarPedidoHandler(categoria) {
       });
     }
 
+    const fields = orderService.normalizeOrderBody(req.body);
+    const files = req.files || {};
+    const dedupeMeta = buildOrderCreateDedupeMeta(req, categoria, whatsapp, fields);
+
+    if (dedupeMeta.clientRequestId) {
+      const pedidoExistente = findPedidoByClientRequestId(whatsapp, dedupeMeta.clientRequestId);
+
+      if (pedidoExistente) {
+        limparUploadsTemporarios(req.files);
+        const payload = buildOrderResponsePayloadFromItem(pedidoExistente, {
+          idempotent_replay: true,
+          encontrado_por_client_request_id: true
+        });
+
+        logOrderRequestEvent(req, "idempotent_replay_persistente", {
+          categoria,
+          client_request_id: dedupeMeta.clientRequestId,
+          pedido_id: payload.pedido_id,
+          status_code: 200,
+          idempotent_replay: true
+        });
+
+        return res.json(payload);
+      }
+    }
+
+    const existingDedupe = getOrderCreateDedupeEntry(dedupeMeta.key);
+
+    if (existingDedupe) {
+      limparUploadsTemporarios(req.files);
+
+      logOrderRequestEvent(req, "idempotent_replay_em_memoria", {
+        categoria,
+        client_request_id: dedupeMeta.clientRequestId,
+        status_code: existingDedupe.responsePayload ? 200 : 202,
+        idempotent_replay: true
+      });
+
+      if (existingDedupe.responsePayload) {
+        return res.json({
+          ...existingDedupe.responsePayload,
+          idempotent: true,
+          idempotent_replay: true
+        });
+      }
+
+      return existingDedupe.promise
+        .then(payload => res.json({
+          ...payload,
+          idempotent: true,
+          idempotent_replay: true
+        }))
+        .catch(() => res.status(409).json({
+          ok: false,
+          error: "Pedido duplicado ainda em confirmacao. Aguarde alguns segundos e confira Meus pedidos."
+        }));
+    }
+
     const mesAtual = nowYYYYMM();
     billingService.ensureCurrentBillingCycle(c, mesAtual);
 
@@ -7602,9 +7821,13 @@ function criarPedidoHandler(categoria) {
     const cupomAplicado = resultadoCupom.cupomAplicado === true;
     let custoEfetivoPedido = brindeEscudo3dApp ? 0 : resultadoCupom.valorFinal;
 
-    const temSaldoSuficiente = billingService.hasEnoughBalance(c, custoEfetivoPedido);
+    const transacaoSaldoExistente = findSaldoDebitTransaction(
+      getClienteUserId(c, whatsapp),
+      dedupeMeta.clientRequestId,
+      custoEfetivoPedido
+    );
+    const temSaldoSuficiente = billingService.hasEnoughBalance(c, custoEfetivoPedido) || !!transacaoSaldoExistente;
 
-    const fields = orderService.normalizeOrderBody(req.body);
     const previewLimiterIdentifiers = getPreviewLimiterIdentifiers(req, c, whatsapp);
     const previewLimiterState = getPreviewLimiterState(previewLimiterIdentifiers);
 
@@ -7625,26 +7848,7 @@ function criarPedidoHandler(categoria) {
       });
     }
 
-    const files = req.files || {};
     let draft;
-    const dedupeMeta = buildOrderCreateDedupeMeta(req, categoria, whatsapp, fields);
-    const existingDedupe = getOrderCreateDedupeEntry(dedupeMeta.key);
-
-    if (existingDedupe) {
-      limparUploadsTemporarios(req.files);
-
-      if (existingDedupe.responsePayload) {
-        return res.json({ ...existingDedupe.responsePayload, idempotent: true });
-      }
-
-      return existingDedupe.promise
-        .then(payload => res.json({ ...payload, idempotent: true }))
-        .catch(() => res.status(409).json({
-          ok: false,
-          error: "Pedido duplicado ainda em confirmacao. Aguarde alguns segundos e confira Meus pedidos."
-        }));
-    }
-
     const dedupeEntry = beginOrderCreateDedupe(dedupeMeta.key);
 
     try {
@@ -7654,7 +7858,10 @@ function criarPedidoHandler(categoria) {
         whatsapp,
         mesAtual,
         fields,
-        files
+        files,
+        clientRequestId: dedupeMeta.clientRequestId,
+        idempotencyKey: dedupeMeta.key,
+        idempotencyPayloadHash: dedupeMeta.payloadHash
       });
     } catch (e) {
       console.error("[pedido] erro ao criar pedido", {
@@ -7684,7 +7891,15 @@ function criarPedidoHandler(categoria) {
     registrarAuditoriaProdutoPedido({ categoria, fields, files, pedidoId: id });
 
     if (temSaldoSuficiente) {
-      billingService.applyOrderCharge(c, { custoPedido: custoEfetivoPedido, mesAtual, temBrindeMascote });
+      const saldoChargeInfo = aplicarCobrancaPedidoComLedger({
+        cliente: c,
+        whatsapp,
+        pedidoId: id,
+        clientRequestId: dedupeMeta.clientRequestId,
+        custoPedido: custoEfetivoPedido,
+        mesAtual,
+        temBrindeMascote
+      });
 
       if (cupomAplicado && custoEfetivoPedido <= 0) {
         const confirmadoEm = new Date().toISOString();
@@ -7760,7 +7975,10 @@ function criarPedidoHandler(categoria) {
           whatsapp: whatsapp,
           pedido_id: id,
           confirmado_em: confirmadoEm,
-          origem: "desconto_automatico_criacao"
+          origem: "desconto_automatico_criacao",
+          client_request_id: dedupeMeta.clientRequestId,
+          transacao_saldo_id: saldoChargeInfo?.transacao?.id || "",
+          transacao_saldo_reutilizada: saldoChargeInfo?.reused === true
         };
         aplicarResumoCupomNoPedido(draft.pedido, resultadoCupom);
         registrarUsoCupomPedido(draft.pedido, whatsapp);
@@ -7819,10 +8037,18 @@ function criarPedidoHandler(categoria) {
       valor_original: cupomAplicado ? resultadoCupom.valorOriginal : Number(custoPedido || 0),
       valor_desconto: cupomAplicado ? resultadoCupom.desconto : 0,
       valor_final: cupomAplicado ? resultadoCupom.valorFinal : Number(custoEfetivoPedido || 0),
+      client_request_id: dedupeMeta.clientRequestId,
       mensagem: cupomAplicado
         ? `Cupom ${resultadoCupom.resumo.codigo} aplicado. Valor final: R$ ${resultadoCupom.valorFinal.toFixed(2).replace(".", ",")}.`
         : undefined
     };
+
+    logOrderRequestEvent(req, "pedido_criado", {
+      categoria,
+      client_request_id: dedupeMeta.clientRequestId,
+      pedido_id: id,
+      status_code: 200
+    });
 
     resolveOrderCreateDedupe(dedupeEntry, responsePayload);
 
@@ -7916,6 +8142,50 @@ app.post("/cupons/preco", (req, res) => {
   } catch (e) {
     return res.status(500).json({ ok: false, error: "Erro ao calcular cupom." });
   }
+});
+
+app.get("/pedidos/por-client-request-id/:clientRequestId", auth, (req, res) => {
+  res.setHeader("Cache-Control", "private, no-store");
+
+  const clientRequestId = normalizarClientRequestId(req.params.clientRequestId);
+
+  if (!clientRequestId) {
+    return res.status(400).json({
+      ok: false,
+      encontrado: false,
+      error: "client_request_id invalido."
+    });
+  }
+
+  const item = findPedidoByClientRequestId(req.user.whatsapp, clientRequestId);
+
+  if (!item) {
+    logOrderRequestEvent(req, "lookup_client_request_id_nao_encontrado", {
+      client_request_id: clientRequestId,
+      status_code: 200
+    });
+
+    return res.json({
+      ok: true,
+      encontrado: false
+    });
+  }
+
+  const payload = buildOrderResponsePayloadFromItem(item, {
+    encontrado: true,
+    pedido: item.pedido || {},
+    idempotent_replay: true,
+    encontrado_por_client_request_id: true
+  });
+
+  logOrderRequestEvent(req, "lookup_client_request_id_encontrado", {
+    client_request_id: clientRequestId,
+    pedido_id: payload.pedido_id,
+    status_code: 200,
+    idempotent_replay: true
+  });
+
+  return res.json(payload);
 });
 
 app.post(
@@ -8090,9 +8360,16 @@ app.get("/pedidos/novos", auth, (req, res) => {
 });
 
 app.get("/meus-pedidos", auth, (req, res) => {
+  res.setHeader("Cache-Control", "private, no-store");
   registrarOnline(req, { ultima_acao: "meus_pedidos" });
 
   const whatsapp = req.user.whatsapp;
+  const clientes = readClientes();
+
+  if (!clientes[whatsapp]) {
+    return res.status(404).json({ ok: false, error: "Cliente nao encontrado" });
+  }
+
   const itens = listPedidoBasesByWhatsapp(whatsapp).slice(0, 15);
 
   const pedidos = itens.map((item) => {
