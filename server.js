@@ -1169,6 +1169,488 @@ function finalizarFotoJogosRateLimit(reserva, status) {
   writeFotoJogosRateLimit(lista);
 }
 
+const FOTO_JOGOS_BATCH_MAX_ITEMS = 3;
+const FOTO_JOGOS_BATCH_DEDUPE_TTL_MS = 2 * 60 * 1000;
+const FOTO_JOGOS_BATCH_ALLOWED_FILE_KEYS = new Set(["escudo1", "escudo2", "mascote", "patrocinadores"]);
+const FOTO_JOGOS_BATCH_FILE_FIELD_RE = /^item_(\d+)_(escudo1|escudo2|mascote|patrocinadores)$/;
+const FOTO_JOGOS_BATCH_MAX_FILES = FOTO_JOGOS_BATCH_MAX_ITEMS * FOTO_JOGOS_BATCH_ALLOWED_FILE_KEYS.size;
+const FOTO_JOGOS_BATCH_PRODUCTS = {
+  proximo_jogo: { flyerTipo: "zz1ft", label: "Pr\u00f3ximo Jogo" },
+  resultado: { flyerTipo: "", label: "Resultado" },
+  escalacao: { flyerTipo: "zz1fs", label: "Escala\u00e7\u00e3o" },
+  escudo3d: { flyerTipo: "escudo3d", label: "Escudo 3D" },
+  jogador_escudo: { flyerTipo: "jog_escudo", label: "Jogador + Escudo" }
+};
+const fotoJogosBatchDedupe = new Map();
+
+function normalizarFotoJogosBatchId(value) {
+  return String(value || "")
+    .trim()
+    .replace(/[^\w:.-]+/g, "_")
+    .slice(0, 120);
+}
+
+function normalizarFotoJogosBatchProduto(value) {
+  const produto = String(value || "").trim().toLowerCase();
+  return FOTO_JOGOS_BATCH_PRODUCTS[produto] ? produto : "";
+}
+
+function parseFotoJogosBatchItems(body = {}) {
+  const raw = body.items_json || body.itens_json || body.items || body.itens || [];
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw !== "string") return [];
+
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function getFotoJogosBatchFileMap(files) {
+  const mapa = new Map();
+  const lista = Array.isArray(files)
+    ? files
+    : Object.values(files || {}).flat();
+
+  for (const file of lista) {
+    if (!file?.fieldname) continue;
+    if (!mapa.has(file.fieldname)) mapa.set(file.fieldname, []);
+    mapa.get(file.fieldname).push(file);
+  }
+
+  return mapa;
+}
+
+function getFotoJogosBatchMappedFiles(fileMap, item) {
+  const fileFields = item?.files && typeof item.files === "object" && !Array.isArray(item.files)
+    ? item.files
+    : {};
+  const output = {};
+
+  ["escudo1", "escudo2", "mascote", "patrocinadores"].forEach(legacyName => {
+    const mapped = String(fileFields[legacyName] || "").trim();
+    if (!mapped) return;
+    const files = fileMap.get(mapped) || [];
+    if (files.length) output[legacyName] = files;
+  });
+
+  return output;
+}
+
+function validarFotoJogosBatchFileBindings(files, items) {
+  const lista = Array.isArray(files)
+    ? files
+    : Object.values(files || {}).flat();
+  const erros = [];
+  const camposDeclarados = new Map();
+  const camposRecebidos = new Map();
+
+  if (lista.length > FOTO_JOGOS_BATCH_MAX_FILES) {
+    erros.push("Muitos arquivos no lote.");
+  }
+
+  items.forEach((rawItem, index) => {
+    const item = rawItem && typeof rawItem === "object" && !Array.isArray(rawItem) ? rawItem : {};
+    const fileFields = item.files && typeof item.files === "object" && !Array.isArray(item.files)
+      ? item.files
+      : {};
+
+    for (const [rawKey, rawFieldName] of Object.entries(fileFields)) {
+      const key = String(rawKey || "").trim();
+      const fieldName = String(rawFieldName || "").trim();
+      if (!fieldName) continue;
+
+      if (!FOTO_JOGOS_BATCH_ALLOWED_FILE_KEYS.has(key)) {
+        erros.push("Campo de arquivo inv\u00e1lido.");
+        continue;
+      }
+
+      const esperado = `item_${index}_${key}`;
+      if (fieldName !== esperado) {
+        erros.push("Arquivo vinculado ao item incorreto.");
+        continue;
+      }
+
+      camposDeclarados.set(fieldName, (camposDeclarados.get(fieldName) || 0) + 1);
+    }
+  });
+
+  for (const file of lista) {
+    const fieldName = String(file?.fieldname || "").trim();
+    const match = fieldName.match(FOTO_JOGOS_BATCH_FILE_FIELD_RE);
+    camposRecebidos.set(fieldName, (camposRecebidos.get(fieldName) || 0) + 1);
+
+    if (!match) {
+      erros.push("Campo de upload inv\u00e1lido.");
+      continue;
+    }
+
+    const index = Number(match[1]);
+    if (!Number.isInteger(index) || index < 0 || index >= items.length) {
+      erros.push("Arquivo enviado para item inexistente.");
+      continue;
+    }
+
+    if (!camposDeclarados.has(fieldName)) {
+      erros.push("Arquivo enviado sem v\u00ednculo com item.");
+    }
+  }
+
+  for (const total of camposDeclarados.values()) {
+    if (total > 1) erros.push("Arquivo declarado mais de uma vez.");
+  }
+
+  for (const total of camposRecebidos.values()) {
+    if (total > 1) erros.push("Arquivo enviado mais de uma vez.");
+  }
+
+  return {
+    ok: erros.length === 0,
+    errors: [...new Set(erros)]
+  };
+}
+
+function fotoJogosBatchFalha(index, item, error) {
+  return {
+    index,
+    product_id: item?.product_id || item?.productKey || item?.produto || "",
+    client_request_id: normalizarClientRequestId(item?.client_request_id || ""),
+    error: error || "Item inv\u00e1lido."
+  };
+}
+
+function fotoJogosBatchTemTexto(value) {
+  return String(value ?? "").trim().length > 0;
+}
+
+function fotoJogosBatchTemPlacar(value) {
+  if (value === null || value === undefined || value === "") return false;
+  const numero = Number(value);
+  return Number.isFinite(numero) && numero >= 0;
+}
+
+function fotoJogosBatchParseJsonArray(value) {
+  if (Array.isArray(value)) return value;
+  if (!value) return [];
+  if (typeof value !== "string") return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function validarFotoJogosBatchItem({ productId, body, files }) {
+  const erros = [];
+  const temArquivo = field => Array.isArray(files?.[field]) && files[field].length > 0;
+
+  if (!productId) erros.push("Produto inv\u00e1lido.");
+
+  if (["proximo_jogo", "resultado", "escalacao"].includes(productId)) {
+    if (!fotoJogosBatchTemTexto(body.time_principal) || !fotoJogosBatchTemTexto(body.time_adversario)) {
+      erros.push("Informe os dois times.");
+    }
+  }
+
+  if (productId === "proximo_jogo") {
+    if (!fotoJogosBatchTemTexto(body.data)) erros.push("Informe data e hor\u00e1rio.");
+    if (!fotoJogosBatchTemTexto(body.hora)) erros.push("Informe campeonato ou competi\u00e7\u00e3o.");
+    if (!temArquivo("escudo1") || !temArquivo("escudo2")) erros.push("Adicione os escudos dos dois times.");
+  }
+
+  if (productId === "resultado") {
+    if (!fotoJogosBatchTemPlacar(body.gols_time_principal) || !fotoJogosBatchTemPlacar(body.gols_adversario)) {
+      erros.push("Informe o placar.");
+    }
+    if (!fotoJogosBatchTemTexto(body.hora)) erros.push("Informe campeonato ou competi\u00e7\u00e3o.");
+    if (!temArquivo("escudo1")) erros.push("Adicione o escudo do Time A.");
+  }
+
+  if (productId === "escalacao") {
+    const jogadores = fotoJogosBatchParseJsonArray(body.jogadores_json);
+    const jogadoresValidos = jogadores.filter(jogador => fotoJogosBatchTemTexto(jogador?.nome));
+    if (!fotoJogosBatchTemTexto(body.rodada)) erros.push("Informe o confronto.");
+    if (jogadoresValidos.length < 1 && !fotoJogosBatchTemTexto(body.jogadores_texto)) {
+      erros.push("Informe jogadores ou escala\u00e7\u00e3o.");
+    }
+  }
+
+  if (productId === "escudo3d") {
+    if (!temArquivo("escudo1")) erros.push("Adicione o escudo do time.");
+  }
+
+  if (productId === "jogador_escudo") {
+    if (!fotoJogosBatchTemTexto(body.data)) erros.push("Informe o nome do jogador.");
+    if (!temArquivo("escudo1")) erros.push("Adicione o escudo do time.");
+    if (!temArquivo("mascote")) erros.push("Adicione a foto do jogador.");
+    if (String(body.foto_tipo || "").trim() && String(body.foto_tipo || "").trim() !== "jogador") {
+      erros.push("Use uma foto marcada como Foto de jogador.");
+    }
+  }
+
+  if (!orderService.hasRequiredOrderFields(orderService.normalizeOrderBody(body))) {
+    erros.push("Pedido incompleto.");
+  }
+
+  return {
+    ok: erros.length === 0,
+    errors: [...new Set(erros)]
+  };
+}
+
+function normalizarFotoJogosBatchItem(rawItem, index, batchId, fileMap) {
+  const item = rawItem && typeof rawItem === "object" && !Array.isArray(rawItem) ? rawItem : {};
+  const productId = normalizarFotoJogosBatchProduto(item.product_id || item.productKey || item.produto);
+  const productInfo = FOTO_JOGOS_BATCH_PRODUCTS[productId] || {};
+  const clientRequestId = normalizarClientRequestId(item.client_request_id || `${batchId}_item_${index + 1}`);
+  const fields = item.fields && typeof item.fields === "object" && !Array.isArray(item.fields)
+    ? item.fields
+    : {};
+  const body = {
+    ...fields,
+    product_id: productId,
+    flyer_tipo: fields.flyer_tipo || productInfo.flyerTipo || "",
+    client_request_id: clientRequestId
+  };
+  const files = getFotoJogosBatchMappedFiles(fileMap, item);
+
+  return {
+    index,
+    productId,
+    productLabel: productInfo.label || productId,
+    clientRequestId,
+    body,
+    files
+  };
+}
+
+function calcularCustoFotoJogosBatchItem({ req, cliente, whatsapp, productId, body, brindeContext }) {
+  const brindeEscudo3dApp = !brindeContext.usado && clienteElegivelBrindeEscudo3dApp({ ...req, body }, cliente, whatsapp, productId);
+  if (brindeEscudo3dApp) {
+    brindeContext.usado = true;
+    return 0;
+  }
+
+  return normalizarValorFinanceiro(getCustoPedido(productId, cliente));
+}
+
+function cleanupFotoJogosBatchDedupe(now = Date.now()) {
+  for (const [key, entry] of fotoJogosBatchDedupe.entries()) {
+    if (!entry || entry.expiresAt <= now) fotoJogosBatchDedupe.delete(key);
+  }
+}
+
+function getFotoJogosBatchDedupeEntry(key) {
+  cleanupFotoJogosBatchDedupe();
+  const entry = fotoJogosBatchDedupe.get(key);
+  if (!entry || entry.expiresAt <= Date.now()) {
+    fotoJogosBatchDedupe.delete(key);
+    return null;
+  }
+  return entry;
+}
+
+function beginFotoJogosBatchDedupe(key, promise) {
+  const entry = {
+    promise,
+    expiresAt: Date.now() + FOTO_JOGOS_BATCH_DEDUPE_TTL_MS
+  };
+  fotoJogosBatchDedupe.set(key, entry);
+  promise.finally(() => {
+    const atual = fotoJogosBatchDedupe.get(key);
+    if (atual === entry) atual.expiresAt = Date.now() + FOTO_JOGOS_BATCH_DEDUPE_TTL_MS;
+  }).catch(() => {});
+  return entry;
+}
+
+function buildFotoJogosBatchSubRequest(req, item) {
+  const headers = {
+    ...(req.headers || {}),
+    "x-idempotency-key": item.clientRequestId
+  };
+
+  return {
+    ...req,
+    method: req.method,
+    originalUrl: "/me/time/jogos/criar-artes",
+    url: "/me/time/jogos/criar-artes",
+    headers,
+    user: req.user,
+    body: item.body,
+    files: item.files,
+    file: undefined,
+    get(name) {
+      return headers[String(name || "").toLowerCase()] || headers[name] || "";
+    }
+  };
+}
+
+function criarPedidoFotoJogosBatch(req, item) {
+  return new Promise(resolve => {
+    const subReq = buildFotoJogosBatchSubRequest(req, item);
+    const res = {
+      statusCode: 200,
+      setHeader() {},
+      status(code) {
+        this.statusCode = Number(code || 200);
+        return this;
+      },
+      json(payload) {
+        resolve({
+          status: this.statusCode || 200,
+          payload: payload || {}
+        });
+      }
+    };
+
+    try {
+      criarPedidoHandler(item.productId)(subReq, res);
+    } catch (err) {
+      resolve({
+        status: Number(err?.status || 500),
+        payload: {
+          ok: false,
+          error: err?.message || "Falha ao criar pedido."
+        }
+      });
+    }
+  });
+}
+
+async function processarFotoJogosCriarArtesBatch(req, batchId, items) {
+  const whatsapp = req.user.whatsapp;
+  const clientes = readClientes();
+  const cliente = clientes[whatsapp];
+  const fileMap = getFotoJogosBatchFileMap(req.files || []);
+  const falhas = [];
+  const criados = [];
+
+  if (!cliente || !cliente.ativo) {
+    return {
+      status: 403,
+      payload: { ok: false, batch_id: batchId, criados, falhas: [{ index: -1, error: "Mensalidade inativa." }] }
+    };
+  }
+
+  const normalizados = items.map((item, index) => normalizarFotoJogosBatchItem(item, index, batchId, fileMap));
+  const validos = [];
+  const brindeContext = { usado: false };
+  let custoTotal = 0;
+
+  const mesAtual = nowYYYYMM();
+  billingService.ensureCurrentBillingCycle(cliente, mesAtual);
+
+  for (const item of normalizados) {
+    const validacao = validarFotoJogosBatchItem(item);
+    if (!validacao.ok) {
+      falhas.push({
+        index: item.index,
+        product_id: item.productId,
+        client_request_id: item.clientRequestId,
+        error: validacao.errors[0] || "Item inv\u00e1lido.",
+        detalhes: validacao.errors
+      });
+      continue;
+    }
+
+    const existente = findPedidoByClientRequestId(whatsapp, item.clientRequestId);
+    if (existente) {
+      criados.push({
+        ...buildOrderResponsePayloadFromItem(existente, {
+          index: item.index,
+          product_id: item.productId,
+          idempotent_replay: true,
+          encontrado_por_client_request_id: true
+        })
+      });
+      continue;
+    }
+
+    const custo = calcularCustoFotoJogosBatchItem({
+      req,
+      cliente,
+      whatsapp,
+      productId: item.productId,
+      body: item.body,
+      brindeContext
+    });
+    item.custo = custo;
+    custoTotal = normalizarValorFinanceiro(custoTotal + custo);
+    validos.push(item);
+  }
+
+  if (!validos.length) {
+    limparUploadsRequest(req);
+    return {
+      status: criados.length ? 200 : 400,
+      payload: { ok: criados.length > 0, batch_id: batchId, criados, falhas }
+    };
+  }
+
+  if (!billingService.hasEnoughBalance(cliente, custoTotal)) {
+    validos.forEach(item => {
+      falhas.push({
+        index: item.index,
+        product_id: item.productId,
+        client_request_id: item.clientRequestId,
+        error: `Saldo insuficiente. Valor total: R$ ${custoTotal.toFixed(2).replace(".", ",")}.`
+      });
+    });
+    limparUploadsRequest(req);
+    return {
+      status: 402,
+      payload: { ok: false, batch_id: batchId, criados, falhas, valor_total: custoTotal }
+    };
+  }
+
+  for (const item of validos) {
+    const antes = findPedidoByClientRequestId(whatsapp, item.clientRequestId);
+    if (antes) {
+      criados.push({
+        ...buildOrderResponsePayloadFromItem(antes, {
+          index: item.index,
+          product_id: item.productId,
+          idempotent_replay: true,
+          encontrado_por_client_request_id: true
+        })
+      });
+      continue;
+    }
+
+    const resposta = await criarPedidoFotoJogosBatch(req, item);
+    const payload = resposta.payload || {};
+
+    if (payload.ok && payload.pedido_id) {
+      criados.push({
+        ...payload,
+        index: item.index,
+        product_id: item.productId
+      });
+    } else {
+      falhas.push({
+        index: item.index,
+        product_id: item.productId,
+        client_request_id: item.clientRequestId,
+        error: payload.error || payload.mensagem || payload.erro || "Falha ao criar arte."
+      });
+    }
+  }
+
+  limparUploadsRequest(req);
+  return {
+    status: criados.length ? 200 : 400,
+    payload: {
+      ok: criados.length > 0,
+      batch_id: batchId,
+      criados,
+      falhas
+    }
+  };
+}
+
 function readPedido(base) {
   return orderStorage.readOrder(base);
 }
@@ -4366,7 +4848,7 @@ const storage = multer.diskStorage({
 
   filename: (req, file, cb) => {
     const safe = file.originalname.replace(/[^\w.\-]+/g, "_");
-    cb(null, `${Date.now()}_${safe}`);
+    cb(null, `${Date.now()}_${crypto.randomBytes(4).toString("hex")}_${safe}`);
   }
 });
 
@@ -7049,6 +7531,89 @@ app.post("/me/time/jogos/identificar-por-foto", auth, uploadComErroControlado(up
     });
   } finally {
     limparUploadsTemporarios({ imagem: imagem ? [imagem] : [] });
+  }
+});
+
+app.post("/me/time/jogos/criar-artes", auth, uploadComErroControlado(upload.any()), async (req, res) => {
+  try {
+    const batchId = normalizarFotoJogosBatchId(req.body?.batch_id || req.body?.batchId);
+    const items = parseFotoJogosBatchItems(req.body || {});
+
+    if (!batchId) {
+      limparUploadsRequest(req);
+      return res.status(400).json({
+        ok: false,
+        error: "Lote inv\u00e1lido.",
+        batch_id: "",
+        criados: [],
+        falhas: []
+      });
+    }
+
+    if (!items.length) {
+      limparUploadsRequest(req);
+      return res.status(400).json({
+        ok: false,
+        error: "Selecione pelo menos uma arte.",
+        batch_id: batchId,
+        criados: [],
+        falhas: []
+      });
+    }
+
+    if (items.length > FOTO_JOGOS_BATCH_MAX_ITEMS) {
+      limparUploadsRequest(req);
+      return res.status(400).json({
+        ok: false,
+        error: `Crie no m\u00e1ximo ${FOTO_JOGOS_BATCH_MAX_ITEMS} artes por vez neste MVP.`,
+        batch_id: batchId,
+        criados: [],
+        falhas: items.map((item, index) => fotoJogosBatchFalha(index, item, "Limite do lote excedido."))
+      });
+    }
+
+    const validacaoArquivos = validarFotoJogosBatchFileBindings(req.files || [], items);
+    if (!validacaoArquivos.ok) {
+      limparUploadsRequest(req);
+      console.warn("[FOTO_JOGOS_BATCH_ARQUIVOS_INVALIDOS]", {
+        usuario: mascararFotoJogosIdentificador(req.user?.whatsapp || ""),
+        tipo: "file_binding",
+        total_erros: validacaoArquivos.errors.length
+      });
+      return res.status(400).json({
+        ok: false,
+        error: "Arquivos do lote inv\u00e1lidos.",
+        batch_id: batchId,
+        criados: [],
+        falhas: [{ index: -1, error: "Arquivos do lote inv\u00e1lidos." }]
+      });
+    }
+
+    const dedupeKey = `foto-jogos-batch:${req.user.whatsapp}:${batchId}`;
+    const dedupe = getFotoJogosBatchDedupeEntry(dedupeKey);
+    if (dedupe) {
+      limparUploadsRequest(req);
+      const resultado = await dedupe.promise;
+      return res.status(resultado.status || 200).json(resultado.payload || resultado);
+    }
+
+    const promise = processarFotoJogosCriarArtesBatch(req, batchId, items);
+    beginFotoJogosBatchDedupe(dedupeKey, promise);
+    const resultado = await promise;
+    return res.status(resultado.status || 200).json(resultado.payload || resultado);
+  } catch (err) {
+    limparUploadsRequest(req);
+    console.warn("[FOTO_JOGOS_BATCH_ERRO]", {
+      usuario: mascararFotoJogosIdentificador(req.user?.whatsapp || ""),
+      tipo: err?.code || err?.name || "erro",
+      message: err?.message || String(err)
+    });
+    return res.status(Number(err?.status || 500)).json({
+      ok: false,
+      error: "N\u00e3o foi poss\u00edvel criar as artes selecionadas.",
+      criados: [],
+      falhas: []
+    });
   }
 });
 
