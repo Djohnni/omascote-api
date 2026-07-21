@@ -37,6 +37,7 @@ const ONLINE_FILE = path.join(DATA_DIR, "usuarios_online.json");
 const SUPORTE_ABERTAS_FILE = path.join(DATA_DIR, "suporte_conversas_abertas.json");
 const SUPORTE_FINALIZADAS_FILE = path.join(DATA_DIR, "suporte_conversas_finalizadas.json");
 const PREVIEW_LIMITER_FILE = path.join(DATA_DIR, "preview_limiter.json");
+const FOTO_JOGOS_RATE_LIMIT_FILE = path.join(DATA_DIR, "foto_jogos_rate_limit.json");
 const SALDO_TRANSACOES_FILE = path.join(DATA_DIR, "saldo_transacoes.json");
 const ANALYTICS_DIR = path.join(DATA_DIR, "analytics");
 const PERFIS_DIR = path.join(DATA_DIR, "perfis");
@@ -52,6 +53,12 @@ const SOLICITACOES_EXCLUSAO_CONTA_FILE = path.join(DATA_DIR, "solicitacoes_exclu
 const DENUNCIAS_CONTEUDO_IA_FILE = path.join(DATA_DIR, "denuncias_conteudo_ia.json");
 const PREVIEW_LIMITER_MAX = 3;
 const PREVIEW_LIMITER_TTL_MS = 6 * 60 * 60 * 1000;
+const FOTO_JOGOS_RATE_LIMIT_MINUTE_MS = 60 * 1000;
+const FOTO_JOGOS_RATE_LIMIT_DAY_MS = 24 * 60 * 60 * 1000;
+const FOTO_JOGOS_RATE_LIMIT_PENDING_TTL_MS = 5 * 60 * 1000;
+const FOTO_JOGOS_RATE_LIMIT_MAX_PER_MINUTE = 3;
+const FOTO_JOGOS_RATE_LIMIT_MAX_PER_DAY = 30;
+const FOTO_JOGOS_RATE_LIMIT_MAX_PER_IP_MINUTE = 12;
 
 const CLIENTES_TESTE = [
   "Los Hermanos",
@@ -119,6 +126,10 @@ if (!fs.existsSync(EVENTOS_CLIENTES_FILE)) {
 
 if (!fs.existsSync(PREVIEW_LIMITER_FILE)) {
   fs.writeFileSync(PREVIEW_LIMITER_FILE, JSON.stringify([], null, 2), "utf8");
+}
+
+if (!fs.existsSync(FOTO_JOGOS_RATE_LIMIT_FILE)) {
+  fs.writeFileSync(FOTO_JOGOS_RATE_LIMIT_FILE, JSON.stringify([], null, 2), "utf8");
 }
 
 if (!fs.existsSync(CARTAS_APP_FILE)) {
@@ -1009,6 +1020,155 @@ function registrarPreviewPendente({ identifiers, whatsapp, pedidoId }) {
   writePreviewLimiter(lista);
 }
 
+function readFotoJogosRateLimit() {
+  return readJsonArraySafe(FOTO_JOGOS_RATE_LIMIT_FILE);
+}
+
+function writeFotoJogosRateLimit(lista) {
+  writeJsonSafe(FOTO_JOGOS_RATE_LIMIT_FILE, Array.isArray(lista) ? lista : []);
+}
+
+function hashFotoJogosRateLimit(value) {
+  return crypto
+    .createHash("sha256")
+    .update(String(value || ""))
+    .digest("hex");
+}
+
+function mascararFotoJogosIdentificador(value) {
+  const texto = String(value || "").replace(/\s+/g, "").trim();
+  if (!texto) return "desconhecido";
+  if (texto.length <= 4) return `***${texto.slice(-2)}`;
+  return `${texto.slice(0, 2)}***${texto.slice(-4)}`;
+}
+
+function getFotoJogosUsuarioIdentificador(req) {
+  return String(
+    req.user?.whatsapp ||
+    req.user?.cliente_id ||
+    req.user?.id ||
+    req.user?.sub ||
+    "usuario_autenticado"
+  ).trim();
+}
+
+function getFotoJogosRateLimitDia(date = new Date()) {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Sao_Paulo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).format(date);
+}
+
+function fotoJogosRateLimitErro(tipo) {
+  const err = new Error(tipo === "diario"
+    ? "Você atingiu o limite diário de análises de imagens. Tente novamente amanhã."
+    : "Você fez muitas análises em pouco tempo. Aguarde alguns minutos e tente novamente.");
+  err.status = 429;
+  err.rateLimit = true;
+  err.rateLimitTipo = tipo;
+  return err;
+}
+
+function fotoJogosLogRateLimit({ tipo, usuarioMascarado, horario }) {
+  console.warn("[IDENTIFICAR_JOGOS_FOTO_RATE_LIMIT]", {
+    identificador: usuarioMascarado,
+    horario,
+    tipo
+  });
+}
+
+function limparFotoJogosRateLimit(lista, agora, diaAtual) {
+  return (Array.isArray(lista) ? lista : []).filter(entry => {
+    const criadoEm = Number(entry?.criado_em || 0);
+    if (!criadoEm) return false;
+    if (agora - criadoEm <= FOTO_JOGOS_RATE_LIMIT_MINUTE_MS) return true;
+    if (entry?.status === "pending" && agora - criadoEm <= FOTO_JOGOS_RATE_LIMIT_PENDING_TTL_MS) return true;
+    if (entry?.status === "success" && entry?.dia === diaAtual && agora - criadoEm <= FOTO_JOGOS_RATE_LIMIT_DAY_MS * 2) return true;
+    return false;
+  });
+}
+
+function reservarFotoJogosRateLimit(req) {
+  const agora = Date.now();
+  const horario = new Date(agora).toISOString();
+  const diaAtual = getFotoJogosRateLimitDia(new Date(agora));
+  const usuarioIdentificador = getFotoJogosUsuarioIdentificador(req);
+  const usuarioMascarado = mascararFotoJogosIdentificador(usuarioIdentificador);
+  const usuarioHash = hashFotoJogosRateLimit(`foto-jogos:user:${usuarioIdentificador}`);
+  const ip = getPreviewLimiterIp(req);
+  const ipHash = ip ? hashFotoJogosRateLimit(`foto-jogos:ip:${ip}`) : "";
+  const lista = limparFotoJogosRateLimit(readFotoJogosRateLimit(), agora, diaAtual);
+
+  const contaMinutoUsuario = lista.filter(entry =>
+    entry.user_hash === usuarioHash &&
+    (agora - Number(entry.criado_em || 0)) <= FOTO_JOGOS_RATE_LIMIT_MINUTE_MS
+  ).length;
+
+  if (contaMinutoUsuario >= FOTO_JOGOS_RATE_LIMIT_MAX_PER_MINUTE) {
+    fotoJogosLogRateLimit({ tipo: "minuto", usuarioMascarado, horario });
+    writeFotoJogosRateLimit(lista);
+    throw fotoJogosRateLimitErro("minuto");
+  }
+
+  if (ipHash) {
+    const contaMinutoIp = lista.filter(entry =>
+      entry.ip_hash === ipHash &&
+      (agora - Number(entry.criado_em || 0)) <= FOTO_JOGOS_RATE_LIMIT_MINUTE_MS
+    ).length;
+
+    if (contaMinutoIp >= FOTO_JOGOS_RATE_LIMIT_MAX_PER_IP_MINUTE) {
+      fotoJogosLogRateLimit({ tipo: "ip_minuto", usuarioMascarado, horario });
+      writeFotoJogosRateLimit(lista);
+      throw fotoJogosRateLimitErro("minuto");
+    }
+  }
+
+  const contaDiaUsuario = lista.filter(entry =>
+    entry.user_hash === usuarioHash &&
+    entry.dia === diaAtual &&
+    (entry.status === "success" || entry.status === "pending")
+  ).length;
+
+  if (contaDiaUsuario >= FOTO_JOGOS_RATE_LIMIT_MAX_PER_DAY) {
+    fotoJogosLogRateLimit({ tipo: "diario", usuarioMascarado, horario });
+    writeFotoJogosRateLimit(lista);
+    throw fotoJogosRateLimitErro("diario");
+  }
+
+  const reserva = {
+    id: `foto_jogos_${agora}_${crypto.randomBytes(4).toString("hex")}`,
+    user_hash: usuarioHash,
+    ip_hash: ipHash,
+    dia: diaAtual,
+    status: "pending",
+    criado_em: agora,
+    atualizado_em: agora
+  };
+
+  lista.push(reserva);
+  writeFotoJogosRateLimit(lista);
+  return reserva;
+}
+
+function finalizarFotoJogosRateLimit(reserva, status) {
+  if (!reserva?.id) return;
+
+  const agora = Date.now();
+  const diaAtual = getFotoJogosRateLimitDia(new Date(agora));
+  const lista = limparFotoJogosRateLimit(readFotoJogosRateLimit(), agora, diaAtual);
+  const index = lista.findIndex(entry => entry.id === reserva.id);
+  if (index < 0) return;
+
+  lista[index] = {
+    ...lista[index],
+    status: status === "success" ? "success" : "failed",
+    atualizado_em: agora
+  };
+  writeFotoJogosRateLimit(lista);
+}
+
 function readPedido(base) {
   return orderStorage.readOrder(base);
 }
@@ -1500,6 +1660,429 @@ function validarAssinaturaImagem(file) {
 
 function validarAssinaturaImagemPerfil(file) {
   return validarAssinaturaImagem(file);
+}
+
+const FOTO_JOGOS_OPENAI_MODEL = process.env.OPENAI_VISION_MODEL || "gpt-5-mini";
+const FOTO_JOGOS_OPENAI_TIMEOUT_MS = Number(process.env.OPENAI_VISION_TIMEOUT_MS || 120000);
+const FOTO_JOGOS_OPENAI_MAX_OUTPUT_TOKENS = Number(process.env.OPENAI_VISION_MAX_OUTPUT_TOKENS || 6000);
+const FOTO_JOGOS_OPENAI_REASONING_EFFORT = process.env.OPENAI_VISION_REASONING_EFFORT || "low";
+const FOTO_JOGOS_MAX_IMAGE_SIZE = 20 * 1024 * 1024;
+const FOTO_JOGOS_CAMPOS = [
+  "time_a",
+  "time_b",
+  "data",
+  "horario",
+  "competicao",
+  "rodada",
+  "fase",
+  "local",
+  "numero_jogo",
+  "categoria",
+  "grupo",
+  "observacao"
+];
+
+const FOTO_JOGOS_JSON_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["jogos"],
+  properties: {
+    jogos: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: FOTO_JOGOS_CAMPOS,
+        properties: FOTO_JOGOS_CAMPOS.reduce((acc, campo) => {
+          acc[campo] = { type: "string" };
+          return acc;
+        }, {})
+      }
+    }
+  }
+};
+
+function normalizarTextoFotoJogo(value, max = 120) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, max);
+}
+
+function normalizarValorCampoFotoJogo(value) {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+    return String(value);
+  }
+  return "";
+}
+
+function normalizarTextoChaveFotoJogo(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function ehRotuloNaoTimeFotoJogo(value) {
+  const texto = normalizarTextoChaveFotoJogo(value);
+  if (!texto) return true;
+
+  const genericosExatos = new Set([
+    "campeonato",
+    "competicao",
+    "torneio",
+    "copa",
+    "liga",
+    "rodada",
+    "fase",
+    "grupo",
+    "chave",
+    "categoria",
+    "classificacao",
+    "patrocinador",
+    "patrocinadores",
+    "apoio",
+    "realizacao",
+    "organizacao",
+    "organizador",
+    "prefeitura",
+    "secretaria"
+  ]);
+
+  if (genericosExatos.has(texto)) return true;
+  if (/\b(patrocinador|patrocinadores|realizacao|organizacao|organizador|apoio|prefeitura|secretaria)\b/.test(texto)) return true;
+
+  const partes = texto.split(/\s+/).filter(Boolean);
+  if (partes.length <= 3 && /^(campeonato|competicao|torneio|copa|liga|rodada|fase|grupo|chave|categoria|classificacao)\b/.test(texto)) {
+    return true;
+  }
+
+  return false;
+}
+
+function normalizarRespostaJogosFoto(payload) {
+  const lista = extrairListaJogosFoto(payload);
+  const vistos = new Set();
+  const jogos = [];
+
+  for (const item of lista) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+
+    const jogo = {
+      time_a: normalizarTextoFotoJogo(normalizarValorCampoFotoJogo(item.time_a), 80),
+      time_b: normalizarTextoFotoJogo(normalizarValorCampoFotoJogo(item.time_b), 80),
+      data: normalizarTextoFotoJogo(normalizarValorCampoFotoJogo(item.data), 40),
+      horario: normalizarTextoFotoJogo(normalizarValorCampoFotoJogo(item.horario), 40),
+      competicao: normalizarTextoFotoJogo(normalizarValorCampoFotoJogo(item.competicao), 120),
+      rodada: normalizarTextoFotoJogo(normalizarValorCampoFotoJogo(item.rodada), 80),
+      fase: normalizarTextoFotoJogo(normalizarValorCampoFotoJogo(item.fase), 80),
+      local: normalizarTextoFotoJogo(normalizarValorCampoFotoJogo(item.local), 120),
+      numero_jogo: normalizarTextoFotoJogo(normalizarValorCampoFotoJogo(item.numero_jogo), 40),
+      categoria: normalizarTextoFotoJogo(normalizarValorCampoFotoJogo(item.categoria), 80),
+      grupo: normalizarTextoFotoJogo(normalizarValorCampoFotoJogo(item.grupo), 80),
+      observacao: normalizarTextoFotoJogo(normalizarValorCampoFotoJogo(item.observacao), 220)
+    };
+
+    const timeAKey = normalizarTextoChaveFotoJogo(jogo.time_a);
+    const timeBKey = normalizarTextoChaveFotoJogo(jogo.time_b);
+    if (!timeAKey || !timeBKey || timeAKey === timeBKey) continue;
+    if (ehRotuloNaoTimeFotoJogo(jogo.time_a) || ehRotuloNaoTimeFotoJogo(jogo.time_b)) continue;
+
+    const parTimes = [timeAKey, timeBKey].sort().join(" x ");
+    const chave = [
+      parTimes,
+      normalizarTextoChaveFotoJogo(jogo.data),
+      normalizarTextoChaveFotoJogo(jogo.horario),
+      normalizarTextoChaveFotoJogo(jogo.competicao),
+      normalizarTextoChaveFotoJogo(jogo.rodada),
+      normalizarTextoChaveFotoJogo(jogo.fase),
+      normalizarTextoChaveFotoJogo(jogo.local),
+      normalizarTextoChaveFotoJogo(jogo.numero_jogo),
+      normalizarTextoChaveFotoJogo(jogo.categoria),
+      normalizarTextoChaveFotoJogo(jogo.grupo)
+    ].join("|");
+
+    if (vistos.has(chave)) continue;
+    vistos.add(chave);
+    jogos.push(jogo);
+    if (jogos.length >= 40) break;
+  }
+
+  return jogos;
+}
+
+function extrairListaJogosFoto(payload, depth = 0) {
+  if (depth > 4 || payload === null || payload === undefined) return [];
+  if (Array.isArray(payload)) return payload;
+  if (typeof payload !== "object") return [];
+  if (Array.isArray(payload.jogos)) return payload.jogos;
+
+  for (const key of ["data", "resultado", "result", "output", "conteudo", "content"]) {
+    const lista = extrairListaJogosFoto(payload[key], depth + 1);
+    if (lista.length) return lista;
+  }
+
+  for (const value of Object.values(payload)) {
+    const lista = extrairListaJogosFoto(value, depth + 1);
+    if (lista.length) return lista;
+  }
+
+  return [];
+}
+
+function diagnosticarPayloadJogosFoto(payload) {
+  const lista = extrairListaJogosFoto(payload);
+  const camposInvalidos = new Set();
+  let itensInvalidos = 0;
+
+  for (const item of lista) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      itensInvalidos += 1;
+      continue;
+    }
+
+    for (const campo of FOTO_JOGOS_CAMPOS) {
+      const value = item[campo];
+      if (value === null || value === undefined) {
+        camposInvalidos.add(campo + ":ausente_ou_null");
+      } else if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean" && typeof value !== "bigint") {
+        camposInvalidos.add(campo + ":tipo_" + (Array.isArray(value) ? "array" : typeof value));
+      }
+    }
+
+    for (const campo of Object.keys(item)) {
+      if (!FOTO_JOGOS_CAMPOS.includes(campo)) camposInvalidos.add(campo + ":extra");
+    }
+  }
+
+  return {
+    estrutura: Array.isArray(payload?.jogos) ? "jogos_array" : (lista.length ? "array_extraido" : "sem_array_jogos"),
+    itens: lista.length,
+    itensInvalidos,
+    camposInvalidos: Array.from(camposInvalidos).slice(0, 30)
+  };
+}
+
+function extrairTextoRespostaOpenAI(data) {
+  if (typeof data?.output_text === "string") return data.output_text.trim();
+
+  const partes = [];
+  for (const item of Array.isArray(data?.output) ? data.output : []) {
+    for (const content of Array.isArray(item?.content) ? item.content : []) {
+      if (typeof content?.text === "string") partes.push(content.text);
+    }
+  }
+
+  return partes.join("\n").trim();
+}
+
+function parseJsonToleranteFotoJogos(texto) {
+  const raw = String(texto || "").trim();
+  if (!raw) return null;
+
+  const tentativas = [raw];
+  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fenced?.[1]) tentativas.push(fenced[1].trim());
+
+  const inicioObjeto = raw.indexOf("{");
+  const fimObjeto = raw.lastIndexOf("}");
+  if (inicioObjeto >= 0 && fimObjeto > inicioObjeto) {
+    tentativas.push(raw.slice(inicioObjeto, fimObjeto + 1));
+  }
+
+  const inicioArray = raw.indexOf("[");
+  const fimArray = raw.lastIndexOf("]");
+  if (inicioArray >= 0 && fimArray > inicioArray) {
+    tentativas.push(`{"jogos":${raw.slice(inicioArray, fimArray + 1)}}`);
+  }
+
+  for (const tentativa of tentativas) {
+    try {
+      return JSON.parse(tentativa);
+    } catch {}
+  }
+
+  return null;
+}
+
+async function repararJsonJogosFotoOpenAI(textoOriginal) {
+  const texto = String(textoOriginal || "").trim();
+  if (!texto) return null;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), Math.min(FOTO_JOGOS_OPENAI_TIMEOUT_MS, 30000));
+
+  try {
+    const response = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        "Authorization": "Bearer " + process.env.OPENAI_API_KEY,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model: FOTO_JOGOS_OPENAI_MODEL,
+        store: false,
+        max_output_tokens: 3000,
+        reasoning: { effort: FOTO_JOGOS_OPENAI_REASONING_EFFORT },
+        input: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: [
+                  "Repare somente este JSON de confrontos extraido anteriormente.",
+                  "Nao adicione confrontos, nomes, datas ou campos que nao estejam no texto.",
+                  "Converta null e campos ausentes para string vazia, remova propriedades extras e retorne apenas o objeto {\"jogos\":[]}.",
+                  texto.slice(0, 12000)
+                ].join("\n")
+              }
+            ]
+          }
+        ],
+        text: {
+          format: {
+            type: "json_schema",
+            name: "reparar_jogos_por_foto",
+            strict: true,
+            schema: FOTO_JOGOS_JSON_SCHEMA
+          }
+        }
+      })
+    });
+
+    let data = null;
+    try {
+      data = await response.json();
+    } catch {
+      data = null;
+    }
+
+    if (!response.ok) return null;
+    return parseJsonToleranteFotoJogos(extrairTextoRespostaOpenAI(data));
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function identificarJogosPorFotoOpenAI(file) {
+  const mime = normalizarMimeImagem(file?.detected_mimetype || file?.mimetype || "");
+  const base64 = fs.readFileSync(file.path).toString("base64");
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), FOTO_JOGOS_OPENAI_TIMEOUT_MS);
+
+  const prompt = [
+    "Voce extrai somente confrontos de jogos claramente visiveis em imagens.",
+    "Retorne jogos somente quando houver dois times claramente identificaveis.",
+    "Nao invente informacoes. Campos ausentes devem ser strings vazias.",
+    "Use o campo competicao somente para campeonato, torneio, copa, liga ou nome da competicao. Nao coloque rodada ou fase nesse campo.",
+    "Nao confunda campeonato, patrocinador, apoio, realizacao, organizador, categoria, grupo, rodada ou local com nome de time.",
+    "Nao transforme classificacao, ranking, tabela de pontos ou lista de equipes em confronto sem evidencia textual/visual de jogo entre dois times.",
+    "Remova duplicados exatos. Preserve jogos entre os mesmos times quando rodada, data, horario, fase, numero do jogo, categoria ou grupo forem diferentes.",
+    "Se a imagem estiver ilegivel, ambigua ou sem confronto confiavel, retorne jogos como array vazio."
+  ].join("\n");
+
+  try {
+    const response = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        "Authorization": "Bearer " + process.env.OPENAI_API_KEY,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model: FOTO_JOGOS_OPENAI_MODEL,
+        store: false,
+        max_output_tokens: FOTO_JOGOS_OPENAI_MAX_OUTPUT_TOKENS,
+        reasoning: { effort: FOTO_JOGOS_OPENAI_REASONING_EFFORT },
+        input: [
+          {
+            role: "user",
+            content: [
+              { type: "input_text", text: prompt },
+              { type: "input_image", image_url: `data:${mime};base64,${base64}`, detail: "high" }
+            ]
+          }
+        ],
+        text: {
+          format: {
+            type: "json_schema",
+            name: "identificar_jogos_por_foto",
+            strict: true,
+            schema: FOTO_JOGOS_JSON_SCHEMA
+          }
+        }
+      })
+    });
+
+    let data = null;
+    try {
+      data = await response.json();
+    } catch {
+      data = null;
+    }
+
+    if (!response.ok) {
+      const err = new Error("Nao foi possivel analisar a imagem agora. Tente novamente em instantes.");
+      err.status = 502;
+      err.openaiStatus = response.status;
+      err.openaiErrorType = data?.error?.type || "";
+      err.openaiErrorCode = data?.error?.code || "";
+      throw err;
+    }
+
+    const texto = extrairTextoRespostaOpenAI(data);
+    let payload = parseJsonToleranteFotoJogos(texto);
+    let jogos = normalizarRespostaJogosFoto(payload);
+
+    if (!payload && texto) {
+      const reparado = await repararJsonJogosFotoOpenAI(texto);
+      if (reparado) {
+        payload = reparado;
+        jogos = normalizarRespostaJogosFoto(payload);
+      }
+    }
+
+    if (!payload || data?.status === "incomplete") {
+      console.warn("[IDENTIFICAR_JOGOS_FOTO_SCHEMA_TOLERANTE]", {
+        tipo: !payload ? "json_ausente_ou_invalido" : "resposta_incompleta",
+        motivo: data?.incomplete_details?.reason || "",
+        texto_presente: !!texto,
+        jogos_preservados: jogos.length
+      });
+    } else {
+      const diagnostico = diagnosticarPayloadJogosFoto(payload);
+      if (diagnostico.camposInvalidos.length || diagnostico.estrutura !== "jogos_array") {
+        console.warn("[IDENTIFICAR_JOGOS_FOTO_SCHEMA_TOLERANTE]", {
+          tipo: "normalizacao_tolerante",
+          estrutura: diagnostico.estrutura,
+          itens: diagnostico.itens,
+          itens_invalidos: diagnostico.itensInvalidos,
+          campos_invalidos: diagnostico.camposInvalidos,
+          jogos_preservados: jogos.length
+        });
+      }
+    }
+
+    return jogos;
+  } catch (err) {
+    if (err?.name === "AbortError") {
+      const timeoutErr = new Error("Tempo esgotado ao analisar a imagem.");
+      timeoutErr.status = 504;
+      timeoutErr.timeout = true;
+      throw timeoutErr;
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function normalizarTipoImagemPerfil(value) {
@@ -6393,6 +6976,79 @@ app.post("/avaliar-jogadores/:token/votos", auth, (req, res) => {
       ok: false,
       error: err?.message || "Falha ao salvar avaliacao."
     });
+  }
+});
+
+app.post("/me/time/jogos/identificar-por-foto", auth, uploadComErroControlado(upload.single("imagem")), async (req, res) => {
+  const imagem = req.file;
+  let rateLimitReserva = null;
+
+  try {
+    if (!imagem) {
+      return res.status(400).json({
+        ok: false,
+        error: "Envie uma imagem PNG, JPG ou WEBP."
+      });
+    }
+
+    if (Number(imagem.size || 0) > FOTO_JOGOS_MAX_IMAGE_SIZE) {
+      return res.status(400).json({
+        ok: false,
+        error: "Imagem muito grande. Envie uma imagem com ate 20MB."
+      });
+    }
+
+    if (!process.env.OPENAI_API_KEY) {
+      return res.status(500).json({
+        ok: false,
+        error: "Identificacao indisponivel no momento. Tente novamente em instantes."
+      });
+    }
+
+    rateLimitReserva = reservarFotoJogosRateLimit(req);
+    const jogos = await identificarJogosPorFotoOpenAI(imagem);
+    finalizarFotoJogosRateLimit(rateLimitReserva, "success");
+    rateLimitReserva = null;
+
+    return res.json({
+      ok: true,
+      jogos
+    });
+  } catch (err) {
+    if (rateLimitReserva) {
+      finalizarFotoJogosRateLimit(rateLimitReserva, "failed");
+      rateLimitReserva = null;
+    }
+
+    if (err?.rateLimit === true) {
+      return res.status(429).json({
+        ok: false,
+        error: err.message
+      });
+    }
+
+    const status = Number(err?.status || 500);
+    const timeout = err?.timeout === true;
+    const schemaError = err?.schemaError === true;
+
+    console.warn("[IDENTIFICAR_JOGOS_FOTO_ERRO]", {
+      status,
+      timeout,
+      schemaError,
+      openaiStatus: err?.openaiStatus || "",
+      message: err?.message || String(err)
+    });
+
+    return res.status(status).json({
+      ok: false,
+      error: timeout
+        ? "Tempo esgotado ao analisar a imagem. Tente uma foto mais nitida ou menor."
+        : schemaError
+          ? "Resposta da IA4Tube fora do formato esperado."
+          : err?.message || "Nao foi possivel analisar a imagem com a IA4Tube."
+    });
+  } finally {
+    limparUploadsTemporarios({ imagem: imagem ? [imagem] : [] });
   }
 });
 
