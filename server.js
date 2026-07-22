@@ -1181,6 +1181,43 @@ const FOTO_JOGOS_BATCH_PRODUCTS = {
   escudo3d: { flyerTipo: "escudo3d", label: "Escudo 3D" },
   jogador_escudo: { flyerTipo: "jog_escudo", label: "Jogador + Escudo" }
 };
+const LEGACY_GENERATION_CONTRACTS = Object.freeze({
+  proximo_jogo: {
+    route: "/pedidos",
+    internalType: "proximo_jogo",
+    flyerTipo: "zz1ft",
+    promptFile: "prompt_proximo_jogo.txt",
+    promptSha256: "0786248a2f18a4183a0d21f5d4959377d92f71ffcb0c416cda6df54a551a323f"
+  },
+  resultado: {
+    route: "/resultado_do_jogo",
+    internalType: "resultado",
+    flyerTipo: "",
+    promptFile: "prompt_resultado.txt",
+    promptSha256: "1e2515909c00b7ba3d916f6fa54ee49bbf45780aca7b14a3a8fd7739569ff988"
+  },
+  escalacao: {
+    route: "/pedidos",
+    internalType: "escalacao",
+    flyerTipo: "zz1fs",
+    promptFile: "prompt_escalacao.txt",
+    promptSha256: "b5064e67df90748f6538a106a5757e274da250c1183221747a86d5805fd0603d"
+  },
+  escudo3d: {
+    route: "/pedidos",
+    internalType: "escudo3d",
+    flyerTipo: "escudo3d",
+    promptFile: "prompt_escudo3d.txt",
+    promptSha256: "3184668dc7a9db4154f3bb4d7435b19d32173514bc50fbe0824e1b36364db988"
+  },
+  jogador_escudo: {
+    route: "/pedidos",
+    internalType: "jogador_escudo",
+    flyerTipo: "jog_escudo",
+    promptFile: "prompt_jogador_escudo.txt",
+    promptSha256: "80c1624d9741ea4ef73b237b90400ec647b78a421d6f8084d7d2f009aa33935c"
+  }
+});
 const fotoJogosBatchDedupe = new Map();
 
 function normalizarFotoJogosBatchId(value) {
@@ -1411,7 +1448,6 @@ function normalizarFotoJogosBatchItem(rawItem, index, batchId, fileMap) {
     : {};
   const body = {
     ...fields,
-    product_id: productId,
     flyer_tipo: fields.flyer_tipo || productInfo.flyerTipo || "",
     client_request_id: clientRequestId
   };
@@ -5214,10 +5250,94 @@ function readProdutoAuditoriaEntries(limit = 5000) {
   }
 }
 
-function registrarAuditoriaProdutoPedido({ categoria, fields, files, pedidoId }) {
+function normalizarValorAuditoriaHash(value) {
+  if (Array.isArray(value)) return value.map(normalizarValorAuditoriaHash);
+  if (value && typeof value === "object") {
+    return Object.keys(value).sort().reduce((out, key) => {
+      out[key] = normalizarValorAuditoriaHash(value[key]);
+      return out;
+    }, {});
+  }
+  return value === undefined ? null : value;
+}
+
+function resumirArquivosAuditoria(files = {}) {
+  const campos = [];
+  let quantidadeImagens = 0;
+  const assinatura = {};
+
+  Object.keys(files || {}).sort().forEach(field => {
+    const lista = Array.isArray(files[field]) ? files[field].filter(Boolean) : [];
+    if (!lista.length) return;
+    campos.push(field);
+    quantidadeImagens += lista.length;
+    assinatura[field] = lista.map(file => ({
+      size: Number(file?.size || 0),
+      mimetype: String(file?.detected_mimetype || file?.mimetype || "").toLowerCase()
+    }));
+  });
+
+  return { campos, quantidadeImagens, assinatura };
+}
+
+function gerarAuditoriaGeracaoLegada({ categoria, fields = {}, files = {}, request = null }) {
+  const produto = String(categoria || "").trim().toLowerCase();
+  const contract = LEGACY_GENERATION_CONTRACTS[produto] || null;
+  if (!contract) return null;
+
+  const cleanFields = fields?.new_model?.fields && typeof fields.new_model.fields === "object"
+    ? fields.new_model.fields
+    : {};
+  const legacyFields = Object.keys(fields || {}).filter(key => {
+    if (key === "new_model") return false;
+    const value = fields[key];
+    return value !== undefined && value !== null && String(value).trim() !== "";
+  });
+  const fileSummary = resumirArquivosAuditoria(files);
+  const payloadHash = crypto
+    .createHash("sha256")
+    .update(JSON.stringify(normalizarValorAuditoriaHash({
+      produto,
+      fields,
+      files:fileSummary.assinatura
+    })))
+    .digest("hex");
+  const requestPath = String(request?.originalUrl || request?.url || "");
+
+  return {
+    origem: requestPath.includes("/me/time/jogos/criar-artes") ? "ia4tube_batch" : "produto_antigo",
+    produto_equivalente: produto,
+    rota_produto_antigo: contract.route,
+    tipo_interno: contract.internalType,
+    flyer_tipo: contract.flyerTipo,
+    arquivo_prompt: contract.promptFile,
+    prompt_sha256: contract.promptSha256,
+    servico_criacao: "criarPedidoHandler",
+    armazenamento_pedido: "orderService.createOrderDraft",
+    pipeline_worker: "resultado_pipeline.py",
+    funcao_prompt: "load_prompt_imagem",
+    funcao_montagem_final: "resultado_pipeline.main",
+    funcao_openai: "render_via_chatgpt_api",
+    modelo_esperado: "gpt-image-2",
+    parametros_esperados: {
+      size:"1024x1536",
+      quality:"medium",
+      input_fidelity:"high",
+      output_format:"jpeg"
+    },
+    campos_legacy_presentes: legacyFields.sort(),
+    campos_estruturados_presentes: Object.keys(cleanFields).sort(),
+    campos_arquivo_presentes: fileSummary.campos,
+    quantidade_imagens: fileSummary.quantidadeImagens,
+    payload_sha256: payloadHash
+  };
+}
+
+function registrarAuditoriaProdutoPedido({ categoria, fields, files, pedidoId, request }) {
   const audit = productAuditService.auditProductOrder({ categoria, fields, files });
   const entry = {
     ...audit,
+    geracao: gerarAuditoriaGeracaoLegada({ categoria, fields, files, request }),
     pedido_id: pedidoId || "",
     registrado_em: new Date().toISOString()
   };
@@ -9109,7 +9229,7 @@ function criarPedidoHandler(categoria) {
     draft.pedido.client_request_id = dedupeMeta.clientRequestId;
     draft.pedido.idempotency_key = dedupeMeta.key;
     draft.pedido.idempotency_payload_hash = dedupeMeta.payloadHash;
-    registrarAuditoriaProdutoPedido({ categoria, fields, files, pedidoId: id });
+    registrarAuditoriaProdutoPedido({ categoria, fields, files, pedidoId: id, request:req });
 
     if (temSaldoSuficiente) {
       const saldoChargeInfo = aplicarCobrancaPedidoComLedger({
