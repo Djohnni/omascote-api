@@ -117,35 +117,17 @@ function getMaxFotosMascote(categoria) {
   return 1;
 }
 
-function textoTituloSecaoArte(value, fallback) {
-  const text = String(value ?? "").trim();
-  return text || fallback;
-}
-
 function tituloSecaoPedido({ categoria, fields, newModel }) {
-  if (categoria === "resultado") {
-    const tituloResultados = String(
-      fields.titulo_secao_resultados ?? newModel?.fields?.titulo_secao_resultados ?? ""
-    ).trim();
-    if (!tituloResultados) return null;
+  const key = categoria === "resultado"
+    ? "titulo_secao_resultados"
+    : categoria === "proximo_jogo"
+      ? "titulo_secao_proximo_jogo"
+      : "";
 
-    return {
-      key: "titulo_secao_resultados",
-      value: tituloResultados
-    };
-  }
+  if (!key) return null;
 
-  if (categoria === "proximo_jogo") {
-    return {
-      key: "titulo_secao_proximo_jogo",
-      value: textoTituloSecaoArte(
-        fields.titulo_secao_proximo_jogo ?? newModel?.fields?.titulo_secao_proximo_jogo,
-        "Próximo Jogo"
-      )
-    };
-  }
-
-  return null;
+  const value = String(fields[key] ?? newModel?.fields?.[key] ?? "").trim();
+  return value ? { key, value } : null;
 }
 
 function moveUploadedFileObject({ file, base, field, destName }) {
@@ -318,10 +300,14 @@ function buildPedidoData({
   if (cleanModel.schema_version || cleanModel.product_id || Object.keys(cleanModel.fields || {}).length || Object.keys(cleanModel.assets || {}).length) {
     pedido.schema_version = cleanModel.schema_version || 1;
     pedido.product_id = cleanModel.product_id || categoria;
-    pedido.fields = cleanModel.fields || {};
+    pedido.fields = { ...(cleanModel.fields || {}) };
     if (tituloSecao) {
       pedido.fields[tituloSecao.key] = tituloSecao.value;
       pedido.fields.titulo_secao_arte = tituloSecao.value;
+    } else {
+      delete pedido.fields.titulo_secao_resultados;
+      delete pedido.fields.titulo_secao_proximo_jogo;
+      delete pedido.fields.titulo_secao_arte;
     }
     pedido.assets = cleanModel.assets || {};
     pedido.legacy = {
