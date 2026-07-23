@@ -2185,9 +2185,13 @@ const FOTO_JOGOS_OPENAI_TIMEOUT_MS = Number(process.env.OPENAI_VISION_TIMEOUT_MS
 const FOTO_JOGOS_OPENAI_MAX_OUTPUT_TOKENS = Number(process.env.OPENAI_VISION_MAX_OUTPUT_TOKENS || 6000);
 const FOTO_JOGOS_OPENAI_REASONING_EFFORT = process.env.OPENAI_VISION_REASONING_EFFORT || "low";
 const FOTO_JOGOS_MAX_IMAGE_SIZE = 20 * 1024 * 1024;
+const FOTO_JOGOS_OBSERVACAO_MAX = 1200;
+const FOTO_JOGOS_OBSERVACAO_RESUMO = "\n[Conte\u00fado resumido para caber no limite de 1.200 caracteres.]";
 const FOTO_JOGOS_CAMPOS = [
   "time_a",
   "time_b",
+  "resultado_gols_a",
+  "resultado_gols_b",
   "data",
   "horario",
   "competicao",
@@ -2198,6 +2202,20 @@ const FOTO_JOGOS_CAMPOS = [
   "categoria",
   "grupo",
   "observacao"
+];
+const FOTO_JOGOS_ESTRUTURADOS = [
+  "status",
+  "placar_tempo_normal",
+  "placar_final",
+  "disputa_penaltis",
+  "cidade",
+  "estadio_ginasio",
+  "modalidade",
+  "genero",
+  "classificacao",
+  "patrocinadores",
+  "organizador",
+  "transmissao"
 ];
 
 const FOTO_JOGOS_JSON_SCHEMA = {
@@ -2210,11 +2228,32 @@ const FOTO_JOGOS_JSON_SCHEMA = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: FOTO_JOGOS_CAMPOS,
-        properties: FOTO_JOGOS_CAMPOS.reduce((acc, campo) => {
-          acc[campo] = { type: "string" };
-          return acc;
-        }, {})
+        required: [...FOTO_JOGOS_CAMPOS, ...FOTO_JOGOS_ESTRUTURADOS, "events", "additional_information"],
+        properties: {
+          ...[...FOTO_JOGOS_CAMPOS, ...FOTO_JOGOS_ESTRUTURADOS].reduce((acc, campo) => {
+            acc[campo] = { type: "string" };
+            return acc;
+          }, {}),
+          events: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              required: ["type", "team", "player", "minute", "details"],
+              properties: {
+                type: { type: "string" },
+                team: { type: "string" },
+                player: { type: "string" },
+                minute: { type: "string" },
+                details: { type: "string" }
+              }
+            }
+          },
+          additional_information: {
+            type: "array",
+            items: { type: "string" }
+          }
+        }
       }
     }
   }
@@ -2225,6 +2264,90 @@ function normalizarTextoFotoJogo(value, max = 120) {
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, max);
+}
+
+function normalizarObservacaoFotoJogo(value) {
+  const texto = String(value || "")
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map(linha => linha.replace(/[^\S\n]+/g, " ").trim())
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+  if (texto.length <= FOTO_JOGOS_OBSERVACAO_MAX) return texto;
+
+  const limite = FOTO_JOGOS_OBSERVACAO_MAX - FOTO_JOGOS_OBSERVACAO_RESUMO.length;
+  let base = texto.slice(0, Math.max(0, limite)).trimEnd();
+  const ultimoEspaco = Math.max(base.lastIndexOf(" "), base.lastIndexOf("\n"));
+  if (ultimoEspaco >= Math.floor(limite * 0.75)) {
+    base = base.slice(0, ultimoEspaco).trimEnd();
+  }
+  return `${base}${FOTO_JOGOS_OBSERVACAO_RESUMO}`;
+}
+
+function normalizarEventoFotoJogo(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const evento = {
+    type: normalizarTextoFotoJogo(value.type, 40),
+    team: normalizarTextoFotoJogo(value.team, 80),
+    player: normalizarTextoFotoJogo(value.player, 120),
+    minute: normalizarTextoFotoJogo(value.minute, 20),
+    details: normalizarTextoFotoJogo(value.details, 160)
+  };
+  return Object.values(evento).some(Boolean) ? evento : null;
+}
+
+function formatarInformacoesEsportivasFotoJogo(item, jogo) {
+  const linhas = [];
+  const adicionarSecao = (titulo, valores) => {
+    const lista = (Array.isArray(valores) ? valores : [valores]).filter(Boolean);
+    if (!lista.length) return;
+    linhas.push(`${titulo}:`, ...lista, "");
+  };
+  const eventos = (Array.isArray(item.events) ? item.events : [])
+    .map(normalizarEventoFotoJogo)
+    .filter(Boolean);
+  const gols = eventos.filter(evento => normalizarTextoChaveFotoJogo(evento.type) === "goal" || normalizarTextoChaveFotoJogo(evento.type) === "gol");
+  const outrosEventos = eventos.filter(evento => !gols.includes(evento));
+  const confronto = jogo.time_a && jogo.time_b
+    ? `${jogo.time_a}${jogo.resultado_gols_a && jogo.resultado_gols_b ? ` ${jogo.resultado_gols_a} x ${jogo.resultado_gols_b} ` : " x "}${jogo.time_b}`
+    : "";
+
+  adicionarSecao("Competição", jogo.competicao);
+  adicionarSecao("Resultado", confronto);
+  adicionarSecao("Situação", normalizarTextoFotoJogo(item.status, 80));
+  adicionarSecao("Autores dos gols", gols.map(evento => {
+    const autor = [evento.player, evento.team].filter(Boolean).join(", ");
+    const minuto = evento.minute ? ` — ${evento.minute}` : "";
+    const detalhe = evento.details ? ` (${evento.details})` : "";
+    return `- ${autor || "Gol"}${minuto}${detalhe}`;
+  }));
+
+  const detalhesPartida = [
+    item.placar_tempo_normal && `Placar no tempo normal: ${normalizarTextoFotoJogo(item.placar_tempo_normal, 60)}`,
+    item.placar_final && `Placar final: ${normalizarTextoFotoJogo(item.placar_final, 60)}`,
+    item.disputa_penaltis && `Disputa por pênaltis: ${normalizarTextoFotoJogo(item.disputa_penaltis, 100)}`,
+    outrosEventos.length && `Outros eventos:\n${outrosEventos.map(evento => {
+      const partes = [evento.type, evento.player, evento.team, evento.minute, evento.details].filter(Boolean);
+      return `- ${partes.join(" — ")}`;
+    }).join("\n")}`,
+    item.cidade && `Cidade: ${normalizarTextoFotoJogo(item.cidade, 80)}`,
+    item.estadio_ginasio && `Estádio/ginásio: ${normalizarTextoFotoJogo(item.estadio_ginasio, 120)}`,
+    item.modalidade && `Modalidade: ${normalizarTextoFotoJogo(item.modalidade, 80)}`,
+    item.genero && `Categoria: ${normalizarTextoFotoJogo(item.genero, 60)}`,
+    item.classificacao && `Classificação: ${normalizarTextoFotoJogo(item.classificacao, 160)}`,
+    item.patrocinadores && `Patrocinadores: ${normalizarTextoFotoJogo(item.patrocinadores, 180)}`,
+    item.organizador && `Organizador: ${normalizarTextoFotoJogo(item.organizador, 120)}`,
+    item.transmissao && `Transmissão: ${normalizarTextoFotoJogo(item.transmissao, 120)}`,
+    ...(Array.isArray(item.additional_information) ? item.additional_information : [])
+      .map(value => normalizarTextoFotoJogo(value, 180))
+  ].filter(Boolean);
+  adicionarSecao("Mais informações", detalhesPartida);
+
+  const legado = normalizarObservacaoFotoJogo(normalizarValorCampoFotoJogo(item.observacao));
+  if (legado && !linhas.join("\n").includes(legado)) adicionarSecao("Observações", legado);
+  return normalizarObservacaoFotoJogo(linhas.join("\n"));
 }
 
 function normalizarValorCampoFotoJogo(value) {
@@ -2293,6 +2416,8 @@ function normalizarRespostaJogosFoto(payload) {
     const jogo = {
       time_a: normalizarTextoFotoJogo(normalizarValorCampoFotoJogo(item.time_a), 80),
       time_b: normalizarTextoFotoJogo(normalizarValorCampoFotoJogo(item.time_b), 80),
+      resultado_gols_a: normalizarTextoFotoJogo(normalizarValorCampoFotoJogo(item.resultado_gols_a), 3),
+      resultado_gols_b: normalizarTextoFotoJogo(normalizarValorCampoFotoJogo(item.resultado_gols_b), 3),
       data: normalizarTextoFotoJogo(normalizarValorCampoFotoJogo(item.data), 40),
       horario: normalizarTextoFotoJogo(normalizarValorCampoFotoJogo(item.horario), 40),
       competicao: normalizarTextoFotoJogo(normalizarValorCampoFotoJogo(item.competicao), 120),
@@ -2302,8 +2427,9 @@ function normalizarRespostaJogosFoto(payload) {
       numero_jogo: normalizarTextoFotoJogo(normalizarValorCampoFotoJogo(item.numero_jogo), 40),
       categoria: normalizarTextoFotoJogo(normalizarValorCampoFotoJogo(item.categoria), 80),
       grupo: normalizarTextoFotoJogo(normalizarValorCampoFotoJogo(item.grupo), 80),
-      observacao: normalizarTextoFotoJogo(normalizarValorCampoFotoJogo(item.observacao), 220)
+      observacao: ""
     };
+    jogo.observacao = formatarInformacoesEsportivasFotoJogo(item, jogo);
 
     const timeAKey = normalizarTextoChaveFotoJogo(jogo.time_a);
     const timeBKey = normalizarTextoChaveFotoJogo(jogo.time_b);
@@ -2363,7 +2489,7 @@ function diagnosticarPayloadJogosFoto(payload) {
       continue;
     }
 
-    for (const campo of FOTO_JOGOS_CAMPOS) {
+    for (const campo of [...FOTO_JOGOS_CAMPOS, ...FOTO_JOGOS_ESTRUTURADOS]) {
       const value = item[campo];
       if (value === null || value === undefined) {
         camposInvalidos.add(campo + ":ausente_ou_null");
@@ -2371,9 +2497,15 @@ function diagnosticarPayloadJogosFoto(payload) {
         camposInvalidos.add(campo + ":tipo_" + (Array.isArray(value) ? "array" : typeof value));
       }
     }
+    if (!Array.isArray(item.events)) camposInvalidos.add("events:tipo_" + typeof item.events);
+    if (!Array.isArray(item.additional_information)) {
+      camposInvalidos.add("additional_information:tipo_" + typeof item.additional_information);
+    }
 
     for (const campo of Object.keys(item)) {
-      if (!FOTO_JOGOS_CAMPOS.includes(campo)) camposInvalidos.add(campo + ":extra");
+      if (![...FOTO_JOGOS_CAMPOS, ...FOTO_JOGOS_ESTRUTURADOS, "events", "additional_information"].includes(campo)) {
+        camposInvalidos.add(campo + ":extra");
+      }
     }
   }
 
@@ -2445,7 +2577,7 @@ async function repararJsonJogosFotoOpenAI(textoOriginal) {
       body: JSON.stringify({
         model: FOTO_JOGOS_OPENAI_MODEL,
         store: false,
-        max_output_tokens: 3000,
+        max_output_tokens: FOTO_JOGOS_OPENAI_MAX_OUTPUT_TOKENS,
         reasoning: { effort: FOTO_JOGOS_OPENAI_REASONING_EFFORT },
         input: [
           {
@@ -2457,6 +2589,7 @@ async function repararJsonJogosFotoOpenAI(textoOriginal) {
                   "Repare somente este JSON de confrontos extraido anteriormente.",
                   "Nao adicione confrontos, nomes, datas ou campos que nao estejam no texto.",
                   "Converta null e campos ausentes para string vazia, remova propriedades extras e retorne apenas o objeto {\"jogos\":[]}.",
+                  "Preserve todas as informacoes existentes e as quebras de linha do campo observacao.",
                   texto.slice(0, 12000)
                 ].join("\n")
               }
@@ -2490,7 +2623,7 @@ async function repararJsonJogosFotoOpenAI(textoOriginal) {
   }
 }
 
-async function identificarJogosPorFotoOpenAI(file) {
+async function identificarJogosPorFotoOpenAI(file, options = {}) {
   const mime = normalizarMimeImagem(file?.detected_mimetype || file?.mimetype || "");
   const base64 = fs.readFileSync(file.path).toString("base64");
   const controller = new AbortController();
@@ -2504,7 +2637,21 @@ async function identificarJogosPorFotoOpenAI(file) {
     "Nao confunda campeonato, patrocinador, apoio, realizacao, organizador, categoria, grupo, rodada ou local com nome de time.",
     "Nao transforme classificacao, ranking, tabela de pontos ou lista de equipes em confronto sem evidencia textual/visual de jogo entre dois times.",
     "Remova duplicados exatos. Preserve jogos entre os mesmos times quando rodada, data, horario, fase, numero do jogo, categoria ou grupo forem diferentes.",
-    "Se a imagem estiver ilegivel, ambigua ou sem confronto confiavel, retorne jogos como array vazio."
+    "Se a imagem estiver ilegivel, ambigua ou sem confronto confiavel, retorne jogos como array vazio.",
+    "Preencha resultado_gols_a e resultado_gols_b somente quando o placar do confronto estiver claramente visivel. Deixe ambos vazios quando nao houver placar confiavel.",
+    "Procure e preserve, quando legiveis: fase, rodada, data, horario, numero do jogo, categoria, grupo, local, cidade, ginasio ou estadio, modalidade, futebol ou futsal, masculino ou feminino e mando de campo.",
+    "Trate a tarefa como extracao esportiva detalhada, nunca como resumo curto.",
+    "Preencha os campos estruturados status, placar_tempo_normal, placar_final, disputa_penaltis, cidade, estadio_ginasio, modalidade, genero, classificacao, patrocinadores, organizador e transmissao quando legiveis.",
+    "Registre cada gol, cartao, expulsao ou substituicao em events. Para gols, type deve ser 'goal' e player, team e minute devem preservar exatamente nomes, acentos e minutos visiveis; use details para gol contra, penalti ou outra qualificacao.",
+    "Repita eventos quando o mesmo jogador marcar mais de uma vez; nunca combine nem elimine minutos diferentes.",
+    "Use additional_information para outros dados esportivos legiveis e uteis. Use observacao apenas para informacao que nao caiba nos campos estruturados.",
+    "Em Resultado, autores dos gols e minutos tem prioridade absoluta sobre informacoes secundarias.",
+    "Nunca use patrocinador, organizador, transmissao, competicao ou classificacao como nome de time.",
+    "Quando uma leitura util estiver incerta, escreva em additional_information no formato 'Possivel ... - confirmar.'; nao transforme suspeita em fato.",
+    "So marque algo como possivel quando o texto estiver realmente parcialmente legivel. Nao crie duvida sobre associacoes claras por alinhamento, coluna ou proximidade visual.",
+    "Preserve acentos, pontuacao, nomes proprios, ordem logica e quebras de linha.",
+    "Observacao pode ter ate 1.200 caracteres. Se houver mais conteudo, priorize autores dos gols e dados diretamente uteis a arte, sem cortar palavras, e informe que o restante foi resumido.",
+    "Escudos podem ajudar a identificar os times, mas nao recorte nem invente arquivos de escudo; o cliente adicionara as imagens separadamente."
   ].join("\n");
 
   try {
@@ -2589,7 +2736,7 @@ async function identificarJogosPorFotoOpenAI(file) {
       }
     }
 
-    return jogos;
+    return options.includeRaw === true ? { raw: payload, jogos } : jogos;
   } catch (err) {
     if (err?.name === "AbortError") {
       const timeoutErr = new Error("Tempo esgotado ao analisar a imagem.");
@@ -11148,8 +11295,19 @@ app.post("/bot/suporte/limpar-finalizadas", auth, (req, res) => {
   }
 });
 
-setInterval(finalizarConversasSuporteInativas, 60 * 1000);
+if (require.main === module) {
+  setInterval(finalizarConversasSuporteInativas, 60 * 1000);
+  app.listen(PORT, () => {
+    console.log("API rodando na porta", PORT);
+  });
+}
 
-app.listen(PORT, () => {
-  console.log("API rodando na porta", PORT);
-});
+module.exports = {
+  app,
+  __fotoJogosTest: {
+    schema: FOTO_JOGOS_JSON_SCHEMA,
+    normalizarRespostaJogosFoto,
+    formatarInformacoesEsportivasFotoJogo,
+    identificarJogosPorFotoOpenAI
+  }
+};
