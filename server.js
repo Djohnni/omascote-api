@@ -2299,55 +2299,86 @@ function normalizarEventoFotoJogo(value) {
 }
 
 function formatarInformacoesEsportivasFotoJogo(item, jogo) {
-  const linhas = [];
-  const adicionarSecao = (titulo, valores) => {
-    const lista = (Array.isArray(valores) ? valores : [valores]).filter(Boolean);
-    if (!lista.length) return;
-    linhas.push(`${titulo}:`, ...lista, "");
+  const blocos = [];
+  const adicionarBloco = (titulo, valores, linhaEmBrancoAposTitulo = false) => {
+    const lista = (Array.isArray(valores) ? valores : [valores])
+      .map(value => String(value || "").trim());
+    if (!lista.some(Boolean)) return;
+    blocos.push([`${titulo}:`, ...(linhaEmBrancoAposTitulo ? [""] : []), ...lista].join("\n"));
+  };
+  const formatarEvento = evento => {
+    const autor = evento.player || evento.team || normalizarTextoFotoJogo(evento.type, 40);
+    const minuto = evento.minute ? ` — ${evento.minute}` : "";
+    const detalhe = evento.details ? ` (${evento.details})` : "";
+    return `• ${autor}${minuto}${detalhe}`;
+  };
+  const agruparEventosPorTime = eventosLista => {
+    const grupos = [];
+    const porTime = new Map();
+    for (const evento of eventosLista) {
+      const time = evento.team || "Time não identificado";
+      const chave = normalizarTextoChaveFotoJogo(time) || time;
+      if (!porTime.has(chave)) {
+        const grupo = { time, eventos: [] };
+        porTime.set(chave, grupo);
+        grupos.push(grupo);
+      }
+      porTime.get(chave).eventos.push(evento);
+    }
+    return grupos.flatMap((grupo, index) => [
+      ...(index ? [""] : []),
+      grupo.time,
+      ...grupo.eventos.map(formatarEvento)
+    ]);
   };
   const eventos = (Array.isArray(item.events) ? item.events : [])
     .map(normalizarEventoFotoJogo)
     .filter(Boolean);
-  const gols = eventos.filter(evento => normalizarTextoChaveFotoJogo(evento.type) === "goal" || normalizarTextoChaveFotoJogo(evento.type) === "gol");
-  const outrosEventos = eventos.filter(evento => !gols.includes(evento));
+  const tipoEvento = evento => normalizarTextoChaveFotoJogo(evento.type);
+  const gols = eventos.filter(evento => ["goal", "gol"].includes(tipoEvento(evento)));
+  const expulsoes = eventos.filter(evento => /\b(red card|expulsion|expulsao|cartao vermelho)\b/.test(tipoEvento(evento)));
+  const cartoes = eventos.filter(evento =>
+    !expulsoes.includes(evento) &&
+    /\b(yellow card|card|cartao amarelo|cartao)\b/.test(tipoEvento(evento))
+  );
   const confronto = jogo.time_a && jogo.time_b
     ? `${jogo.time_a}${jogo.resultado_gols_a && jogo.resultado_gols_b ? ` ${jogo.resultado_gols_a} x ${jogo.resultado_gols_b} ` : " x "}${jogo.time_b}`
     : "";
 
-  adicionarSecao("Competição", jogo.competicao);
-  adicionarSecao("Resultado", confronto);
-  adicionarSecao("Situação", normalizarTextoFotoJogo(item.status, 80));
-  adicionarSecao("Autores dos gols", gols.map(evento => {
-    const autor = [evento.player, evento.team].filter(Boolean).join(", ");
-    const minuto = evento.minute ? ` — ${evento.minute}` : "";
-    const detalhe = evento.details ? ` (${evento.details})` : "";
-    return `- ${autor || "Gol"}${minuto}${detalhe}`;
-  }));
+  adicionarBloco("Competição", jogo.competicao);
+  adicionarBloco("Resultado", confronto);
+  adicionarBloco("Situação", normalizarTextoFotoJogo(item.status, 80));
+  adicionarBloco("Autores dos gols", agruparEventosPorTime(gols), true);
+  adicionarBloco("Cartões", agruparEventosPorTime(cartoes), true);
+  adicionarBloco("Expulsões", agruparEventosPorTime(expulsoes), true);
+  adicionarBloco("Disputa por pênaltis", normalizarTextoFotoJogo(item.disputa_penaltis, 100));
 
-  const detalhesPartida = [
-    item.placar_tempo_normal && `Placar no tempo normal: ${normalizarTextoFotoJogo(item.placar_tempo_normal, 60)}`,
-    item.placar_final && `Placar final: ${normalizarTextoFotoJogo(item.placar_final, 60)}`,
-    item.disputa_penaltis && `Disputa por pênaltis: ${normalizarTextoFotoJogo(item.disputa_penaltis, 100)}`,
-    outrosEventos.length && `Outros eventos:\n${outrosEventos.map(evento => {
-      const partes = [evento.type, evento.player, evento.team, evento.minute, evento.details].filter(Boolean);
-      return `- ${partes.join(" — ")}`;
-    }).join("\n")}`,
-    item.cidade && `Cidade: ${normalizarTextoFotoJogo(item.cidade, 80)}`,
-    item.estadio_ginasio && `Estádio/ginásio: ${normalizarTextoFotoJogo(item.estadio_ginasio, 120)}`,
-    item.modalidade && `Modalidade: ${normalizarTextoFotoJogo(item.modalidade, 80)}`,
-    item.genero && `Categoria: ${normalizarTextoFotoJogo(item.genero, 60)}`,
-    item.classificacao && `Classificação: ${normalizarTextoFotoJogo(item.classificacao, 160)}`,
-    item.patrocinadores && `Patrocinadores: ${normalizarTextoFotoJogo(item.patrocinadores, 180)}`,
-    item.organizador && `Organizador: ${normalizarTextoFotoJogo(item.organizador, 120)}`,
-    item.transmissao && `Transmissão: ${normalizarTextoFotoJogo(item.transmissao, 120)}`,
-    ...(Array.isArray(item.additional_information) ? item.additional_information : [])
-      .map(value => normalizarTextoFotoJogo(value, 180))
-  ].filter(Boolean);
-  adicionarSecao("Mais informações", detalhesPartida);
+  const local = [
+    normalizarTextoFotoJogo(item.estadio_ginasio, 120),
+    normalizarTextoFotoJogo(jogo.local, 120),
+    normalizarTextoFotoJogo(item.cidade, 80)
+  ].filter((value, index, lista) => value && lista.findIndex(outro => normalizarTextoChaveFotoJogo(outro) === normalizarTextoChaveFotoJogo(value)) === index);
+  adicionarBloco("Local", local.join(" — "));
+  adicionarBloco("Data", normalizarTextoFotoJogo(jogo.data, 40));
+  adicionarBloco("Horário", normalizarTextoFotoJogo(jogo.horario, 40));
+  adicionarBloco("Fase", normalizarTextoFotoJogo(jogo.fase, 80));
+  adicionarBloco("Rodada", normalizarTextoFotoJogo(jogo.rodada, 80));
+  adicionarBloco("Categoria", normalizarTextoFotoJogo(jogo.categoria || item.genero, 80));
+  adicionarBloco("Classificação", normalizarTextoFotoJogo(item.classificacao, 160));
+  adicionarBloco("Patrocinadores", normalizarTextoFotoJogo(item.patrocinadores, 180));
+  adicionarBloco("Organizador", normalizarTextoFotoJogo(item.organizador, 120));
+  adicionarBloco("Transmissão", normalizarTextoFotoJogo(item.transmissao, 120));
 
-  const legado = normalizarObservacaoFotoJogo(normalizarValorCampoFotoJogo(item.observacao));
-  if (legado && !linhas.join("\n").includes(legado)) adicionarSecao("Observações", legado);
-  return normalizarObservacaoFotoJogo(linhas.join("\n"));
+  const confirmar = [
+    ...(Array.isArray(item.additional_information) ? item.additional_information : []),
+    normalizarValorCampoFotoJogo(item.observacao)
+  ]
+    .map(value => normalizarTextoFotoJogo(value, 180))
+    .filter(value => /\b(possivel|confirmar|incerto|incerta|ilegivel|parcialmente legivel)\b/.test(normalizarTextoChaveFotoJogo(value)))
+    .map(value => `• ${value.replace(/^(confirmar\s*:?\s*)/i, "")}`);
+  adicionarBloco("Confirmar", confirmar);
+
+  return normalizarObservacaoFotoJogo(blocos.join("\n\n"));
 }
 
 function normalizarValorCampoFotoJogo(value) {
