@@ -2375,6 +2375,7 @@ function formatarInformacoesEsportivasFotoJogo(item, jogo) {
   ]
     .map(value => normalizarTextoFotoJogo(value, 180))
     .filter(value => /\b(possivel|confirmar|incerto|incerta|ilegivel|parcialmente legivel)\b/.test(normalizarTextoChaveFotoJogo(value)))
+    .filter(value => !/\b(imagem|texto visivel|foi identificado|icone|indicador|indicacao|placar extra|tempo placar extra|ocr)\b/.test(normalizarTextoChaveFotoJogo(value)))
     .map(value => `• ${value.replace(/^(confirmar\s*:?\s*)/i, "")}`);
   adicionarBloco("Confirmar", confirmar);
 

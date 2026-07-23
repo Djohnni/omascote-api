@@ -134,12 +134,13 @@ const casos = [
     entrada: jogo({
       additional_information: [
         "Possível horário: 19h30 - confirmar.",
+        "Possível indicação de tempo/placar extra: ícone '90' - confirmar.",
         "Imagem mostra dois escudos.",
         "Foi identificado futebol."
       ]
     }),
     esperados: ["Confirmar:\n• Possível horário: 19h30 - confirmar."],
-    ausentes: ["Imagem mostra", "Foi identificado"]
+    ausentes: ["Imagem mostra", "Foi identificado", "ícone", "placar extra"]
   },
   {
     nome: "próximo do limite",
