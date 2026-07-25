@@ -244,6 +244,12 @@ function readOrder(whatsapp, orderId) {
   return readJson(file, {});
 }
 
+function readOrderStatus(whatsapp, orderId) {
+  const file = orderPath(whatsapp, orderId);
+  assert.ok(file, `pedido ${orderId} nao encontrado`);
+  return fs.readFileSync(path.join(path.dirname(file), "status.txt"), "utf8").trim();
+}
+
 function resultBatchForm({ mode, requestId, batchId, tamperedValue }) {
   const form = new FormData();
   const fields = {
@@ -373,18 +379,21 @@ async function run() {
 
     const economic = await createResult(baseUrl, economicUser, "economica", "economic_balance", 0.01);
     assert.equal(economic.valor_final, 4);
-    assert.equal(economic.pagamento_pendente, false);
-    assert.equal((await getMe(baseUrl, economicUser)).saldo, 16);
+    assert.equal(economic.pagamento_pendente, true);
+    assert.equal(economic.requer_pix_antes_criacao, true);
+    assert.equal((await getMe(baseUrl, economicUser)).saldo, 20);
     const economicOrder = readOrder(economicUser, economic.pedido_id);
     assert.equal(economicOrder.modalidade_criacao, "economica");
     assert.equal(economicOrder.suporte_personalizado_incluido, false);
     assert.equal(economicOrder.valor_original, 4);
     assert.equal(economicOrder.valor_final, 4);
-    assert.equal(economicOrder.pagamento_info.valor_pago, 4);
+    assert.equal(economicOrder.pagamento_info, undefined);
+    assert.equal(economicOrder.motivo_pagamento_pendente, "pix_obrigatorio_criacao_economica");
+    assert.equal(readOrderStatus(economicUser, economic.pedido_id), "aguardando_pagamento");
 
     const economicReplay = await createResult(baseUrl, economicUser, "economica", "economic_balance", 0.01);
     assert.equal(economicReplay.pedido_id, economic.pedido_id);
-    assert.equal((await getMe(baseUrl, economicUser)).saldo, 16);
+    assert.equal((await getMe(baseUrl, economicUser)).saldo, 20);
 
     const ledger = readJson(SALDO_TRANSACOES_FILE, []);
     const supportTx = ledger.find(tx => tx.pedido_id === support.pedido_id);
@@ -392,10 +401,8 @@ async function run() {
     assert.equal(supportTx.valor, 8);
     assert.equal(supportTx.saldo_antes.saldo, 20);
     assert.equal(supportTx.saldo_depois.saldo, 12);
-    assert.equal(economicTx.valor, 4);
-    assert.equal(economicTx.saldo_antes.saldo, 20);
-    assert.equal(economicTx.saldo_depois.saldo, 16);
-    assert.equal(ledger.filter(tx => tx.pedido_id === economic.pedido_id).length, 1);
+    assert.equal(economicTx, undefined);
+    assert.equal(ledger.filter(tx => tx.pedido_id === economic.pedido_id).length, 0);
 
     const pendingSupport = await createResult(baseUrl, insufficientSupportUser, "com_suporte", "support_pix");
     assert.equal(pendingSupport.pagamento_pendente, true);
@@ -426,6 +433,7 @@ async function run() {
     assert.equal(paidWithLaterBalance.response.status, 200, JSON.stringify(paidWithLaterBalance.payload));
     assert.equal(paidWithLaterBalance.payload.valor_final, 4);
     assert.equal((await getMe(baseUrl, insufficientEconomicUser)).saldo, 0);
+    assert.equal(readOrderStatus(insufficientEconomicUser, pendingEconomic.pedido_id), "novo");
     const laterLedger = readJson(SALDO_TRANSACOES_FILE, []);
     assert.equal(laterLedger.find(tx => tx.pedido_id === pendingEconomic.pedido_id).valor, 4);
 
@@ -466,6 +474,36 @@ async function run() {
     const economicPixUser = "551100000008";
     putClient(economicPixUser, 0);
     const economicPixOrder = await createResult(baseUrl, economicPixUser, "economica", "economic_pix_approved");
+    const botToken = tokenFor("15991120599");
+    const botBeforePayment = await api(baseUrl, "GET", "/bot/pedidos/novos", { token: botToken });
+    assert.equal(botBeforePayment.response.status, 200);
+    assert.equal(
+      botBeforePayment.payload.pedidos.some(item => item.id === economicPixOrder.pedido_id),
+      false
+    );
+    const pendingZip = await api(
+      baseUrl,
+      "GET",
+      `/bot/pedidos/${economicPixOrder.pedido_id}/zip`,
+      { token: botToken }
+    );
+    assert.equal(pendingZip.response.status, 403);
+    const pendingStatusUpdate = await api(
+      baseUrl,
+      "POST",
+      `/bot/pedidos/${economicPixOrder.pedido_id}/status`,
+      { token: botToken, body: { status: "processando" } }
+    );
+    assert.equal(pendingStatusUpdate.response.status, 403);
+    const pendingUploadForm = new FormData();
+    pendingUploadForm.append("resultado", new Blob([tinyPng], { type: "image/png" }), "resultado_final.png");
+    const pendingUpload = await api(
+      baseUrl,
+      "POST",
+      `/bot/pedidos/${economicPixOrder.pedido_id}/upload-resultado`,
+      { token: botToken, form: pendingUploadForm }
+    );
+    assert.equal(pendingUpload.response.status, 403);
     const economicPix = await generatePix(baseUrl, economicPixUser, economicPixOrder.pedido_id);
     assert.equal(economicPix.response.status, 200, JSON.stringify(economicPix.payload));
     assert.equal(economicPix.payload.valor_final, 4);
@@ -500,6 +538,7 @@ async function run() {
     assert.equal(paidEconomicOrder.modalidade_criacao, "economica");
     assert.equal(paidEconomicOrder.pagamento_info.valor_pago, 4);
     assert.equal(paidEconomicOrder.pagamento_info.modalidade_criacao, "economica");
+    assert.equal(readOrderStatus(economicPixUser, economicPixOrder.pedido_id), "novo");
 
     const errorOrder = await createResult(baseUrl, pixErrorUser, "economica", "pix_error");
     gateway.failNextCreate = true;
@@ -598,7 +637,6 @@ async function run() {
     assert.match(invalidMode.payload.falhas[0].error, /Modalidade/);
     assert.equal((await getMe(baseUrl, invalidModeUser)).saldo, 20);
 
-    const botToken = tokenFor("15991120599");
     const botOrders = await api(baseUrl, "GET", "/bot/pedidos/novos", { token: botToken });
     assert.equal(botOrders.response.status, 200);
     assert.ok(botOrders.payload.pedidos.some(item => item.id === economicPixOrder.pedido_id));
@@ -659,17 +697,17 @@ async function run() {
     assert.ok(download.payload.length > 10);
 
     console.log("OK - saldo com suporte desconta R$8 e registra extrato");
-    console.log("OK - saldo economico desconta R$4 mesmo com valor adulterado no frontend");
-    console.log("OK - repeticao idempotente nao duplica pedido nem desconto");
+    console.log("OK - economico exige PIX antes da criacao e nao desconta saldo automaticamente");
+    console.log("OK - repeticao idempotente nao duplica pedido, PIX nem desconto");
     console.log("OK - saldo insuficiente cria pagamento pendente e pagamento posterior registra extrato");
     console.log("OK - PIX suporte gera R$8 com QR Code e copia e cola");
-    console.log("OK - PIX economico gera R$4 e preserva modalidade apos webhook");
+    console.log("OK - PIX economico gera R$4 e so libera a fila apos webhook aprovado");
     console.log("OK - requisicoes PIX simultaneas reutilizam a mesma cobranca");
     console.log("OK - gateway com erro ou cancelamento nao libera pedido e permite novo PIX");
     console.log("OK - webhook com assinatura invalida e rejeitado antes do processamento");
     console.log("OK - webhook rejeita pagamento divergente de R$8 para pedido economico de R$4");
     console.log("OK - modalidade invalida e adulteracao de preco sao rejeitadas/ignoradas");
-    console.log("OK - worker baixa pedido, envia resultado e conclui arte economica");
+    console.log("OK - worker nao acessa pedido economico pendente e conclui apos pagamento");
     console.log("OK - historico grava R$4 e bloqueia ajuste personalizado");
   } finally {
     await new Promise(resolve => server.close(resolve));

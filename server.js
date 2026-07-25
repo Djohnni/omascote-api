@@ -1114,6 +1114,25 @@ function isPedidoSemPagamentoConfirmado(pedido) {
   );
 }
 
+function pedidoEconomicoAguardandoPagamento(pedido) {
+  if (!pedido) return false;
+  return (
+    normalizarModalidadeCriacao(pedido.modalidade_criacao) === MODALIDADE_CRIACAO_ECONOMICA &&
+    isPedidoSemPagamentoConfirmado(pedido)
+  );
+}
+
+function liberarPedidoEconomicoAposPagamento(base, pedido) {
+  if (
+    normalizarModalidadeCriacao(pedido?.modalidade_criacao) !== MODALIDADE_CRIACAO_ECONOMICA ||
+    pedido?.pagamento_pendente === true
+  ) {
+    return false;
+  }
+  writeOrderStatus(base, orderStatus.ORDER_STATUS.NOVO);
+  return true;
+}
+
 function previewLimiterEntryStillCounts(entry) {
   if (!entry?.whatsapp || !entry?.pedido_id) return true;
 
@@ -9495,6 +9514,7 @@ app.post("/webhook/mercadopago", async (req, res) => {
 
       registrarUsoCupomPedido(pedido, whatsapp);
       fs.writeFileSync(pedidoPath, JSON.stringify(pedido, null, 2), "utf8");
+      liberarPedidoEconomicoAposPagamento(base, pedido);
 
       processados = readMpProcessados();
       processados[paymentId] = {
@@ -9732,12 +9752,19 @@ function criarPedidoHandler(categoria) {
     const cupomAplicado = resultadoCupom.cupomAplicado === true;
     let custoEfetivoPedido = brindeEscudo3dApp ? 0 : resultadoCupom.valorFinal;
 
-    const transacaoSaldoExistente = findSaldoDebitTransaction(
-      getClienteUserId(c, whatsapp),
-      dedupeMeta.clientRequestId,
-      custoEfetivoPedido
-    );
-    const temSaldoSuficiente = billingService.hasEnoughBalance(c, custoEfetivoPedido) || !!transacaoSaldoExistente;
+    const pagamentoAntecipadoObrigatorio =
+      modalidadeCriacao === MODALIDADE_CRIACAO_ECONOMICA &&
+      custoEfetivoPedido > 0;
+    const transacaoSaldoExistente = pagamentoAntecipadoObrigatorio
+      ? null
+      : findSaldoDebitTransaction(
+        getClienteUserId(c, whatsapp),
+        dedupeMeta.clientRequestId,
+        custoEfetivoPedido
+      );
+    const temSaldoSuficiente =
+      !pagamentoAntecipadoObrigatorio &&
+      (billingService.hasEnoughBalance(c, custoEfetivoPedido) || !!transacaoSaldoExistente);
 
     const previewLimiterIdentifiers = getPreviewLimiterIdentifiers(req, c, whatsapp);
     const previewLimiterState = getPreviewLimiterState(previewLimiterIdentifiers);
@@ -9930,9 +9957,14 @@ function criarPedidoHandler(categoria) {
     } else {
       draft.pedido.pagamento_pendente = true;
       draft.pedido.valor_pendente = custoEfetivoPedido;
-      draft.pedido.motivo_pagamento_pendente = "saldo_insuficiente";
+      draft.pedido.motivo_pagamento_pendente = pagamentoAntecipadoObrigatorio
+        ? "pix_obrigatorio_criacao_economica"
+        : "saldo_insuficiente";
       aplicarResumoCupomNoPedido(draft.pedido, resultadoCupom);
       orderService.orderStorage.writeOrder(draft.base, draft.pedido);
+      if (pagamentoAntecipadoObrigatorio) {
+        writeOrderStatus(draft.base, "aguardando_pagamento");
+      }
       registrarPreviewPendente({ identifiers: previewLimiterIdentifiers, whatsapp, pedidoId: id });
     }
 
@@ -9958,6 +9990,8 @@ function criarPedidoHandler(categoria) {
       valor_original: cupomAplicado ? resultadoCupom.valorOriginal : Number(custoPedido || 0),
       valor_desconto: cupomAplicado ? resultadoCupom.desconto : 0,
       valor_final: cupomAplicado ? resultadoCupom.valorFinal : Number(custoEfetivoPedido || 0),
+      modalidade_criacao: modalidadeCriacao,
+      requer_pix_antes_criacao: pagamentoAntecipadoObrigatorio,
       client_request_id: dedupeMeta.clientRequestId,
       mensagem: cupomAplicado
         ? `Cupom ${resultadoCupom.resumo.codigo} aplicado. Valor final: R$ ${resultadoCupom.valorFinal.toFixed(2).replace(".", ",")}.`
@@ -10201,8 +10235,12 @@ app.get("/bot/pedidos/novos", auth, (req, res) => {
       for (const id of ids) {
         const base = path.join(pastaMes, id);
         const statusPedido = readOrderStatus(base, "");
+        const pedido = readPedido(base);
 
-        if (statusPedido === "novo" || statusPedido === "ajuste_pendente") {
+        if (
+          (statusPedido === "novo" || statusPedido === "ajuste_pendente") &&
+          !pedidoEconomicoAguardandoPagamento(pedido)
+        ) {
           pedidos.push({ id, whatsapp, mes, status: statusPedido });
         }
       }
@@ -10221,6 +10259,13 @@ app.get("/bot/pedidos/:id/zip", auth, (req, res) => {
 
   if (!base) {
     return res.status(404).json({ ok: false, error: "Pedido não encontrado" });
+  }
+
+  if (pedidoEconomicoAguardandoPagamento(readPedido(base))) {
+    return res.status(403).json({
+      ok: false,
+      error: "Pagamento PIX pendente. O pedido economico ainda nao foi liberado para criacao."
+    });
   }
 
   res.setHeader("Content-Type", "application/zip");
@@ -10248,6 +10293,13 @@ app.post("/bot/pedidos/:id/status", auth, (req, res) => {
 
   const { status } = req.body || {};
 
+  if (pedidoEconomicoAguardandoPagamento(readPedido(base))) {
+    return res.status(403).json({
+      ok: false,
+      error: "Pagamento PIX pendente. O pedido economico ainda nao foi liberado."
+    });
+  }
+
   if (!orderStatus.isValidPublicStatus(status)) {
     return res.status(400).json({ ok: false, error: "status inválido" });
   }
@@ -10272,7 +10324,10 @@ app.get("/pedidos/novos", auth, (req, res) => {
   for (const id of fs.readdirSync(dir)) {
     const pdir = path.join(dir, id);
 
-    if (readOrderStatus(pdir, "") === "novo") {
+    if (
+      readOrderStatus(pdir, "") === "novo" &&
+      !pedidoEconomicoAguardandoPagamento(readPedido(pdir))
+    ) {
       pedidos.push({ id });
     }
   }
@@ -10427,6 +10482,7 @@ app.post("/pedidos/:id/pagar-com-saldo", auth, (req, res) => {
   clientes[whatsapp] = c;
   writeClientes(clientes);
   fs.writeFileSync(pedidoPath, JSON.stringify(pedido, null, 2), "utf8");
+  liberarPedidoEconomicoAposPagamento(base, pedido);
 
   return res.json({
     ok: true,
@@ -10937,6 +10993,14 @@ app.post(
 
     if (!base) {
       return res.status(404).json({ ok: false, error: "Pedido não encontrado" });
+    }
+
+    if (pedidoEconomicoAguardandoPagamento(readPedido(base))) {
+      limparUploadsRequest(req);
+      return res.status(403).json({
+        ok: false,
+        error: "Pagamento PIX pendente. O pedido economico ainda nao foi liberado."
+      });
     }
 
     const resultadoFile = req.files?.resultado?.[0] || null;
