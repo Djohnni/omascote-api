@@ -636,8 +636,27 @@ function criarReferenciaExternaPedidoPix(whatsapp, pedidoId, modalidadeCriacao) 
   return `px_${telefone}_${id}_${modalidade}`;
 }
 
+function criarReferenciaExternaLotePix(whatsapp, batchId) {
+  const telefone = String(whatsapp || "").replace(/\D/g, "");
+  const loteRef = crypto
+    .createHash("sha256")
+    .update(`${telefone}|${String(batchId || "")}`)
+    .digest("hex")
+    .slice(0, 24);
+  return `pxl_${telefone}_${loteRef}`;
+}
+
 function extrairReferenciaExternaPedidoPix(externalReference) {
   const external = String(externalReference || "");
+
+  const lote = external.match(/^pxl_(\d+)_([A-Za-z0-9_]+)$/);
+  if (lote) {
+    return {
+      whatsapp: lote[1],
+      batch_ref: lote[2],
+      tipo: "pedido_pix_lote"
+    };
+  }
 
   if (external.startsWith("pedido_pix|")) {
     const partes = external.split("|");
@@ -1117,14 +1136,20 @@ function isPedidoSemPagamentoConfirmado(pedido) {
 function pedidoEconomicoAguardandoPagamento(pedido) {
   if (!pedido) return false;
   return (
-    normalizarModalidadeCriacao(pedido.modalidade_criacao) === MODALIDADE_CRIACAO_ECONOMICA &&
+    (
+      pedido.assistente_lote === true ||
+      normalizarModalidadeCriacao(pedido.modalidade_criacao) === MODALIDADE_CRIACAO_ECONOMICA
+    ) &&
     isPedidoSemPagamentoConfirmado(pedido)
   );
 }
 
 function liberarPedidoEconomicoAposPagamento(base, pedido) {
   if (
-    normalizarModalidadeCriacao(pedido?.modalidade_criacao) !== MODALIDADE_CRIACAO_ECONOMICA ||
+    (
+      pedido?.assistente_lote !== true &&
+      normalizarModalidadeCriacao(pedido?.modalidade_criacao) !== MODALIDADE_CRIACAO_ECONOMICA
+    ) ||
     pedido?.pagamento_pendente === true
   ) {
     return false;
@@ -1706,7 +1731,9 @@ function normalizarFotoJogosBatchItem(rawItem, index, batchId, fileMap) {
     ...fields,
     flyer_tipo: fields.flyer_tipo || productInfo.flyerTipo || "",
     client_request_id: clientRequestId,
-    modalidade_criacao: modalidadeCriacao
+    modalidade_criacao: modalidadeCriacao,
+    batch_id: batchId,
+    assistente_lote: true
   };
   const files = getFotoJogosBatchMappedFiles(fileMap, item);
 
@@ -9324,9 +9351,113 @@ app.post("/webhook/mercadopago", async (req, res) => {
     const external = String(pagamento.external_reference || "");
     const externalPartes = external.split("|");
     const referenciaPedidoPix = extrairReferenciaExternaPedidoPix(external);
-    const tipo = pagamento.metadata?.tipo || (
+    const tipo = pagamento.metadata?.tipo || referenciaPedidoPix?.tipo || (
       referenciaPedidoPix ? "pedido_pix" : ""
     );
+
+    if (tipo === "pedido_pix_lote") {
+      const whatsapp = referenciaPedidoPix?.whatsapp || "";
+      const batchRef = referenciaPedidoPix?.batch_ref || "";
+      const itens = whatsapp && batchRef
+        ? listPedidoBasesByWhatsapp(whatsapp).filter(item =>
+            item.pedido?.assistente_lote === true &&
+            String(item.pedido?.pix_lote_ref || "") === batchRef &&
+            item.pedido?.pagamento_pendente === true
+          )
+        : [];
+      const batchId = String(itens[0]?.pedido?.batch_id || "");
+      const valorDevido = normalizarValorFinanceiro(
+        itens.reduce((total, item) => total + Number(item.pedido.valor_pendente || item.pedido.valor_final || 0), 0)
+      );
+      const valorAprovado = normalizarValorFinanceiro(pagamento.transaction_amount);
+      const moedaAprovada = String(pagamento.currency_id || "BRL").toUpperCase();
+      const idsDivergentes = itens.some(item =>
+        String(item.pedido.mp_order_id || "") !== String(paymentId) ||
+        (
+          item.pedido.mp_payment_id &&
+          pagamento.id &&
+          String(item.pedido.mp_payment_id) !== String(pagamento.id)
+        )
+      );
+
+      if (
+        !whatsapp ||
+        !batchRef ||
+        !itens.length ||
+        idsDivergentes ||
+        valorDevido <= 0 ||
+        valorAprovado <= 0 ||
+        Math.abs(valorAprovado - valorDevido) >= 0.01 ||
+        moedaAprovada !== "BRL"
+      ) {
+        processados = readMpProcessados();
+        processados[paymentId] = {
+          tipo: "pedido_pix_lote",
+          whatsapp,
+          batch_id: batchId,
+          status: "pagamento_divergente",
+          valor_devido: valorDevido,
+          valor_aprovado: valorAprovado,
+          moeda: moedaAprovada,
+          quantidade: itens.length,
+          criado_em: new Date().toISOString()
+        };
+        writeMpProcessados(processados);
+        return res.json({ ok: true, rejeitado: true });
+      }
+
+      const confirmadoEm = new Date().toISOString();
+      for (const item of itens) {
+        const pedido = item.pedido;
+        pedido.pagamento_pendente = false;
+        pedido.pagamento_metodo = "pix";
+        pedido.pagamento_confirmado_em = confirmadoEm;
+        pedido.mp_payment_status = "approved";
+        pedido.mp_order_status = "processed";
+        pedido.pagamento_info = {
+          tipo: "pedido_pix_lote",
+          status: pagamento.status || "",
+          valor_pago: Number(pedido.valor_final || pedido.valor_pendente || 0),
+          valor_lote: valorAprovado,
+          quantidade_lote: itens.length,
+          order_id: String(paymentId),
+          payment_id: String(pagamento.id || paymentId),
+          whatsapp,
+          pedido_id: item.id,
+          batch_id: batchId,
+          modalidade_criacao: normalizarModalidadeCriacao(pedido.modalidade_criacao),
+          confirmado_em: confirmadoEm
+        };
+        pedido.mensagens_cliente = Array.isArray(pedido.mensagens_cliente)
+          ? pedido.mensagens_cliente
+          : [];
+        pedido.mensagens_cliente.push({
+          id: `msg_pagamento_${paymentId}_${item.id}`,
+          tipo: "pagamento_confirmado",
+          titulo: "Pagamento confirmado ✅",
+          texto: "Pagamento aprovado. Sua arte foi enviada para produção.",
+          lida: false,
+          payment_id: String(paymentId),
+          criado_em: confirmadoEm
+        });
+        registrarUsoCupomPedido(pedido, whatsapp);
+        writePedido(item.base, pedido);
+        liberarPedidoEconomicoAposPagamento(item.base, pedido);
+      }
+
+      processados = readMpProcessados();
+      processados[paymentId] = {
+        tipo: "pedido_pix_lote",
+        whatsapp,
+        batch_id: batchId,
+        pedido_ids: itens.map(item => item.id),
+        valor_aprovado: valorAprovado,
+        status: pagamento.status,
+        criado_em: confirmadoEm
+      };
+      writeMpProcessados(processados);
+      return res.json({ ok: true, liberados: itens.length });
+    }
 
     if (tipo === "pedido_pix") {
       const whatsapp =
@@ -9752,9 +9883,10 @@ function criarPedidoHandler(categoria) {
     const cupomAplicado = resultadoCupom.cupomAplicado === true;
     let custoEfetivoPedido = brindeEscudo3dApp ? 0 : resultadoCupom.valorFinal;
 
+    const pedidoAssistente = req.fotoJogosBatchItem === true || req.body?.assistente_lote === true;
     const pagamentoAntecipadoObrigatorio =
-      modalidadeCriacao === MODALIDADE_CRIACAO_ECONOMICA &&
-      custoEfetivoPedido > 0;
+      custoEfetivoPedido > 0 &&
+      (pedidoAssistente || modalidadeCriacao === MODALIDADE_CRIACAO_ECONOMICA);
     const transacaoSaldoExistente = pagamentoAntecipadoObrigatorio
       ? null
       : findSaldoDebitTransaction(
@@ -9827,6 +9959,10 @@ function criarPedidoHandler(categoria) {
     draft.pedido.idempotency_key = dedupeMeta.key;
     draft.pedido.idempotency_payload_hash = dedupeMeta.payloadHash;
     draft.pedido.modalidade_criacao = modalidadeCriacao;
+    draft.pedido.assistente_lote = pedidoAssistente;
+    draft.pedido.batch_id = pedidoAssistente
+      ? normalizarFotoJogosBatchId(req.body?.batch_id || "")
+      : "";
     draft.pedido.suporte_personalizado_incluido = modalidadeCriacao !== MODALIDADE_CRIACAO_ECONOMICA;
     draft.pedido.valor_com_suporte = normalizarValorFinanceiro(custoPedidoComSuporte);
     draft.pedido.valor_original = cupomAplicado
@@ -9958,7 +10094,7 @@ function criarPedidoHandler(categoria) {
       draft.pedido.pagamento_pendente = true;
       draft.pedido.valor_pendente = custoEfetivoPedido;
       draft.pedido.motivo_pagamento_pendente = pagamentoAntecipadoObrigatorio
-        ? "pix_obrigatorio_criacao_economica"
+        ? (pedidoAssistente ? "pix_obrigatorio_assistente" : "pix_obrigatorio_criacao_economica")
         : "saldo_insuficiente";
       aplicarResumoCupomNoPedido(draft.pedido, resultadoCupom);
       orderService.orderStorage.writeOrder(draft.base, draft.pedido);
@@ -9992,6 +10128,8 @@ function criarPedidoHandler(categoria) {
       valor_final: cupomAplicado ? resultadoCupom.valorFinal : Number(custoEfetivoPedido || 0),
       modalidade_criacao: modalidadeCriacao,
       requer_pix_antes_criacao: pagamentoAntecipadoObrigatorio,
+      batch_id: draft.pedido.batch_id || "",
+      assistente_lote: draft.pedido.assistente_lote === true,
       client_request_id: dedupeMeta.clientRequestId,
       mensagem: cupomAplicado
         ? `Cupom ${resultadoCupom.resumo.codigo} aplicado. Valor final: R$ ${resultadoCupom.valorFinal.toFixed(2).replace(".", ",")}.`
@@ -10490,6 +10628,142 @@ app.post("/pedidos/:id/pagar-com-saldo", auth, (req, res) => {
     modalidade_criacao: normalizarModalidadeCriacao(pedido.modalidade_criacao),
     valor_final: Number(pedido.valor_final || valorPendente)
   });
+});
+
+app.post("/pedidos/gerar-pix-lote", auth, async (req, res) => {
+  try {
+    if (bloquearRecursoPagamentoNoApp(req, res)) return;
+    if (!MP_ACCESS_TOKEN) {
+      return res.status(500).json({ ok: false, error: "MP_ACCESS_TOKEN nao configurado" });
+    }
+
+    const whatsapp = req.user.whatsapp;
+    const batchId = normalizarFotoJogosBatchId(req.body?.batch_id || "");
+    if (!batchId) {
+      return res.status(400).json({ ok: false, error: "Lote invalido." });
+    }
+
+    const itens = listPedidoBasesByWhatsapp(whatsapp)
+      .filter(item =>
+        item.pedido?.assistente_lote === true &&
+        String(item.pedido?.batch_id || "") === batchId &&
+        item.pedido?.pagamento_pendente === true
+      );
+    if (!itens.length) {
+      return res.status(404).json({ ok: false, error: "Nenhum item pendente encontrado para este lote." });
+    }
+
+    const valorPix = normalizarValorFinanceiro(
+      itens.reduce((total, item) => total + Number(item.pedido.valor_pendente || item.pedido.valor_final || 0), 0)
+    );
+    if (valorPix <= 0) {
+      return res.status(400).json({ ok: false, error: "Valor pendente invalido." });
+    }
+
+    const existente = itens[0].pedido;
+    const todosNaMesmaCobranca = itens.every(item =>
+      item.pedido.mp_order_id &&
+      item.pedido.mp_order_id === existente.mp_order_id &&
+      item.pedido.pix_copia_cola === existente.pix_copia_cola
+    );
+    if (
+      todosNaMesmaCobranca &&
+      existente.pix_copia_cola &&
+      ["action_required", "pending"].includes(String(existente.mp_payment_status || "").toLowerCase())
+    ) {
+      return res.json({
+        ok: true,
+        batch_id: batchId,
+        pedido_ids: itens.map(item => item.id),
+        quantidade: itens.length,
+        pix_copia_cola: existente.pix_copia_cola,
+        qr_code_base64: existente.pix_qr_code_base64 || "",
+        ticket_url: existente.pix_ticket_url || "",
+        order_id: existente.mp_order_id,
+        payment_id: existente.mp_payment_id || "",
+        valor_final: valorPix,
+        valor_pendente: valorPix
+      });
+    }
+
+    const payerEmail = MP_SANDBOX_MODE
+      ? "test_user_br@testuser.com"
+      : `${String(whatsapp).replace(/\D/g, "") || "cliente"}@ia4tube.com.br`;
+    const pixTentativa = Math.max(
+      1,
+      ...itens.map(item => Number(item.pedido.pix_tentativa || 0) + 1)
+    );
+    const externalReference = criarReferenciaExternaLotePix(whatsapp, batchId);
+    const batchRef = externalReference.split("_").pop() || "";
+    const orderPayload = {
+      type: "online",
+      processing_mode: "automatic",
+      total_amount: valorPix.toFixed(2),
+      external_reference: externalReference,
+      payer: { email: payerEmail },
+      transactions: {
+        payments: [{
+          amount: valorPix.toFixed(2),
+          payment_method: { id: "pix", type: "bank_transfer" }
+        }]
+      }
+    };
+    const r = await fetch("https://api.mercadopago.com/v1/orders", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${MP_ACCESS_TOKEN}`,
+        "Content-Type": "application/json",
+        "X-Idempotency-Key": `pedido_pix_lote_${whatsapp}_${batchId}_${pixTentativa}`
+      },
+      body: JSON.stringify(orderPayload)
+    });
+    const data = await r.json();
+    if (!r.ok) {
+      return res.status(500).json({ ok: false, error: "Erro ao gerar Pix", detalhe: data });
+    }
+
+    const pagamentoOrder = obterPagamentoDaOrderMercadoPago(data);
+    const metodoPagamento = pagamentoOrder?.payment_method || {};
+    const pixCopiaCola = metodoPagamento.qr_code || "";
+    if (!pixCopiaCola) {
+      return res.status(500).json({ ok: false, error: "Mercado Pago nao retornou codigo Pix", detalhe: data });
+    }
+
+    const geradoEm = new Date().toISOString();
+    for (const item of itens) {
+      const pedido = item.pedido;
+      pedido.pagamento_metodo_pendente = "pix";
+      pedido.mp_order_id = String(data.id || "");
+      pedido.mp_payment_id = String(pagamentoOrder.id || "");
+      pedido.mp_payment_status = pagamentoOrder.status || data.status || "action_required";
+      pedido.mp_order_status = data.status || "action_required";
+      pedido.pix_tentativa = pixTentativa;
+      pedido.pix_copia_cola = pixCopiaCola;
+      pedido.pix_qr_code_base64 = metodoPagamento.qr_code_base64 || "";
+      pedido.pix_ticket_url = metodoPagamento.ticket_url || "";
+      pedido.pix_gerado_em = geradoEm;
+      pedido.pix_lote_valor = valorPix;
+      pedido.pix_lote_quantidade = itens.length;
+      pedido.pix_lote_ref = batchRef;
+      writePedido(item.base, pedido);
+    }
+
+    return res.json({
+      ok: true,
+      batch_id: batchId,
+      pedido_ids: itens.map(item => item.id),
+      quantidade: itens.length,
+      pix_copia_cola: pixCopiaCola,
+      qr_code_base64: metodoPagamento.qr_code_base64 || "",
+      ticket_url: metodoPagamento.ticket_url || "",
+      order_id: String(data.id || ""),
+      payment_id: String(pagamentoOrder.id || ""),
+      valor_final: valorPix,
+      valor_pendente: valorPix
+    });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: "Erro interno ao gerar Pix do lote" });
+  }
 });
 
 app.post("/pedidos/:id/gerar-pix", auth, async (req, res) => {

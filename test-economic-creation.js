@@ -283,6 +283,33 @@ function resultBatchForm({ mode, requestId, batchId, tamperedValue }) {
   return form;
 }
 
+function doubleResultBatchForm({ mode, batchId }) {
+  const form = new FormData();
+  const items = [0, 1].map(index => ({
+    product_id: "resultado",
+    client_request_id: `${batchId}_item_${index + 1}`,
+    modalidade_criacao: mode,
+    fields: {
+      flyer_tipo: "resultado",
+      rodada: `Rodada ${index + 1}`,
+      data: "25/07/2026",
+      hora: "12:00",
+      time_principal: `Time ${index + 1}A`,
+      time_adversario: `Time ${index + 1}B`,
+      gols_time_principal: "2",
+      gols_adversario: "1",
+      observacao: "Teste de PIX unico para duas artes"
+    },
+    files: { escudo1: `item_${index}_escudo1` }
+  }));
+  form.append("batch_id", batchId);
+  form.append("items_json", JSON.stringify(items));
+  items.forEach((item, index) => {
+    form.append(`item_${index}_escudo1`, new Blob([tinyPng], { type: "image/png" }), `escudo_${index}.png`);
+  });
+  return form;
+}
+
 async function createResult(baseUrl, whatsapp, mode, suffix, tamperedValue) {
   const { response, payload } = await api(
     baseUrl,
@@ -369,13 +396,16 @@ async function run() {
 
     const support = await createResult(baseUrl, supportUser, "com_suporte", "support_balance");
     assert.equal(support.valor_final, 8);
-    assert.equal(support.pagamento_pendente, false);
-    assert.equal((await getMe(baseUrl, supportUser)).saldo, 12);
+    assert.equal(support.pagamento_pendente, true);
+    assert.equal(support.requer_pix_antes_criacao, true);
+    assert.equal((await getMe(baseUrl, supportUser)).saldo, 20);
     const supportOrder = readOrder(supportUser, support.pedido_id);
     assert.equal(supportOrder.modalidade_criacao, "com_suporte");
     assert.equal(supportOrder.valor_original, 8);
     assert.equal(supportOrder.valor_final, 8);
-    assert.equal(supportOrder.pagamento_info.valor_pago, 8);
+    assert.equal(supportOrder.pagamento_info, undefined);
+    assert.equal(supportOrder.motivo_pagamento_pendente, "pix_obrigatorio_assistente");
+    assert.equal(readOrderStatus(supportUser, support.pedido_id), "aguardando_pagamento");
 
     const economic = await createResult(baseUrl, economicUser, "economica", "economic_balance", 0.01);
     assert.equal(economic.valor_final, 4);
@@ -388,7 +418,7 @@ async function run() {
     assert.equal(economicOrder.valor_original, 4);
     assert.equal(economicOrder.valor_final, 4);
     assert.equal(economicOrder.pagamento_info, undefined);
-    assert.equal(economicOrder.motivo_pagamento_pendente, "pix_obrigatorio_criacao_economica");
+    assert.equal(economicOrder.motivo_pagamento_pendente, "pix_obrigatorio_assistente");
     assert.equal(readOrderStatus(economicUser, economic.pedido_id), "aguardando_pagamento");
 
     const economicReplay = await createResult(baseUrl, economicUser, "economica", "economic_balance", 0.01);
@@ -398,9 +428,7 @@ async function run() {
     const ledger = readJson(SALDO_TRANSACOES_FILE, []);
     const supportTx = ledger.find(tx => tx.pedido_id === support.pedido_id);
     const economicTx = ledger.find(tx => tx.pedido_id === economic.pedido_id);
-    assert.equal(supportTx.valor, 8);
-    assert.equal(supportTx.saldo_antes.saldo, 20);
-    assert.equal(supportTx.saldo_depois.saldo, 12);
+    assert.equal(supportTx, undefined);
     assert.equal(economicTx, undefined);
     assert.equal(ledger.filter(tx => tx.pedido_id === economic.pedido_id).length, 0);
 
@@ -470,6 +498,75 @@ async function run() {
       readOrder(pixConcurrentUser, concurrentOrder.pedido_id).pix_tentativa,
       1
     );
+
+    const batchPixUser = "551100000011";
+    putClient(batchPixUser, 50);
+    const batchId = "economic_test_two_items_batch";
+    const batchCreate = await api(baseUrl, "POST", "/me/time/jogos/criar-artes", {
+      token: tokenFor(batchPixUser),
+      form: doubleResultBatchForm({ mode: "economica", batchId })
+    });
+    assert.equal(batchCreate.response.status, 200, JSON.stringify(batchCreate.payload));
+    assert.equal(batchCreate.payload.criados.length, 2);
+    assert.ok(batchCreate.payload.criados.every(item => item.pagamento_pendente === true));
+    assert.ok(batchCreate.payload.criados.every(item => item.valor_final === 4));
+    assert.equal((await getMe(baseUrl, batchPixUser)).saldo, 50);
+
+    const batchPix = await api(baseUrl, "POST", "/pedidos/gerar-pix-lote", {
+      token: tokenFor(batchPixUser),
+      body: { batch_id: batchId }
+    });
+    assert.equal(batchPix.response.status, 200, JSON.stringify(batchPix.payload));
+    assert.equal(batchPix.payload.quantidade, 2);
+    assert.equal(batchPix.payload.valor_final, 8);
+    assert.equal(batchPix.payload.pedido_ids.length, 2);
+    assert.ok(batchPix.payload.pix_copia_cola);
+    const batchGatewayOrder = gateway.created.get(String(batchPix.payload.order_id));
+    assert.equal(Number(batchGatewayOrder.total_amount), 8);
+    assert.match(batchGatewayOrder.external_reference, /^pxl_\d+_[a-f0-9]{24}$/);
+    const batchPixReplay = await api(baseUrl, "POST", "/pedidos/gerar-pix-lote", {
+      token: tokenFor(batchPixUser),
+      body: { batch_id: batchId }
+    });
+    assert.equal(batchPixReplay.payload.order_id, batchPix.payload.order_id);
+    assert.equal(gateway.created.size > 0, true);
+
+    gateway.approved.set(String(batchPix.payload.order_id), {
+      ...batchGatewayOrder,
+      status: "processed",
+      transactions: {
+        payments: [{
+          ...batchGatewayOrder.transactions.payments[0],
+          status: "processed"
+        }]
+      }
+    });
+    const batchWebhook = await webhook(baseUrl, batchPix.payload.order_id);
+    assert.equal(batchWebhook.response.status, 200);
+    assert.equal(batchWebhook.payload.liberados, 2);
+    for (const item of batchCreate.payload.criados) {
+      assert.equal(readOrder(batchPixUser, item.pedido_id).pagamento_pendente, false);
+      assert.equal(readOrderStatus(batchPixUser, item.pedido_id), "novo");
+    }
+
+    const supportBatchUser = "551100000012";
+    putClient(supportBatchUser, 50);
+    const supportBatchId = "support_test_two_items_batch";
+    const supportBatchCreate = await api(baseUrl, "POST", "/me/time/jogos/criar-artes", {
+      token: tokenFor(supportBatchUser),
+      form: doubleResultBatchForm({ mode: "com_suporte", batchId: supportBatchId })
+    });
+    assert.equal(supportBatchCreate.response.status, 200);
+    assert.equal(supportBatchCreate.payload.criados.length, 2);
+    assert.ok(supportBatchCreate.payload.criados.every(item => item.pagamento_pendente === true));
+    const supportBatchPix = await api(baseUrl, "POST", "/pedidos/gerar-pix-lote", {
+      token: tokenFor(supportBatchUser),
+      body: { batch_id: supportBatchId }
+    });
+    assert.equal(supportBatchPix.response.status, 200, JSON.stringify(supportBatchPix.payload));
+    assert.equal(supportBatchPix.payload.quantidade, 2);
+    assert.equal(supportBatchPix.payload.valor_final, 16);
+    assert.equal((await getMe(baseUrl, supportBatchUser)).saldo, 50);
 
     const economicPixUser = "551100000008";
     putClient(economicPixUser, 0);
@@ -696,13 +793,15 @@ async function run() {
     assert.ok(Buffer.isBuffer(download.payload));
     assert.ok(download.payload.length > 10);
 
-    console.log("OK - saldo com suporte desconta R$8 e registra extrato");
+    console.log("OK - assistente com suporte exige PIX de R$8 antes da criacao");
     console.log("OK - economico exige PIX antes da criacao e nao desconta saldo automaticamente");
     console.log("OK - repeticao idempotente nao duplica pedido, PIX nem desconto");
     console.log("OK - saldo insuficiente cria pagamento pendente e pagamento posterior registra extrato");
     console.log("OK - PIX suporte gera R$8 com QR Code e copia e cola");
     console.log("OK - PIX economico gera R$4 e so libera a fila apos webhook aprovado");
     console.log("OK - requisicoes PIX simultaneas reutilizam a mesma cobranca");
+    console.log("OK - duas artes economicas geram um unico PIX de R$8 e liberam juntas");
+    console.log("OK - duas artes com suporte geram um unico PIX de R$16 antes da criacao");
     console.log("OK - gateway com erro ou cancelamento nao libera pedido e permite novo PIX");
     console.log("OK - webhook com assinatura invalida e rejeitado antes do processamento");
     console.log("OK - webhook rejeita pagamento divergente de R$8 para pedido economico de R$4");
