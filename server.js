@@ -80,6 +80,7 @@ const FOTO_JOGOS_RATE_LIMIT_PENDING_TTL_MS = 5 * 60 * 1000;
 const FOTO_JOGOS_RATE_LIMIT_MAX_PER_MINUTE = 3;
 const FOTO_JOGOS_RATE_LIMIT_MAX_PER_DAY = 30;
 const FOTO_JOGOS_RATE_LIMIT_MAX_PER_IP_MINUTE = 12;
+const FOTO_JOGOS_ANALYSIS_DEDUPE_TTL_MS = 15 * 60 * 1000;
 
 const CLIENTES_TESTE = [
   "Los Hermanos",
@@ -1341,6 +1342,66 @@ function finalizarFotoJogosRateLimit(reserva, status) {
     atualizado_em: agora
   };
   writeFotoJogosRateLimit(lista);
+}
+
+const fotoJogosAnalysisDedupe = new Map();
+
+function normalizarFotoJogosAnalysisRequestId(value) {
+  return normalizarClientRequestId(value);
+}
+
+function hashFotoJogosAnalysisImage(imagem) {
+  const conteudo = Buffer.isBuffer(imagem?.buffer)
+    ? imagem.buffer
+    : imagem?.path
+      ? fs.readFileSync(imagem.path)
+      : Buffer.alloc(0);
+  return crypto
+    .createHash("sha256")
+    .update(conteudo)
+    .digest("hex");
+}
+
+function buildFotoJogosAnalysisDedupeKey(req, requestId) {
+  const normalizedRequestId = normalizarFotoJogosAnalysisRequestId(requestId);
+  if (!normalizedRequestId) return "";
+  const usuario = getFotoJogosUsuarioIdentificador(req);
+  return hashFotoJogosRateLimit(`foto-jogos:analysis:${usuario}:${normalizedRequestId}`);
+}
+
+function cleanupFotoJogosAnalysisDedupe(now = Date.now()) {
+  for (const [key, entry] of fotoJogosAnalysisDedupe.entries()) {
+    if (!entry || entry.expiresAt <= now) fotoJogosAnalysisDedupe.delete(key);
+  }
+}
+
+function getFotoJogosAnalysisDedupeEntry(key) {
+  if (!key) return null;
+  cleanupFotoJogosAnalysisDedupe();
+  const entry = fotoJogosAnalysisDedupe.get(key);
+  if (!entry || entry.expiresAt <= Date.now()) {
+    fotoJogosAnalysisDedupe.delete(key);
+    return null;
+  }
+  return entry;
+}
+
+function beginFotoJogosAnalysisDedupe(key, imageHash, promise) {
+  if (!key) return null;
+  const entry = {
+    imageHash,
+    promise,
+    expiresAt: Date.now() + FOTO_JOGOS_ANALYSIS_DEDUPE_TTL_MS
+  };
+  fotoJogosAnalysisDedupe.set(key, entry);
+  promise.then(() => {
+    const atual = fotoJogosAnalysisDedupe.get(key);
+    if (atual === entry) atual.expiresAt = Date.now() + FOTO_JOGOS_ANALYSIS_DEDUPE_TTL_MS;
+  }).catch(() => {
+    const atual = fotoJogosAnalysisDedupe.get(key);
+    if (atual === entry) fotoJogosAnalysisDedupe.delete(key);
+  });
+  return entry;
 }
 
 const FOTO_JOGOS_BATCH_MAX_ITEMS = 3;
@@ -7920,6 +7981,7 @@ app.post("/avaliar-jogadores/:token/votos", auth, (req, res) => {
 app.post("/me/time/jogos/identificar-por-foto", auth, uploadComErroControlado(upload.single("imagem")), async (req, res) => {
   const imagem = req.file;
   let rateLimitReserva = null;
+  let analysisRequestId = "";
 
   try {
     if (!imagem) {
@@ -7943,14 +8005,43 @@ app.post("/me/time/jogos/identificar-por-foto", auth, uploadComErroControlado(up
       });
     }
 
+    analysisRequestId = normalizarFotoJogosAnalysisRequestId(
+      req.get("X-Idempotency-Key") ||
+      req.get("Idempotency-Key") ||
+      req.body?.client_request_id ||
+      ""
+    );
+    const analysisDedupeKey = buildFotoJogosAnalysisDedupeKey(req, analysisRequestId);
+    const analysisImageHash = hashFotoJogosAnalysisImage(imagem);
+    const analysisDedupe = getFotoJogosAnalysisDedupeEntry(analysisDedupeKey);
+
+    if (analysisDedupe) {
+      if (analysisDedupe.imageHash !== analysisImageHash) {
+        const conflito = new Error("A chave desta análise já foi usada com outra imagem.");
+        conflito.status = 409;
+        throw conflito;
+      }
+      const jogos = await analysisDedupe.promise;
+      return res.json({
+        ok: true,
+        jogos,
+        analysis_request_id: analysisRequestId,
+        idempotent_replay: true
+      });
+    }
+
     rateLimitReserva = reservarFotoJogosRateLimit(req);
-    const jogos = await identificarJogosPorFotoOpenAI(imagem);
+    const analysisPromise = identificarJogosPorFotoOpenAI(imagem);
+    beginFotoJogosAnalysisDedupe(analysisDedupeKey, analysisImageHash, analysisPromise);
+    const jogos = await analysisPromise;
     finalizarFotoJogosRateLimit(rateLimitReserva, "success");
     rateLimitReserva = null;
 
     return res.json({
       ok: true,
-      jogos
+      jogos,
+      analysis_request_id: analysisRequestId,
+      idempotent_replay: false
     });
   } catch (err) {
     if (rateLimitReserva) {
@@ -11711,6 +11802,12 @@ module.exports = {
     normalizarRespostaJogosFoto,
     formatarInformacoesEsportivasFotoJogo,
     identificarJogosPorFotoOpenAI,
+    normalizarFotoJogosAnalysisRequestId,
+    hashFotoJogosAnalysisImage,
+    buildFotoJogosAnalysisDedupeKey,
+    getFotoJogosAnalysisDedupeEntry,
+    beginFotoJogosAnalysisDedupe,
+    cleanupFotoJogosAnalysisDedupe,
     normalizarModalidadeCriacao,
     calcularCustoPedidoPorModalidade
   }
