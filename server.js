@@ -5,7 +5,7 @@ const path = require("path");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const multer = require("multer");
-const archiver = require("archiver");
+const archiverModule = require("archiver");
 const crypto = require("crypto");
 const productsRegistry = require("./src/products");
 const orderStorage = require("./src/orders/order.storage");
@@ -13,6 +13,18 @@ const orderStatus = require("./src/orders/order.status");
 const orderService = require("./src/orders/order.service");
 const productAuditService = require("./src/orders/product-audit.service");
 const billingService = require("./src/billing/billing.service");
+
+function criarArquivoZip(options = {}) {
+  if (typeof archiverModule === "function") {
+    return archiverModule("zip", options);
+  }
+
+  if (typeof archiverModule?.ZipArchive === "function") {
+    return new archiverModule.ZipArchive(options);
+  }
+
+  throw new Error("Modulo de compactacao ZIP indisponivel.");
+}
 
 const app = express();
 
@@ -10123,7 +10135,7 @@ app.get("/bot/pedidos/:id/zip", auth, (req, res) => {
   res.setHeader("Content-Type", "application/zip");
   res.setHeader("Content-Disposition", `attachment; filename="${req.params.id}.zip"`);
 
-  const archive = archiver("zip", { zlib: { level: 9 } });
+  const archive = criarArquivoZip({ zlib: { level: 9 } });
 
   archive.on("error", err => res.status(500).end(String(err)));
 
@@ -10786,7 +10798,7 @@ app.get("/pedidos/:id/zip", auth, (req, res) => {
   res.setHeader("Content-Type", "application/zip");
   res.setHeader("Content-Disposition", `attachment; filename="${req.params.id}.zip"`);
 
-  const archive = archiver("zip", { zlib: { level: 9 } });
+  const archive = criarArquivoZip({ zlib: { level: 9 } });
 
   archive.on("error", err => res.status(500).end(String(err)));
 
