@@ -222,3 +222,14 @@ console.log("OK - seleção individual e lote preservam customer_notes por parti
 
 assert.equal(__fotoJogosTest.schema.properties.jogos.items.properties.events.type, "array");
 console.log("OK - schema esportivo estruturado");
+
+assert.equal(__fotoJogosTest.normalizarModalidadeCriacao("economica"), "economica");
+assert.equal(__fotoJogosTest.normalizarModalidadeCriacao("com_suporte"), "com_suporte");
+assert.equal(__fotoJogosTest.normalizarModalidadeCriacao("valor_invalido"), "com_suporte");
+assert.equal(__fotoJogosTest.calcularCustoPedidoPorModalidade(8, "com_suporte"), 8);
+assert.equal(__fotoJogosTest.calcularCustoPedidoPorModalidade(8, "economica"), 4);
+assert.equal(__fotoJogosTest.calcularCustoPedidoPorModalidade(4, "economica"), 4);
+assert.equal(__fotoJogosTest.calcularCustoPedidoPorModalidade(6, "economica"), 4);
+assert.equal(__fotoJogosTest.calcularCustoPedidoPorModalidade(7, "economica"), 4);
+assert.equal(__fotoJogosTest.calcularCustoPedidoPorModalidade(18, "economica"), 9);
+console.log("OK - modalidade econ\u00f4mica cobra metade com piso de R$ 4 por produto");

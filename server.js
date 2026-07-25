@@ -23,14 +23,23 @@ const JWT_SECRET = process.env.JWT_SECRET || "TROQUE_ISSO_AGORA";
 // ===== DATA STORAGE (RENDER DISK) =====
 const isRender = process.env.RENDER || process.env.NODE_ENV === "production";
 
-const DATA_DIR = isRender
-  ? "/var/data"
-  : path.join(__dirname, "dados");
+const DATA_DIR = process.env.OMASCOTE_DATA_DIR
+  ? path.resolve(process.env.OMASCOTE_DATA_DIR)
+  : isRender
+    ? "/var/data"
+    : path.join(__dirname, "dados");
 
 const PEDIDOS_DIR = path.join(DATA_DIR, "pedidos");
 const CLIENTES_FILE = path.join(DATA_DIR, "clientes.json");
 const BOT_ADMIN_WHATSAPP = process.env.BOT_ADMIN_WHATSAPP || "15991120599";
 const MP_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN || "";
+const MP_SANDBOX_MODE = String(
+  process.env.MP_SANDBOX_MODE || ""
+).toLowerCase() === "true";
+const MP_WEBHOOK_SECRET = String(process.env.MP_WEBHOOK_SECRET || "").trim();
+const PUBLIC_API_BASE_URL = String(
+  process.env.PUBLIC_API_BASE_URL || "https://api.omascote.com.br"
+).replace(/\/+$/, "");
 const MP_PROCESSADOS_FILE = path.join(DATA_DIR, "mp_processados.json");
 const TEMPO_ESTIMADO_FILE = path.join(DATA_DIR, "tempo_estimado.json");
 const ONLINE_FILE = path.join(DATA_DIR, "usuarios_online.json");
@@ -542,6 +551,159 @@ function getCustoPedido(categoria, cliente) {
   }
 
   return 0;
+}
+
+const MODALIDADE_CRIACAO_COM_SUPORTE = "com_suporte";
+const MODALIDADE_CRIACAO_ECONOMICA = "economica";
+const MODALIDADES_CRIACAO = new Set([
+  MODALIDADE_CRIACAO_COM_SUPORTE,
+  MODALIDADE_CRIACAO_ECONOMICA
+]);
+
+function normalizarModalidadeCriacao(value) {
+  const modalidade = String(value || "").trim().toLowerCase();
+  return MODALIDADES_CRIACAO.has(modalidade)
+    ? modalidade
+    : MODALIDADE_CRIACAO_COM_SUPORTE;
+}
+
+function calcularCustoPedidoPorModalidade(custoComSuporte, modalidadeCriacao) {
+  const custo = normalizarValorFinanceiro(custoComSuporte);
+  return normalizarModalidadeCriacao(modalidadeCriacao) === MODALIDADE_CRIACAO_ECONOMICA
+    ? normalizarValorFinanceiro(Math.max(4, custo / 2))
+    : custo;
+}
+
+function obterPagamentoDaOrderMercadoPago(order) {
+  const pagamentos = order?.transactions?.payments;
+  return Array.isArray(pagamentos) && pagamentos.length ? pagamentos[0] : {};
+}
+
+function normalizarOrderMercadoPagoComoPagamento(order) {
+  const transacao = obterPagamentoDaOrderMercadoPago(order);
+  const metodo = transacao?.payment_method || {};
+  const statusOrder = String(order?.status || "").toLowerCase();
+  const statusTransacao = String(transacao?.status || "").toLowerCase();
+  const aprovado =
+    ["processed", "approved"].includes(statusOrder) ||
+    ["processed", "approved"].includes(statusTransacao);
+
+  return {
+    id: String(transacao?.id || order?.id || ""),
+    order_id: String(order?.id || ""),
+    status: aprovado ? "approved" : (statusTransacao || statusOrder || "pending"),
+    transaction_amount: normalizarValorFinanceiro(
+      transacao?.amount || order?.total_amount
+    ),
+    currency_id: String(
+      transacao?.currency_id ||
+      order?.currency_id ||
+      (String(order?.country_code || "").toUpperCase() === "BRA" ? "BRL" : "")
+    ).toUpperCase(),
+    external_reference: order?.external_reference || "",
+    metadata: order?.metadata || {},
+    payer: order?.payer || transacao?.payer || {},
+    point_of_interaction: {
+      transaction_data: {
+        qr_code: metodo?.qr_code || "",
+        qr_code_base64: metodo?.qr_code_base64 || "",
+        ticket_url: metodo?.ticket_url || ""
+      }
+    }
+  };
+}
+
+function criarReferenciaExternaPedidoPix(whatsapp, pedidoId, modalidadeCriacao) {
+  const telefone = String(whatsapp || "").replace(/\D/g, "");
+  const id = String(pedidoId || "").replace(/[^A-Za-z0-9_]/g, "");
+  const modalidade = normalizarModalidadeCriacao(modalidadeCriacao) ===
+    MODALIDADE_CRIACAO_ECONOMICA
+    ? "e"
+    : "s";
+  return `px_${telefone}_${id}_${modalidade}`;
+}
+
+function extrairReferenciaExternaPedidoPix(externalReference) {
+  const external = String(externalReference || "");
+
+  if (external.startsWith("pedido_pix|")) {
+    const partes = external.split("|");
+    return {
+      whatsapp: partes[1] || "",
+      pedido_id: partes[2] || "",
+      modalidade_criacao: partes[4] || ""
+    };
+  }
+
+  const compacta = external.match(/^px_(\d+)_([A-Za-z0-9_]+)_([es])$/);
+  if (compacta) {
+    return {
+      whatsapp: compacta[1],
+      pedido_id: compacta[2],
+      modalidade_criacao:
+        compacta[3] === "e"
+          ? MODALIDADE_CRIACAO_ECONOMICA
+          : MODALIDADE_CRIACAO_COM_SUPORTE
+    };
+  }
+
+  if (!external.startsWith("pedido_pix_")) return null;
+
+  try {
+    const conteudo = Buffer.from(
+      external.slice("pedido_pix_".length),
+      "base64url"
+    ).toString("utf8");
+    const partes = conteudo.split("|");
+    return {
+      whatsapp: partes[0] || "",
+      pedido_id: partes[1] || "",
+      modalidade_criacao: partes[2] || ""
+    };
+  } catch {
+    return null;
+  }
+}
+
+function validarAssinaturaWebhookMercadoPago(req) {
+  if (!MP_WEBHOOK_SECRET) return true;
+
+  const assinatura = String(req.headers?.["x-signature"] || "");
+  const requestId = String(req.headers?.["x-request-id"] || "");
+  const dataId = String(
+    req.query?.["data.id"] ||
+    req.query?.data_id ||
+    req.body?.data?.id ||
+    ""
+  ).toLowerCase();
+  const partes = Object.fromEntries(
+    assinatura
+      .split(",")
+      .map(item => item.split("=", 2).map(value => value.trim()))
+      .filter(item => item.length === 2 && item[0] && item[1])
+  );
+  const timestamp = String(partes.ts || "");
+  const hashRecebido = String(partes.v1 || "").toLowerCase();
+
+  if (!timestamp || !hashRecebido) return false;
+
+  let manifest = "";
+  if (dataId) manifest += `id:${dataId};`;
+  if (requestId) manifest += `request-id:${requestId};`;
+  manifest += `ts:${timestamp};`;
+
+  const hashEsperado = crypto
+    .createHmac("sha256", MP_WEBHOOK_SECRET)
+    .update(manifest)
+    .digest("hex");
+  const esperado = Buffer.from(hashEsperado, "hex");
+  const recebido = Buffer.from(hashRecebido, "hex");
+
+  return (
+    esperado.length === recebido.length &&
+    esperado.length > 0 &&
+    crypto.timingSafeEqual(esperado, recebido)
+  );
 }
 
 const CREDITOS_SALDO_PERMITIDOS = new Set([800, 1800, 2800, 4800]);
@@ -1446,10 +1608,13 @@ function normalizarFotoJogosBatchItem(rawItem, index, batchId, fileMap) {
   const fields = item.fields && typeof item.fields === "object" && !Array.isArray(item.fields)
     ? item.fields
     : {};
+  const modalidadeCriacaoInformada = String(item.modalidade_criacao || "").trim().toLowerCase();
+  const modalidadeCriacao = normalizarModalidadeCriacao(modalidadeCriacaoInformada);
   const body = {
     ...fields,
     flyer_tipo: fields.flyer_tipo || productInfo.flyerTipo || "",
-    client_request_id: clientRequestId
+    client_request_id: clientRequestId,
+    modalidade_criacao: modalidadeCriacao
   };
   const files = getFotoJogosBatchMappedFiles(fileMap, item);
 
@@ -1458,19 +1623,11 @@ function normalizarFotoJogosBatchItem(rawItem, index, batchId, fileMap) {
     productId,
     productLabel: productInfo.label || productId,
     clientRequestId,
+    modalidadeCriacao,
+    modalidadeCriacaoValida: !modalidadeCriacaoInformada || MODALIDADES_CRIACAO.has(modalidadeCriacaoInformada),
     body,
     files
   };
-}
-
-function calcularCustoFotoJogosBatchItem({ req, cliente, whatsapp, productId, body, brindeContext }) {
-  const brindeEscudo3dApp = !brindeContext.usado && clienteElegivelBrindeEscudo3dApp({ ...req, body }, cliente, whatsapp, productId);
-  if (brindeEscudo3dApp) {
-    brindeContext.usado = true;
-    return 0;
-  }
-
-  return normalizarValorFinanceiro(getCustoPedido(productId, cliente));
 }
 
 function cleanupFotoJogosBatchDedupe(now = Date.now()) {
@@ -1515,6 +1672,7 @@ function buildFotoJogosBatchSubRequest(req, item) {
     url: "/me/time/jogos/criar-artes",
     headers,
     user: req.user,
+    fotoJogosBatchItem: true,
     body: item.body,
     files: item.files,
     file: undefined,
@@ -1573,13 +1731,20 @@ async function processarFotoJogosCriarArtesBatch(req, batchId, items) {
 
   const normalizados = items.map((item, index) => normalizarFotoJogosBatchItem(item, index, batchId, fileMap));
   const validos = [];
-  const brindeContext = { usado: false };
-  let custoTotal = 0;
-
   const mesAtual = nowYYYYMM();
   billingService.ensureCurrentBillingCycle(cliente, mesAtual);
 
   for (const item of normalizados) {
+    if (!item.modalidadeCriacaoValida) {
+      falhas.push({
+        index: item.index,
+        product_id: item.productId,
+        client_request_id: item.clientRequestId,
+        error: "Modalidade de cria\u00e7\u00e3o inv\u00e1lida."
+      });
+      continue;
+    }
+
     const validacao = validarFotoJogosBatchItem(item);
     if (!validacao.ok) {
       falhas.push({
@@ -1605,16 +1770,6 @@ async function processarFotoJogosCriarArtesBatch(req, batchId, items) {
       continue;
     }
 
-    const custo = calcularCustoFotoJogosBatchItem({
-      req,
-      cliente,
-      whatsapp,
-      productId: item.productId,
-      body: item.body,
-      brindeContext
-    });
-    item.custo = custo;
-    custoTotal = normalizarValorFinanceiro(custoTotal + custo);
     validos.push(item);
   }
 
@@ -1623,22 +1778,6 @@ async function processarFotoJogosCriarArtesBatch(req, batchId, items) {
     return {
       status: criados.length ? 200 : 400,
       payload: { ok: criados.length > 0, batch_id: batchId, criados, falhas }
-    };
-  }
-
-  if (!billingService.hasEnoughBalance(cliente, custoTotal)) {
-    validos.forEach(item => {
-      falhas.push({
-        index: item.index,
-        product_id: item.productId,
-        client_request_id: item.clientRequestId,
-        error: `Saldo insuficiente. Valor total: R$ ${custoTotal.toFixed(2).replace(".", ",")}.`
-      });
-    });
-    limparUploadsRequest(req);
-    return {
-      status: 402,
-      payload: { ok: false, batch_id: batchId, criados, falhas, valor_total: custoTotal }
     };
   }
 
@@ -1760,7 +1899,11 @@ function buildOrderResponsePayloadFromItem(item, extra = {}) {
   const pedidoId = pedido.id || item?.id || "";
   const descontoInfo = pedido.desconto_info || null;
   const valorPago = Number(pedido.pagamento_info?.valor_pago || 0);
-  const valorProduto = Number(getCustoPedido(pedido.categoria || pedido.product_id || "", null) || 0);
+  const modalidadeCriacao = normalizarModalidadeCriacao(pedido.modalidade_criacao);
+  const valorProduto = calcularCustoPedidoPorModalidade(
+    getCustoPedido(pedido.categoria || pedido.product_id || "", null),
+    modalidadeCriacao
+  );
   const valorOriginal = Number(pedido.valor_original || valorProduto || 0);
 
   return {
@@ -1774,6 +1917,8 @@ function buildOrderResponsePayloadFromItem(item, extra = {}) {
     valor_original: valorOriginal,
     valor_desconto: Number(pedido.valor_desconto || 0),
     valor_final: Number(pedido.valor_final || pedido.valor_pendente || valorPago || valorOriginal || 0),
+    modalidade_criacao: modalidadeCriacao,
+    suporte_personalizado_incluido: modalidadeCriacao !== MODALIDADE_CRIACAO_ECONOMICA,
     status: pedido.status || "",
     criado_em: pedido.criado_em || item?.criado_em || "",
     ...extra
@@ -8831,7 +8976,7 @@ app.post("/comprar-creditos", auth, async (req, res) => {
         failure: "https://omascote.com.br/app.html",
         pending: "https://omascote.com.br/app.html"
       },
-      notification_url: "https://api.omascote.com.br/webhook/mercadopago",
+      notification_url: `${PUBLIC_API_BASE_URL}/webhook/mercadopago`,
       auto_return: "approved"
     };
 
@@ -8905,7 +9050,7 @@ app.post("/comprar-creditos-pix", auth, async (req, res) => {
         pacote,
         credito: Number(p.credito)
       },
-      notification_url: "https://api.omascote.com.br/webhook/mercadopago"
+      notification_url: `${PUBLIC_API_BASE_URL}/webhook/mercadopago`
     };
 
     const r = await fetch("https://api.mercadopago.com/v1/payments", {
@@ -8943,8 +9088,24 @@ app.post("/comprar-creditos-pix", auth, async (req, res) => {
 
 app.post("/webhook/mercadopago", async (req, res) => {
   try {
+    if (!validarAssinaturaWebhookMercadoPago(req)) {
+      return res.status(401).json({
+        ok: false,
+        error: "Assinatura de webhook invalida."
+      });
+    }
+
     const body = req.body || {};
-    const paymentId = body?.data?.id || body?.id || req.query?.id;
+    const paymentId =
+      body?.data?.id ||
+      body?.id ||
+      req.query?.["data.id"] ||
+      req.query?.data_id ||
+      req.query?.id;
+    const tipoNotificacao = String(body?.type || req.query?.type || "").toLowerCase();
+    const notificacaoOrder =
+      tipoNotificacao === "order" ||
+      String(paymentId || "").toUpperCase().startsWith("ORD");
 
     if (!paymentId) {
       return res.json({ ok: true });
@@ -8963,15 +9124,74 @@ app.post("/webhook/mercadopago", async (req, res) => {
 
     writeMpProcessados(processados);
 
-    const r = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
+    const recursoUrl = notificacaoOrder
+      ? `https://api.mercadopago.com/v1/orders/${paymentId}`
+      : `https://api.mercadopago.com/v1/payments/${paymentId}`;
+    const r = await fetch(recursoUrl, {
       headers: {
         "Authorization": `Bearer ${MP_ACCESS_TOKEN}`
       }
     });
 
-    const pagamento = await r.json();
+    const recursoMercadoPago = await r.json();
+    const pagamento = notificacaoOrder
+      ? normalizarOrderMercadoPagoComoPagamento(recursoMercadoPago)
+      : recursoMercadoPago;
 
-    if (!r.ok || pagamento.status !== "approved") {
+    if (!r.ok) {
+      processados = readMpProcessados();
+      delete processados[paymentId];
+      writeMpProcessados(processados);
+
+      return res.json({ ok: true, status: pagamento.status || "ignorado" });
+    }
+
+    if (pagamento.status !== "approved") {
+      if (notificacaoOrder) {
+        const referenciaPendente = extrairReferenciaExternaPedidoPix(
+          pagamento.external_reference
+        );
+        const basePendente = referenciaPendente?.whatsapp && referenciaPendente?.pedido_id
+          ? getPedidoBase(
+              referenciaPendente.whatsapp,
+              referenciaPendente.pedido_id
+            )
+          : null;
+        const pedidoPathPendente = basePendente
+          ? path.join(basePendente, "pedido.json")
+          : "";
+        const pedidoPendente = pedidoPathPendente
+          ? safeReadJson(pedidoPathPendente)
+          : null;
+
+        if (
+          pedidoPendente &&
+          String(pedidoPendente.mp_order_id || "") === String(paymentId)
+        ) {
+          const statusOrder = String(
+            recursoMercadoPago?.status || pagamento.status || "pending"
+          ).toLowerCase();
+          const statusTerminal = [
+            "cancelled",
+            "canceled",
+            "expired",
+            "failed",
+            "rejected"
+          ].includes(statusOrder);
+
+          pedidoPendente.mp_order_status = statusOrder;
+          pedidoPendente.mp_payment_status = statusTerminal
+            ? statusOrder
+            : String(pagamento.status || statusOrder);
+          pedidoPendente.pix_status_atualizado_em = new Date().toISOString();
+          fs.writeFileSync(
+            pedidoPathPendente,
+            JSON.stringify(pedidoPendente, null, 2),
+            "utf8"
+          );
+        }
+      }
+
       processados = readMpProcessados();
       delete processados[paymentId];
       writeMpProcessados(processados);
@@ -8980,11 +9200,21 @@ app.post("/webhook/mercadopago", async (req, res) => {
     }
 
     const external = String(pagamento.external_reference || "");
-    const tipo = pagamento.metadata?.tipo || "";
+    const externalPartes = external.split("|");
+    const referenciaPedidoPix = extrairReferenciaExternaPedidoPix(external);
+    const tipo = pagamento.metadata?.tipo || (
+      referenciaPedidoPix ? "pedido_pix" : ""
+    );
 
     if (tipo === "pedido_pix") {
-      const whatsapp = pagamento.metadata?.whatsapp || external.split("|")[1];
-      const pedidoId = pagamento.metadata?.pedido_id || external.split("|")[2];
+      const whatsapp =
+        pagamento.metadata?.whatsapp ||
+        referenciaPedidoPix?.whatsapp ||
+        externalPartes[1];
+      const pedidoId =
+        pagamento.metadata?.pedido_id ||
+        referenciaPedidoPix?.pedido_id ||
+        externalPartes[2];
 
       if (!whatsapp || !pedidoId) {
         processados = readMpProcessados();
@@ -9028,17 +9258,65 @@ app.post("/webhook/mercadopago", async (req, res) => {
         return res.json({ ok: true });
       }
 
-      if (String(pedido.mp_payment_id || "") !== String(paymentId)) {
+      const idPedidoMercadoPago = notificacaoOrder
+        ? pedido.mp_order_id
+        : pedido.mp_payment_id;
+      const transacaoOrderDivergente =
+        notificacaoOrder &&
+        pedido.mp_payment_id &&
+        pagamento.id &&
+        String(pedido.mp_payment_id) !== String(pagamento.id);
+
+      if (
+        String(idPedidoMercadoPago || "") !== String(paymentId) ||
+        transacaoOrderDivergente
+      ) {
         processados = readMpProcessados();
         processados[paymentId] = {
           tipo: "pedido_pix",
           whatsapp,
           pedido_id: pedidoId,
-          status: "payment_id_divergente",
+          status: notificacaoOrder
+            ? "order_id_divergente"
+            : "payment_id_divergente",
           criado_em: new Date().toISOString()
         };
         writeMpProcessados(processados);
         return res.json({ ok: true });
+      }
+
+      const valorDevido = normalizarValorFinanceiro(pedido.valor_pendente || pedido.valor_final);
+      const valorAprovado = normalizarValorFinanceiro(pagamento.transaction_amount);
+      const moedaAprovada = String(pagamento.currency_id || "BRL").toUpperCase();
+      const modalidadePedido = normalizarModalidadeCriacao(pedido.modalidade_criacao);
+      const modalidadePagamentoInformada = String(
+        pagamento.metadata?.modalidade_criacao ||
+        (notificacaoOrder ? referenciaPedidoPix?.modalidade_criacao : "")
+      ).trim().toLowerCase();
+      const modalidadeDivergente =
+        modalidadePagamentoInformada &&
+        modalidadePagamentoInformada !== modalidadePedido;
+      const valorDivergente =
+        valorDevido <= 0 ||
+        valorAprovado <= 0 ||
+        Math.abs(valorAprovado - valorDevido) >= 0.01;
+
+      if (valorDivergente || moedaAprovada !== "BRL" || modalidadeDivergente) {
+        processados = readMpProcessados();
+        processados[paymentId] = {
+          tipo: "pedido_pix",
+          whatsapp,
+          pedido_id: pedidoId,
+          status: "pagamento_divergente",
+          valor_devido: valorDevido,
+          valor_aprovado: valorAprovado,
+          moeda: moedaAprovada,
+          modalidade_pedido: modalidadePedido,
+          modalidade_pagamento: modalidadePagamentoInformada,
+          criado_em: new Date().toISOString()
+        };
+        writeMpProcessados(processados);
+        return res.json({ ok: true, rejeitado: true });
       }
 
       const confirmadoEm = new Date().toISOString();
@@ -9049,13 +9327,18 @@ app.post("/webhook/mercadopago", async (req, res) => {
       pedido.pagamento_metodo = "pix";
       pedido.pagamento_confirmado_em = confirmadoEm;
       pedido.mp_payment_status = "approved";
+      if (notificacaoOrder) {
+        pedido.mp_order_status = "processed";
+      }
       pedido.pagamento_info = {
         tipo: "pedido_pix",
         status: pagamento.status || "",
-        valor_pago: Number(pagamento.transaction_amount || 0),
-        payment_id: String(paymentId),
+        valor_pago: valorAprovado,
+        order_id: notificacaoOrder ? String(paymentId) : "",
+        payment_id: String(pagamento.id || paymentId),
         whatsapp: whatsapp,
         pedido_id: pedidoId,
+        modalidade_criacao: modalidadePedido,
         confirmado_em: confirmadoEm,
         pagador: {
           email: pagamento.payer?.email || "",
@@ -9115,6 +9398,7 @@ app.post("/webhook/mercadopago", async (req, res) => {
         tipo: "pedido_pix",
         whatsapp,
         pedido_id: pedidoId,
+        modalidade_criacao: modalidadePedido,
         status: pagamento.status,
         criado_em: new Date().toISOString()
       };
@@ -9274,7 +9558,11 @@ function criarPedidoHandler(categoria) {
     const temBrindeMascote = billingService.hasMascoteUniformeGift(categoria, c);
     const brindeEscudo3dApp = clienteElegivelBrindeEscudo3dApp(req, c, whatsapp, categoria);
 
-    const custoPedido = getCustoPedido(categoria, c);
+    const modalidadeCriacao = req.fotoJogosBatchItem === true
+      ? normalizarModalidadeCriacao(req.body?.modalidade_criacao)
+      : MODALIDADE_CRIACAO_COM_SUPORTE;
+    const custoPedidoComSuporte = getCustoPedido(categoria, c);
+    const custoPedido = calcularCustoPedidoPorModalidade(custoPedidoComSuporte, modalidadeCriacao);
     const valorBaseParaCupom = brindeEscudo3dApp ? 0 : custoPedido;
     const cupomCodigo = normalizarCupomCodigo(req.body?.cupom_codigo);
     let cupomLockAtivo = false;
@@ -9408,6 +9696,16 @@ function criarPedidoHandler(categoria) {
     draft.pedido.client_request_id = dedupeMeta.clientRequestId;
     draft.pedido.idempotency_key = dedupeMeta.key;
     draft.pedido.idempotency_payload_hash = dedupeMeta.payloadHash;
+    draft.pedido.modalidade_criacao = modalidadeCriacao;
+    draft.pedido.suporte_personalizado_incluido = modalidadeCriacao !== MODALIDADE_CRIACAO_ECONOMICA;
+    draft.pedido.valor_com_suporte = normalizarValorFinanceiro(custoPedidoComSuporte);
+    draft.pedido.valor_original = cupomAplicado
+      ? normalizarValorFinanceiro(resultadoCupom.valorOriginal)
+      : normalizarValorFinanceiro(custoPedido);
+    draft.pedido.valor_desconto = cupomAplicado
+      ? normalizarValorFinanceiro(resultadoCupom.desconto)
+      : 0;
+    draft.pedido.valor_final = normalizarValorFinanceiro(custoEfetivoPedido);
     registrarAuditoriaProdutoPedido({ categoria, fields, files, pedidoId: id, request:req });
 
     if (temSaldoSuficiente) {
@@ -9913,6 +10211,8 @@ app.get("/meus-pedidos", auth, (req, res) => {
       descricao_instagram: item.pedido.descricao_instagram || "",
       aprovado_cliente: aprovadoCliente,
       pagamento_pendente: pagamentoPendente,
+      modalidade_criacao: normalizarModalidadeCriacao(item.pedido.modalidade_criacao),
+      suporte_personalizado_incluido: normalizarModalidadeCriacao(item.pedido.modalidade_criacao) !== MODALIDADE_CRIACAO_ECONOMICA,
       valor_pendente: Number(item.pedido.valor_pendente || 0),
       valor_original: Number(item.pedido.valor_original || 0),
       valor_desconto: Number(item.pedido.valor_desconto || 0),
@@ -9922,7 +10222,12 @@ app.get("/meus-pedidos", auth, (req, res) => {
       ajuste_automatico_usado: ajusteUsado,
       motivo_ajuste: item.pedido.motivo_ajuste || "",
       pode_baixar: imagemPronta && aprovadoCliente && !pagamentoPendente,
-      pode_pedir_ajuste: imagemPronta && !aprovadoCliente && !ajusteUsado && status === "pronto"
+      pode_pedir_ajuste:
+        normalizarModalidadeCriacao(item.pedido.modalidade_criacao) !== MODALIDADE_CRIACAO_ECONOMICA &&
+        imagemPronta &&
+        !aprovadoCliente &&
+        !ajusteUsado &&
+        status === "pronto"
     };
   });
 
@@ -9975,7 +10280,12 @@ app.post("/pedidos/:id/pagar-com-saldo", auth, (req, res) => {
     });
   }
 
-  billingService.applyOrderCharge(c, {
+  const pagamentoRequestId = pedido.client_request_id || `pagamento_pendente_${req.params.id}`;
+  const saldoChargeInfo = aplicarCobrancaPedidoComLedger({
+    cliente: c,
+    whatsapp,
+    pedidoId: req.params.id,
+    clientRequestId: pagamentoRequestId,
     custoPedido: valorPendente,
     mesAtual,
     temBrindeMascote: false
@@ -9993,7 +10303,10 @@ app.post("/pedidos/:id/pagar-com-saldo", auth, (req, res) => {
     payment_id: "",
     whatsapp: whatsapp,
     pedido_id: req.params.id,
-    confirmado_em: confirmadoEm
+    confirmado_em: confirmadoEm,
+    client_request_id: pagamentoRequestId,
+    transacao_saldo_id: saldoChargeInfo?.transacao?.id || "",
+    transacao_saldo_reutilizada: saldoChargeInfo?.reused === true
   };
   registrarUsoCupomPedido(pedido, whatsapp);
   pedido.mensagens_cliente = Array.isArray(pedido.mensagens_cliente)
@@ -10014,7 +10327,9 @@ app.post("/pedidos/:id/pagar-com-saldo", auth, (req, res) => {
 
   return res.json({
     ok: true,
-    pagamento_pendente: false
+    pagamento_pendente: false,
+    modalidade_criacao: normalizarModalidadeCriacao(pedido.modalidade_criacao),
+    valor_final: Number(pedido.valor_final || valorPendente)
   });
 });
 
@@ -10048,50 +10363,66 @@ app.post("/pedidos/:id/gerar-pix", auth, async (req, res) => {
     }
 
     if (
-      pedido.mp_payment_id &&
+      pedido.mp_order_id &&
       pedido.pix_copia_cola &&
-      String(pedido.mp_payment_status || "").toLowerCase() === "pending"
+      ["action_required", "pending"].includes(
+        String(pedido.mp_payment_status || "").toLowerCase()
+      )
     ) {
       return res.json({
         ok: true,
         pix_copia_cola: pedido.pix_copia_cola,
         qr_code_base64: pedido.pix_qr_code_base64 || "",
         ticket_url: pedido.pix_ticket_url || "",
-        payment_id: pedido.mp_payment_id,
+        order_id: pedido.mp_order_id,
+        payment_id: pedido.mp_payment_id || "",
         valor_pendente: Number(pedido.valor_pendente || 0),
         valor_original: Number(pedido.valor_original || 0),
         valor_desconto: Number(pedido.valor_desconto || 0),
         valor_final: Number(pedido.valor_final || pedido.valor_pendente || 0),
+        modalidade_criacao: normalizarModalidadeCriacao(pedido.modalidade_criacao),
         desconto_info: pedido.desconto_info || null
       });
     }
 
-    const payerEmail = `${String(whatsapp).replace(/\D/g, "") || "cliente"}@ia4tube.com.br`;
-    const paymentPayload = {
-      transaction_amount: Number(valorPendente.toFixed(2)),
-      description: `IA4Tube - Desbloqueio pedido ${id}`,
-      payment_method_id: "pix",
+    const payerEmail = MP_SANDBOX_MODE
+      ? "test_user_br@testuser.com"
+      : `${String(whatsapp).replace(/\D/g, "") || "cliente"}@ia4tube.com.br`;
+    const valorPix = Number(valorPendente.toFixed(2));
+    const modalidadeCriacao = normalizarModalidadeCriacao(pedido.modalidade_criacao);
+    const pixTentativa = Math.max(1, Number(pedido.pix_tentativa || 0) + 1);
+    const externalReference = criarReferenciaExternaPedidoPix(
+      whatsapp,
+      id,
+      modalidadeCriacao
+    );
+    const orderPayload = {
+      type: "online",
+      processing_mode: "automatic",
+      total_amount: valorPix.toFixed(2),
+      external_reference: externalReference,
       payer: {
         email: payerEmail
       },
-      external_reference: `pedido_pix|${whatsapp}|${id}|${Date.now()}`,
-      metadata: {
-        tipo: "pedido_pix",
-        whatsapp,
-        pedido_id: id,
-        valor_pendente: Number(valorPendente.toFixed(2))
-      },
-      notification_url: "https://api.omascote.com.br/webhook/mercadopago"
+      transactions: {
+        payments: [{
+          amount: valorPix.toFixed(2),
+          payment_method: {
+            id: "pix",
+            type: "bank_transfer"
+          }
+        }]
+      }
     };
 
-    const r = await fetch("https://api.mercadopago.com/v1/payments", {
+    const r = await fetch("https://api.mercadopago.com/v1/orders", {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${MP_ACCESS_TOKEN}`,
         "Content-Type": "application/json",
-        "X-Idempotency-Key": `pedido_pix_${id}_${Date.now()}`
+        "X-Idempotency-Key": `pedido_pix_order_${id}_${pixTentativa}`
       },
-      body: JSON.stringify(paymentPayload)
+      body: JSON.stringify(orderPayload)
     });
 
     const data = await r.json();
@@ -10100,7 +10431,13 @@ app.post("/pedidos/:id/gerar-pix", auth, async (req, res) => {
       return res.status(500).json({ ok: false, error: "Erro ao gerar Pix", detalhe: data });
     }
 
-    const transactionData = data.point_of_interaction?.transaction_data || {};
+    const pagamentoOrder = obterPagamentoDaOrderMercadoPago(data);
+    const metodoPagamento = pagamentoOrder?.payment_method || {};
+    const transactionData = {
+      qr_code: metodoPagamento.qr_code || "",
+      qr_code_base64: metodoPagamento.qr_code_base64 || "",
+      ticket_url: metodoPagamento.ticket_url || ""
+    };
     const pixCopiaCola = transactionData.qr_code || "";
     const qrCodeBase64 = transactionData.qr_code_base64 || "";
     const ticketUrl = transactionData.ticket_url || "";
@@ -10110,8 +10447,11 @@ app.post("/pedidos/:id/gerar-pix", auth, async (req, res) => {
     }
 
     pedido.pagamento_metodo_pendente = "pix";
-    pedido.mp_payment_id = String(data.id || "");
-    pedido.mp_payment_status = data.status || "pending";
+    pedido.mp_order_id = String(data.id || "");
+    pedido.mp_payment_id = String(pagamentoOrder.id || "");
+    pedido.mp_payment_status = pagamentoOrder.status || data.status || "action_required";
+    pedido.mp_order_status = data.status || "action_required";
+    pedido.pix_tentativa = pixTentativa;
     pedido.pix_copia_cola = pixCopiaCola;
     pedido.pix_qr_code_base64 = qrCodeBase64;
     pedido.pix_ticket_url = ticketUrl;
@@ -10124,11 +10464,13 @@ app.post("/pedidos/:id/gerar-pix", auth, async (req, res) => {
       pix_copia_cola: pixCopiaCola,
       qr_code_base64: qrCodeBase64,
       ticket_url: ticketUrl,
+      order_id: pedido.mp_order_id,
       payment_id: pedido.mp_payment_id,
       valor_pendente: Number(pedido.valor_pendente || 0),
       valor_original: Number(pedido.valor_original || 0),
       valor_desconto: Number(pedido.valor_desconto || 0),
       valor_final: Number(pedido.valor_final || pedido.valor_pendente || 0),
+      modalidade_criacao: normalizarModalidadeCriacao(pedido.modalidade_criacao),
       desconto_info: pedido.desconto_info || null
     });
   } catch (e) {
@@ -10154,12 +10496,14 @@ app.get("/pedidos/:id/pagamento-info", auth, (req, res) => {
     valor_original: Number(pedido.valor_original || 0),
     valor_desconto: Number(pedido.valor_desconto || 0),
     valor_final: Number(pedido.valor_final || pedido.valor_pendente || 0),
+    modalidade_criacao: normalizarModalidadeCriacao(pedido.modalidade_criacao),
     desconto_info: pedido.desconto_info || null,
+    order_id: pedido.mp_order_id || "",
+    payment_id: pedido.mp_payment_id || "",
     mp_payment_status: pedido.mp_payment_status || "",
     pix_copia_cola: pedido.pix_copia_cola || "",
     qr_code_base64: pedido.pix_qr_code_base64 || "",
-    ticket_url: pedido.pix_ticket_url || "",
-    payment_id: pedido.mp_payment_id || ""
+    ticket_url: pedido.pix_ticket_url || ""
   });
 });
 
@@ -10213,6 +10557,13 @@ app.post("/pedidos/:id/solicitar-ajuste", auth, (req, res) => {
 
   const pedidoPath = path.join(base, "pedido.json");
   const pedido = safeReadJson(pedidoPath) || {};
+
+  if (pedido.modalidade_criacao === MODALIDADE_CRIACAO_ECONOMICA) {
+    return res.status(403).json({
+      ok: false,
+      error: "A cria\u00e7\u00e3o econ\u00f4mica n\u00e3o inclui pedidos de altera\u00e7\u00e3o ou atendimento personalizado. Em caso de falha t\u00e9cnica, fale com o suporte."
+    });
+  }
 
   if (pedido.ajuste_automatico_usado === true) {
     const conversa = salvarMensagemSuporteAberta(
@@ -10344,6 +10695,8 @@ app.get("/pedidos/:id/info", auth, (req, res) => {
       : null,
     aprovado_cliente: pedido.aprovado_cliente === true,
     pagamento_pendente: pedido.pagamento_pendente === true,
+    modalidade_criacao: normalizarModalidadeCriacao(pedido.modalidade_criacao),
+    suporte_personalizado_incluido: normalizarModalidadeCriacao(pedido.modalidade_criacao) !== MODALIDADE_CRIACAO_ECONOMICA,
     valor_pendente: Number(pedido.valor_pendente || 0),
     valor_original: Number(pedido.valor_original || 0),
     valor_desconto: Number(pedido.valor_desconto || 0),
@@ -10353,7 +10706,12 @@ app.get("/pedidos/:id/info", auth, (req, res) => {
     ajuste_automatico_usado: pedido.ajuste_automatico_usado === true,
     motivo_ajuste: pedido.motivo_ajuste || "",
     pode_baixar: imagem_pronta && pedido.aprovado_cliente === true && pedido.pagamento_pendente !== true,
-    pode_pedir_ajuste: imagem_pronta && pedido.aprovado_cliente !== true && pedido.ajuste_automatico_usado !== true && status === "pronto"
+    pode_pedir_ajuste:
+      normalizarModalidadeCriacao(pedido.modalidade_criacao) !== MODALIDADE_CRIACAO_ECONOMICA &&
+      imagem_pronta &&
+      pedido.aprovado_cliente !== true &&
+      pedido.ajuste_automatico_usado !== true &&
+      status === "pronto"
   });
 });
 
@@ -11340,6 +11698,8 @@ module.exports = {
     schema: FOTO_JOGOS_JSON_SCHEMA,
     normalizarRespostaJogosFoto,
     formatarInformacoesEsportivasFotoJogo,
-    identificarJogosPorFotoOpenAI
+    identificarJogosPorFotoOpenAI,
+    normalizarModalidadeCriacao,
+    calcularCustoPedidoPorModalidade
   }
 };
