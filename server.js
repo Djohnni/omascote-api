@@ -1110,10 +1110,6 @@ function findPedidoByClientRequestId(whatsapp, clientRequestId) {
   return orderStorage.findPedidoByClientRequestId(PEDIDOS_DIR, whatsapp, clientRequestId);
 }
 
-function removeOldPedidos(whatsapp, maxKeep = 15) {
-  return orderStorage.removeOldPedidos(PEDIDOS_DIR, whatsapp, maxKeep);
-}
-
 function getPreviewLimiterIp(req) {
   const forwarded = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
   return forwarded || req.ip || req.socket?.remoteAddress || "";
@@ -10363,8 +10359,6 @@ function criarPedidoHandler(categoria) {
       cupomLockAtivo = false;
     }
 
-    removeOldPedidos(whatsapp, 15);
-
     const responsePayload = {
       ok: true,
       pedido_id: id,
@@ -10733,7 +10727,7 @@ app.get("/meus-pedidos", auth, (req, res) => {
     return res.status(404).json({ ok: false, error: "Cliente nao encontrado" });
   }
 
-  const itens = listPedidoBasesByWhatsapp(whatsapp).slice(0, 15);
+  const itens = listPedidoBasesByWhatsapp(whatsapp);
 
   const pedidos = itens.map((item) => {
     const resultadoFinalPath = path.join(item.base, "resultado_final.png");

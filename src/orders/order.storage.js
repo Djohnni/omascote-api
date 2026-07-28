@@ -120,20 +120,6 @@ function findPedidoByClientRequestId(pedidosDir, whatsapp, clientRequestId) {
   return null;
 }
 
-function removeOldPedidos(pedidosDir, whatsapp, maxKeep = 15) {
-  const pedidos = listPedidoBasesByWhatsapp(pedidosDir, whatsapp);
-
-  if (pedidos.length <= maxKeep) return;
-
-  const excedentes = pedidos.slice(maxKeep);
-
-  for (const item of excedentes) {
-    try {
-      fs.rmSync(item.base, { recursive: true, force: true });
-    } catch {}
-  }
-}
-
 function getOrderJsonPath(base) {
   return path.join(base, "pedido.json");
 }
@@ -175,7 +161,6 @@ module.exports = {
   getPedidoBaseGlobal,
   listPedidoBasesByWhatsapp,
   findPedidoByClientRequestId,
-  removeOldPedidos,
   getOrderJsonPath,
   getStatusPath,
   readOrder,

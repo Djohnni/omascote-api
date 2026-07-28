@@ -33,6 +33,14 @@ function createOrder(userId, orderId, pedido = {}) {
 createOrder("cliente-1", "pedido-ok");
 createOrder("cliente-1", "pedido-pendente", { pagamento_pendente: true });
 createOrder("cliente-1", "pedido-nao-aprovado", { aprovado_cliente: false });
+for (let index = 1; index <= 17; index += 1) {
+  createOrder("cliente-1", `pedido-historico-${String(index).padStart(2, "0")}`, {
+    criado_em: new Date(Date.UTC(2026, 0, index)).toISOString()
+  });
+}
+writeJson(path.join(testDataDir, "clientes.json"), {
+  "cliente-1": { nome_time: "Cliente de teste" }
+});
 
 const cartaImagePath = path.join(testDataDir, "cartas_app_imagens", "carta-1.jpg");
 fs.mkdirSync(path.dirname(cartaImagePath), { recursive: true });
@@ -74,6 +82,14 @@ test("secure direct download routes enforce ownership, state, binding and one-ti
     method: "POST"
   });
   assert.equal(noLogin.status, 401);
+
+  const historyResponse = await fetch(`${baseUrl}/meus-pedidos`, {
+    headers: { Authorization: bearer("cliente-1") }
+  });
+  const historyData = await jsonResponse(historyResponse);
+  assert.equal(historyResponse.status, 200);
+  assert.ok(historyData.pedidos.length > 15);
+  assert.ok(historyData.pedidos.some(item => item.id === "pedido-historico-01"));
 
   const otherUser = await fetch(`${baseUrl}/pedidos/pedido-ok/download-ticket`, {
     method: "POST",
