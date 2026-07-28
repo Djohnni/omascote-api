@@ -13,6 +13,11 @@ const orderStatus = require("./src/orders/order.status");
 const orderService = require("./src/orders/order.service");
 const productAuditService = require("./src/orders/product-audit.service");
 const billingService = require("./src/billing/billing.service");
+const {
+  DownloadTicketStore,
+  attachmentContentDisposition,
+  safeDownloadFilename
+} = require("./src/download/download-ticket");
 
 function criarArquivoZip(options = {}) {
   if (typeof archiverModule === "function") {
@@ -31,6 +36,11 @@ const app = express();
 // ===== CONFIG BÁSICA =====
 const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || "TROQUE_ISSO_AGORA";
+const DOWNLOAD_TICKET_TTL_MS = Math.min(
+  Math.max(Number(process.env.DOWNLOAD_TICKET_TTL_MS || 90_000), 30_000),
+  5 * 60 * 1000
+);
+const downloadTickets = new DownloadTicketStore({ ttlMs: DOWNLOAD_TICKET_TTL_MS });
 
 // ===== DATA STORAGE (RENDER DISK) =====
 const isRender = process.env.RENDER || process.env.NODE_ENV === "production";
@@ -95,6 +105,7 @@ app.use(cors({
 }));
 
 app.use(express.json({ limit: "50mb" }));
+app.use(express.urlencoded({ extended: false, limit: "8kb" }));
 app.use(express.static("public"));
 
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "";
@@ -5277,6 +5288,142 @@ function authOpcional(req, res, next) {
   return next();
 }
 
+function downloadClientInfo(userAgent = "") {
+  const ua = String(userAgent || "");
+  let browser = "outro";
+
+  if (/Instagram/i.test(ua)) browser = "instagram";
+  else if (/WhatsApp/i.test(ua)) browser = "whatsapp";
+  else if (/SamsungBrowser/i.test(ua)) browser = "samsung_internet";
+  else if (/CriOS/i.test(ua)) browser = "chrome_ios";
+  else if (/Chrome|Chromium/i.test(ua)) browser = "chrome";
+  else if (/Safari/i.test(ua)) browser = "safari";
+
+  let os = "outro";
+  if (/Android/i.test(ua)) os = "android";
+  else if (/iPhone|iPad|iPod/i.test(ua)) os = "ios";
+  else if (/Windows/i.test(ua)) os = "windows";
+  else if (/Mac OS X|Macintosh/i.test(ua)) os = "macos";
+
+  return { browser, os };
+}
+
+function logDownloadTechnical(req, details = {}) {
+  const client = downloadClientInfo(req.headers["user-agent"]);
+  const allowed = {
+    evento: String(details.evento || "download"),
+    navegador: client.browser,
+    sistema: client.os,
+    recurso: String(details.recurso || ""),
+    pedido_id: String(details.pedidoId || ""),
+    rota: String(details.rota || ""),
+    status_http: Number(details.status || 0),
+    erro: String(details.erro || "").slice(0, 80),
+    duracao_ms: Math.max(0, Number(details.duracaoMs || 0))
+  };
+
+  // Nunca registrar Authorization, ticket temporario, URL completa ou dados pessoais.
+  console.info("[download-tecnico]", JSON.stringify(allowed));
+}
+
+function setPrivateDownloadHeaders(res) {
+  res.setHeader("Cache-Control", "private, no-store, max-age=0");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+}
+
+function validateOrderDownload(whatsapp, pedidoId, options = {}) {
+  const base = getPedidoBase(whatsapp, pedidoId);
+
+  if (!base) {
+    return { ok: false, status: 404, error: "Pedido nao encontrado" };
+  }
+
+  const pedidoPath = path.join(base, "pedido.json");
+  const pedido = safeReadJson(pedidoPath) || {};
+
+  if (pedido.pagamento_pendente === true) {
+    return {
+      ok: false,
+      status: 403,
+      error: "Pagamento pendente. Desbloqueie esta imagem antes de baixar."
+    };
+  }
+
+  if (pedido.aprovado_cliente !== true) {
+    return {
+      ok: false,
+      status: 403,
+      error: "Aprove a previa antes de baixar a imagem em alta qualidade."
+    };
+  }
+
+  const arquivo = path.join(base, "resultado_final.png");
+  if (options.requireResult !== false && !fs.existsSync(arquivo)) {
+    return { ok: false, status: 404, error: "Resultado final nao encontrado" };
+  }
+
+  return { ok: true, base, pedido, pedidoPath, arquivo };
+}
+
+function validateCartaDownload(whatsapp, cartaId) {
+  const carta = getCartaAppAtivaById(cartaId);
+
+  if (!carta || !cartaAppPermitidaParaCliente(carta, whatsapp)) {
+    return { ok: false, status: 404, error: "Imagem nao encontrada" };
+  }
+
+  const imagemPath = String(carta.imagem_path || "").trim();
+  if (!imagemPath) {
+    return {
+      ok: false,
+      status: 409,
+      error: "Esta imagem usa um endereco externo e nao pode ser salva pelo download protegido."
+    };
+  }
+
+  const base = path.resolve(DATA_DIR);
+  const arquivo = path.resolve(DATA_DIR, imagemPath);
+
+  if (!arquivo.startsWith(base + path.sep) || !fs.existsSync(arquivo)) {
+    return { ok: false, status: 404, error: "Imagem nao encontrada" };
+  }
+
+  return { ok: true, carta, arquivo };
+}
+
+function mimeTypeForImageFile(filePath) {
+  const ext = path.extname(String(filePath || "")).toLowerCase();
+  if (ext === ".jpg" || ext === ".jpeg") return "image/jpeg";
+  if (ext === ".webp") return "image/webp";
+  return "image/png";
+}
+
+function extensionForImageMime(mimeType) {
+  if (mimeType === "image/jpeg") return ".jpg";
+  if (mimeType === "image/webp") return ".webp";
+  return ".png";
+}
+
+function ticketErrorResponse(req, res, redeemed, details = {}) {
+  const status = redeemed.reason === "expired" || redeemed.reason === "used" ? 410 : 403;
+  const error = redeemed.reason === "expired"
+    ? "O link de download expirou. Toque em baixar novamente."
+    : redeemed.reason === "used"
+      ? "Este download temporario ja foi utilizado. Toque em baixar novamente."
+      : "Download temporario invalido.";
+
+  logDownloadTechnical(req, {
+    ...details,
+    evento: "download_recusado",
+    status,
+    erro: redeemed.reason
+  });
+  return res.status(status).json({ ok: false, error, codigo: redeemed.reason });
+}
+
 function textoLegal(value, max = 500) {
   return String(value || "")
     .replace(/\s+/g, " ")
@@ -9053,12 +9200,114 @@ app.post("/bot/cartas-app/:id/imagem", auth, (req, res) => {
   });
 });
 
+app.post("/cartas-app/:id/download-ticket", auth, (req, res) => {
+  const startedAt = Date.now();
+  const cartaId = String(req.params.id || "");
+  const validated = validateCartaDownload(req.user.whatsapp, cartaId);
+
+  setPrivateDownloadHeaders(res);
+
+  if (!validated.ok) {
+    logDownloadTechnical(req, {
+      evento: "ticket_recusado",
+      recurso: "carta_imagem",
+      pedidoId: cartaId,
+      rota: "carta_ticket",
+      status: validated.status,
+      erro: "carta_indisponivel",
+      duracaoMs: Date.now() - startedAt
+    });
+    return res.status(validated.status).json({ ok: false, error: validated.error });
+  }
+
+  const issued = downloadTickets.issue({
+    resourceType: "carta_imagem",
+    resourceId: cartaId,
+    userId: req.user.whatsapp
+  });
+
+  logDownloadTechnical(req, {
+    evento: "ticket_emitido",
+    recurso: "carta_imagem",
+    pedidoId: cartaId,
+    rota: "carta_ticket",
+    status: 200,
+    duracaoMs: Date.now() - startedAt
+  });
+
+  return res.json({
+    ok: true,
+    ticket: issued.token,
+    expires_in: Math.ceil(issued.expiresInMs / 1000),
+    download_path: `/cartas-app/${encodeURIComponent(cartaId)}/download-direto`
+  });
+});
+
+app.post("/cartas-app/:id/download-direto", (req, res) => {
+  const startedAt = Date.now();
+  const cartaId = String(req.params.id || "");
+  const redeemed = downloadTickets.redeem(req.body?.ticket, {
+    resourceType: "carta_imagem",
+    resourceId: cartaId
+  });
+
+  setPrivateDownloadHeaders(res);
+
+  if (!redeemed.ok) {
+    return ticketErrorResponse(req, res, redeemed, {
+      recurso: "carta_imagem",
+      pedidoId: cartaId,
+      rota: "carta_download_direto",
+      duracaoMs: Date.now() - startedAt
+    });
+  }
+
+  const validated = validateCartaDownload(redeemed.record.userId, cartaId);
+  if (!validated.ok) {
+    logDownloadTechnical(req, {
+      evento: "download_recusado",
+      recurso: "carta_imagem",
+      pedidoId: cartaId,
+      rota: "carta_download_direto",
+      status: validated.status,
+      erro: "carta_indisponivel",
+      duracaoMs: Date.now() - startedAt
+    });
+    return res.status(validated.status).json({ ok: false, error: validated.error });
+  }
+
+  const mimeType = mimeTypeForImageFile(validated.arquivo);
+  const extension = extensionForImageMime(mimeType);
+  const filename = safeDownloadFilename(
+    `${cartaId}_omascote${extension}`,
+    `omascote${extension}`
+  );
+
+  res.setHeader("Content-Type", mimeType);
+  res.setHeader("Content-Disposition", attachmentContentDisposition(filename));
+  res.on("finish", () => {
+    logDownloadTechnical(req, {
+      evento: "download_concluido_servidor",
+      recurso: "carta_imagem",
+      pedidoId: cartaId,
+      rota: "carta_download_direto",
+      status: res.statusCode,
+      duracaoMs: Date.now() - startedAt
+    });
+  });
+  return res.sendFile(validated.arquivo);
+});
+
 app.get("/cartas-app/:id/imagem", auth, (req, res) => {
   try {
     const carta = getCartaAppAtivaById(req.params.id);
     const imagemPath = String(carta?.imagem_path || "").trim();
 
-    if (!carta || !imagemPath) {
+    if (
+      !carta ||
+      !cartaAppPermitidaParaCliente(carta, req.user.whatsapp) ||
+      !imagemPath
+    ) {
       return res.status(404).json({ ok: false, error: "Imagem não encontrada" });
     }
 
@@ -11048,6 +11297,151 @@ app.post("/pedidos/:id/solicitar-ajuste", auth, (req, res) => {
     modo_humano: false,
     status: "ajuste_pendente"
   });
+});
+
+app.post("/pedidos/:id/download-ticket", auth, (req, res) => {
+  const startedAt = Date.now();
+  const pedidoId = String(req.params.id || "");
+  const formato = String(req.body?.formato || "resultado").toLowerCase();
+
+  if (!["resultado", "zip"].includes(formato)) {
+    return res.status(400).json({ ok: false, error: "Formato de download invalido." });
+  }
+
+  const validated = validateOrderDownload(req.user.whatsapp, pedidoId, {
+    requireResult: formato === "resultado"
+  });
+
+  setPrivateDownloadHeaders(res);
+
+  if (!validated.ok) {
+    logDownloadTechnical(req, {
+      evento: "ticket_recusado",
+      recurso: `pedido_${formato}`,
+      pedidoId,
+      rota: "pedido_ticket",
+      status: validated.status,
+      erro: "pedido_indisponivel",
+      duracaoMs: Date.now() - startedAt
+    });
+    return res.status(validated.status).json({ ok: false, error: validated.error });
+  }
+
+  const resourceType = `pedido_${formato}`;
+  const issued = downloadTickets.issue({
+    resourceType,
+    resourceId: pedidoId,
+    userId: req.user.whatsapp
+  });
+
+  logDownloadTechnical(req, {
+    evento: "ticket_emitido",
+    recurso: resourceType,
+    pedidoId,
+    rota: "pedido_ticket",
+    status: 200,
+    duracaoMs: Date.now() - startedAt
+  });
+
+  return res.json({
+    ok: true,
+    ticket: issued.token,
+    expires_in: Math.ceil(issued.expiresInMs / 1000),
+    download_path: `/pedidos/${encodeURIComponent(pedidoId)}/download-direto/${formato}`
+  });
+});
+
+app.post("/pedidos/:id/download-direto/:formato", (req, res) => {
+  const startedAt = Date.now();
+  const pedidoId = String(req.params.id || "");
+  const formato = String(req.params.formato || "").toLowerCase();
+  const resourceType = `pedido_${formato}`;
+
+  setPrivateDownloadHeaders(res);
+
+  if (!["resultado", "zip"].includes(formato)) {
+    return res.status(404).json({ ok: false, error: "Download nao encontrado." });
+  }
+
+  const redeemed = downloadTickets.redeem(req.body?.ticket, {
+    resourceType,
+    resourceId: pedidoId
+  });
+
+  if (!redeemed.ok) {
+    return ticketErrorResponse(req, res, redeemed, {
+      recurso: resourceType,
+      pedidoId,
+      rota: "pedido_download_direto",
+      duracaoMs: Date.now() - startedAt
+    });
+  }
+
+  const validated = validateOrderDownload(redeemed.record.userId, pedidoId, {
+    requireResult: formato === "resultado"
+  });
+  if (!validated.ok) {
+    logDownloadTechnical(req, {
+      evento: "download_recusado",
+      recurso: resourceType,
+      pedidoId,
+      rota: "pedido_download_direto",
+      status: validated.status,
+      erro: "pedido_indisponivel",
+      duracaoMs: Date.now() - startedAt
+    });
+    return res.status(validated.status).json({ ok: false, error: validated.error });
+  }
+
+  validated.pedido.baixado_cliente = true;
+  validated.pedido.baixado_em = new Date().toISOString();
+  try {
+    fs.writeFileSync(
+      validated.pedidoPath,
+      JSON.stringify(validated.pedido, null, 2),
+      "utf8"
+    );
+  } catch {}
+
+  res.on("finish", () => {
+    logDownloadTechnical(req, {
+      evento: "download_concluido_servidor",
+      recurso: resourceType,
+      pedidoId,
+      rota: "pedido_download_direto",
+      status: res.statusCode,
+      duracaoMs: Date.now() - startedAt
+    });
+  });
+
+  if (formato === "zip") {
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader(
+      "Content-Disposition",
+      attachmentContentDisposition(`${pedidoId}.zip`)
+    );
+
+    const archive = criarArquivoZip({ zlib: { level: 9 } });
+    archive.on("error", err => {
+      if (!res.headersSent) {
+        res.status(500).json({ ok: false, error: "Falha ao criar arquivo ZIP." });
+      } else {
+        res.end();
+      }
+      console.error("[download-zip]", err?.message || "erro_zip");
+    });
+    archive.pipe(res);
+    archive.directory(validated.base, false);
+    archive.finalize();
+    return;
+  }
+
+  res.setHeader("Content-Type", "image/png");
+  res.setHeader(
+    "Content-Disposition",
+    attachmentContentDisposition(`${pedidoId}_resultado.png`)
+  );
+  return res.sendFile(validated.arquivo);
 });
 
 app.get("/pedidos/:id/download-resultado", auth, (req, res) => {
