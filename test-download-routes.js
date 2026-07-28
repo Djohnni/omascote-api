@@ -27,12 +27,20 @@ function createOrder(userId, orderId, pedido = {}) {
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z7N0AAAAASUVORK5CYII=",
     "base64"
   ));
+  fs.writeFileSync(path.join(base, "preview_ia4tube.jpg"), Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
   return base;
 }
 
 createOrder("cliente-1", "pedido-ok");
 createOrder("cliente-1", "pedido-pendente", { pagamento_pendente: true });
 createOrder("cliente-1", "pedido-nao-aprovado", { aprovado_cliente: false });
+createOrder("cliente-1", "pedido-pix", {
+  mp_payment_status: "approved",
+  pagamento_info: { origem: "mercado_pago_pix" }
+});
+createOrder("cliente-1", "pedido-saldo", {
+  pagamento_info: { origem: "saldo" }
+});
 for (let index = 1; index <= 17; index += 1) {
   createOrder("cliente-1", `pedido-historico-${String(index).padStart(2, "0")}`, {
     criado_em: new Date(Date.UTC(2026, 0, index)).toISOString()
@@ -149,6 +157,35 @@ test("secure direct download routes enforce ownership, state, binding and one-ti
 
   const oldPublicRoute = await fetch(`${baseUrl}/pedidos/pedido-ok/download-resultado`);
   assert.equal(oldPublicRoute.status, 401);
+
+  const publicPreview = await fetch(`${baseUrl}/pedidos/pedido-ok/preview`);
+  assert.equal(publicPreview.status, 200);
+  assert.match(publicPreview.headers.get("content-type"), /^image\/jpeg/);
+
+  for (const orderId of ["pedido-pix", "pedido-saldo"]) {
+    const paidTicketResponse = await fetch(`${baseUrl}/pedidos/${orderId}/download-ticket`, {
+      method: "POST",
+      headers: { Authorization: bearer("cliente-1"), "Content-Type": "application/json" },
+      body: "{}"
+    });
+    assert.equal(paidTicketResponse.status, 200);
+  }
+
+  const approvalResponse = await fetch(`${baseUrl}/pedidos/pedido-nao-aprovado/aprovar`, {
+    method: "POST",
+    headers: { Authorization: bearer("cliente-1"), "Content-Type": "application/json" },
+    body: "{}"
+  });
+  assert.equal(approvalResponse.status, 200);
+  const afterApprovalTicket = await fetch(
+    `${baseUrl}/pedidos/pedido-nao-aprovado/download-ticket`,
+    {
+      method: "POST",
+      headers: { Authorization: bearer("cliente-1"), "Content-Type": "application/json" },
+      body: "{}"
+    }
+  );
+  assert.equal(afterApprovalTicket.status, 200);
 
   const zipTicketResponse = await fetch(`${baseUrl}/pedidos/pedido-ok/download-ticket`, {
     method: "POST",
