@@ -20,6 +20,8 @@ process.env.MP_ACCESS_TOKEN = "TEST-MP-TOKEN";
 process.env.MP_WEBHOOK_SECRET = TEST_MP_WEBHOOK_SECRET;
 process.env.OMASCOTE_DATA_DIR = TEST_DATA_DIR;
 process.env.BOT_ADMIN_WHATSAPP = "15991120599";
+process.env.NODE_ENV = "test";
+process.env.MP_ORDERS_V2_TIMEOUT_MS = "60";
 
 const nativeFetch = global.fetch;
 const gateway = {
@@ -27,7 +29,9 @@ const gateway = {
   failNextCreate: false,
   created: new Map(),
   approved: new Map(),
-  idempotency: new Map()
+  idempotency: new Map(),
+  nextGetMode: "",
+  orderGetCalls: 0
 };
 
 global.fetch = async (input, options = {}) => {
@@ -129,6 +133,21 @@ global.fetch = async (input, options = {}) => {
 
   const orderMatch = url.match(/^https:\/\/api\.mercadopago\.com\/v1\/orders\/([^/?#]+)$/);
   if (orderMatch) {
+    gateway.orderGetCalls += 1;
+    const getMode = gateway.nextGetMode;
+    gateway.nextGetMode = "";
+    if (getMode === "unavailable") {
+      throw new TypeError("gateway indisponivel");
+    }
+    if (getMode === "slow") {
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(resolve, 250);
+        options.signal?.addEventListener("abort", () => {
+          clearTimeout(timer);
+          reject(new DOMException("Aborted", "AbortError"));
+        }, { once: true });
+      });
+    }
     const id = orderMatch[1];
     const order = gateway.approved.get(id) || gateway.created.get(id);
     return new Response(JSON.stringify(order || { status: "not_found" }), {
@@ -150,12 +169,14 @@ global.fetch = async (input, options = {}) => {
   return nativeFetch(input, options);
 };
 
-const { app } = require("./server");
+const { app, __mpOrdersV2Test } = require("./server");
 
 const CLIENTES_FILE = path.join(TEST_DATA_DIR, "clientes.json");
 const PEDIDOS_DIR = path.join(TEST_DATA_DIR, "pedidos");
 const SALDO_TRANSACOES_FILE = path.join(TEST_DATA_DIR, "saldo_transacoes.json");
 const MP_PROCESSADOS_FILE = path.join(TEST_DATA_DIR, "mp_processados.json");
+const MP_ORDERS_V2_FILE = path.join(TEST_DATA_DIR, "mp_orders_v2.json");
+const MP_ORDERS_V2_EVENTS_FILE = path.join(TEST_DATA_DIR, "mp_orders_v2_events.jsonl");
 const currentMonth = new Date().toISOString().slice(0, 7).replace("-", "");
 const tinyPng = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z8HkAAAAASUVORK5CYII=",
@@ -248,6 +269,26 @@ function readOrderStatus(whatsapp, orderId) {
   const file = orderPath(whatsapp, orderId);
   assert.ok(file, `pedido ${orderId} nao encontrado`);
   return fs.readFileSync(path.join(path.dirname(file), "status.txt"), "utf8").trim();
+}
+
+function createLegacyOrder(whatsapp, orderId, overrides = {}) {
+  const base = path.join(PEDIDOS_DIR, whatsapp, currentMonth, orderId);
+  fs.mkdirSync(base, { recursive: true });
+  const pedido = {
+    id: orderId,
+    pedido_id: orderId,
+    whatsapp,
+    categoria: "resultado",
+    modalidade_criacao: "economica",
+    pagamento_pendente: true,
+    valor_pendente: 4,
+    valor_final: 4,
+    aprovado_cliente: false,
+    ...overrides
+  };
+  writeJson(path.join(base, "pedido.json"), pedido);
+  fs.writeFileSync(path.join(base, "status.txt"), "aguardando_pagamento", "utf8");
+  return { base, pedido };
 }
 
 function resultBatchForm({ mode, requestId, batchId, tamperedValue }) {
@@ -346,7 +387,7 @@ async function generatePix(baseUrl, whatsapp, orderId) {
   });
 }
 
-async function webhook(baseUrl, paymentId, type = "order") {
+async function webhook(baseUrl, paymentId, type = "order", extraBody = {}) {
   const dataId = String(paymentId).toLowerCase();
   const timestamp = String(Date.now());
   const requestId = crypto.randomUUID();
@@ -364,7 +405,7 @@ async function webhook(baseUrl, paymentId, type = "order") {
       "x-request-id": requestId,
       "x-signature": `ts=${timestamp},v1=${signature}`
     },
-    body: { type, data: { id: paymentId } }
+    body: { type, data: { id: paymentId }, ...extraBody }
   });
 }
 
@@ -384,6 +425,13 @@ async function run() {
     const pixCanceledUser = "551100000006";
     const pixMismatchUser = "551100000007";
     const pixConcurrentUser = "551100000010";
+    const autoPlayerUser = "auto_jogador_1785365126442";
+    const interruptionUser = "551100000013";
+    const wrongOwnerUser = "551100000014";
+    const currencyMismatchUser = "551100000015";
+    const legacyBalanceUser = "551100000016";
+    const legacyPaymentsUser = "551100000017";
+    const legacyUntouchedUser = "551100000018";
 
     putClient(supportUser, 20);
     putClient(economicUser, 20);
@@ -393,6 +441,13 @@ async function run() {
     putClient(pixCanceledUser, 0);
     putClient(pixMismatchUser, 0);
     putClient(pixConcurrentUser, 0);
+    putClient(autoPlayerUser, 0);
+    putClient(interruptionUser, 0);
+    putClient(wrongOwnerUser, 0);
+    putClient(currencyMismatchUser, 0);
+    putClient(legacyBalanceUser, 0);
+    putClient(legacyPaymentsUser, 0);
+    putClient(legacyUntouchedUser, 0);
 
     const support = await createResult(baseUrl, supportUser, "com_suporte", "support_balance");
     assert.equal(support.valor_final, 8);
@@ -473,10 +528,41 @@ async function run() {
     assert.equal(Number(supportGatewayOrder.total_amount), 8);
     assert.match(
       supportGatewayOrder.external_reference,
-      /^px_\d+_[A-Za-z0-9_]+_s$/
+      /^omv2_[a-f0-9]{24}$/
     );
     assert.ok(supportPix.payload.pix_copia_cola);
     assert.ok(supportPix.payload.qr_code_base64);
+    const supportOrderPath = orderPath(
+      insufficientSupportUser,
+      pendingSupport.pedido_id
+    );
+    const supportOrderAfterProvider = readJson(supportOrderPath, {});
+    for (const field of [
+      "mp_order_id",
+      "mp_payment_id",
+      "mp_order_status",
+      "mp_payment_status",
+      "mp_orders_v2_attempt_id",
+      "pix_tentativa",
+      "pix_copia_cola",
+      "pix_qr_code_base64",
+      "pix_ticket_url",
+      "pix_gerado_em"
+    ]) {
+      delete supportOrderAfterProvider[field];
+    }
+    writeJson(supportOrderPath, supportOrderAfterProvider);
+    const recoveredBindingPix = await generatePix(
+      baseUrl,
+      insufficientSupportUser,
+      pendingSupport.pedido_id
+    );
+    assert.equal(recoveredBindingPix.response.status, 200);
+    assert.equal(recoveredBindingPix.payload.order_id, supportPix.payload.order_id);
+    assert.equal(
+      readOrder(insufficientSupportUser, pendingSupport.pedido_id).pix_tentativa,
+      1
+    );
 
     const concurrentOrder = await createResult(
       baseUrl,
@@ -498,6 +584,84 @@ async function run() {
       readOrder(pixConcurrentUser, concurrentOrder.pedido_id).pix_tentativa,
       1
     );
+
+    const historyGetCallsBefore = gateway.orderGetCalls;
+    const pendingHistory = await api(baseUrl, "GET", "/meus-pedidos", {
+      token: tokenFor(pixConcurrentUser)
+    });
+    assert.equal(pendingHistory.response.status, 200);
+    assert.equal(gateway.orderGetCalls, historyGetCallsBefore);
+
+    const autoPlayerOrder = await createResult(
+      baseUrl,
+      autoPlayerUser,
+      "economica",
+      "auto_player_recovery"
+    );
+    const autoPlayerPix = await generatePix(
+      baseUrl,
+      autoPlayerUser,
+      autoPlayerOrder.pedido_id
+    );
+    assert.equal(autoPlayerPix.response.status, 200, JSON.stringify(autoPlayerPix.payload));
+    const autoGatewayOrder = gateway.created.get(String(autoPlayerPix.payload.order_id));
+    assert.equal(
+      readOrder(autoPlayerUser, autoPlayerOrder.pedido_id).whatsapp,
+      autoPlayerUser
+    );
+    gateway.approved.set(String(autoPlayerPix.payload.order_id), {
+      ...autoGatewayOrder,
+      status: "processed",
+      transactions: {
+        payments: [{
+          ...autoGatewayOrder.transactions.payments[0],
+          status: "processed",
+          status_detail: "accredited"
+        }]
+      }
+    });
+
+    const sensitiveMarker = "SEGREDO-NAO-DEVE-SER-GRAVADO";
+    const [autoWebhook, autoRecovery] = await Promise.all([
+      webhook(baseUrl, autoPlayerPix.payload.order_id, "order", {
+        access_token: sensitiveMarker
+      }),
+      api(
+        baseUrl,
+        "POST",
+        `/pedidos/${autoPlayerOrder.pedido_id}/download-ticket`,
+        {
+          token: tokenFor(autoPlayerUser),
+          body: { formato: "resultado" }
+        }
+      )
+    ]);
+    assert.equal(autoWebhook.response.status, 200);
+    assert.ok([200, 403, 404].includes(autoRecovery.response.status));
+    const autoPaidOrder = readOrder(autoPlayerUser, autoPlayerOrder.pedido_id);
+    assert.equal(autoPaidOrder.pagamento_pendente, false);
+    assert.notEqual(autoPaidOrder.aprovado_cliente, true);
+    assert.equal(
+      autoPaidOrder.mensagens_cliente.filter(item => item.tipo === "pagamento_confirmado").length,
+      1
+    );
+    assert.equal(readJson(CLIENTES_FILE, {})[autoPlayerUser].saldo_extra, 4);
+
+    const duplicateAutoWebhook = await webhook(
+      baseUrl,
+      autoPlayerPix.payload.order_id
+    );
+    assert.equal(duplicateAutoWebhook.response.status, 200);
+    assert.equal(duplicateAutoWebhook.payload.liberados, 0);
+    assert.equal(
+      readOrder(autoPlayerUser, autoPlayerOrder.pedido_id)
+        .mensagens_cliente.filter(item => item.tipo === "pagamento_confirmado").length,
+      1
+    );
+    assert.equal(readJson(CLIENTES_FILE, {})[autoPlayerUser].saldo_extra, 4);
+    const auditEventsText = fs.readFileSync(MP_ORDERS_V2_EVENTS_FILE, "utf8");
+    assert.equal(auditEventsText.includes(sensitiveMarker), false);
+    assert.equal(auditEventsText.includes("[redigido]"), true);
 
     const batchPixUser = "551100000011";
     putClient(batchPixUser, 50);
@@ -523,7 +687,7 @@ async function run() {
     assert.ok(batchPix.payload.pix_copia_cola);
     const batchGatewayOrder = gateway.created.get(String(batchPix.payload.order_id));
     assert.equal(Number(batchGatewayOrder.total_amount), 8);
-    assert.match(batchGatewayOrder.external_reference, /^pxl_\d+_[a-f0-9]{24}$/);
+    assert.match(batchGatewayOrder.external_reference, /^omv2_[a-f0-9]{24}$/);
     const batchPixReplay = await api(baseUrl, "POST", "/pedidos/gerar-pix-lote", {
       token: tokenFor(batchPixUser),
       body: { batch_id: batchId }
@@ -537,7 +701,8 @@ async function run() {
       transactions: {
         payments: [{
           ...batchGatewayOrder.transactions.payments[0],
-          status: "processed"
+          status: "processed",
+          status_detail: "accredited"
         }]
       }
     });
@@ -609,7 +774,7 @@ async function run() {
     assert.equal(Number(economicGatewayOrder.total_amount), 4);
     assert.match(
       economicGatewayOrder.external_reference,
-      /^px_\d+_[A-Za-z0-9_]+_e$/
+      /^omv2_[a-f0-9]{24}$/
     );
 
     gateway.approved.set(String(economicPix.payload.order_id), {
@@ -624,7 +789,8 @@ async function run() {
       transactions: {
         payments: [{
           ...economicGatewayOrder.transactions.payments[0],
-          status: "processed"
+          status: "processed",
+          status_detail: "accredited"
         }]
       }
     });
@@ -640,7 +806,7 @@ async function run() {
     const errorOrder = await createResult(baseUrl, pixErrorUser, "economica", "pix_error");
     gateway.failNextCreate = true;
     const failedPix = await generatePix(baseUrl, pixErrorUser, errorOrder.pedido_id);
-    assert.equal(failedPix.response.status, 500);
+    assert.equal(failedPix.response.status, 503);
     assert.equal(readOrder(pixErrorUser, errorOrder.pedido_id).pagamento_pendente, true);
     assert.equal(readOrder(pixErrorUser, errorOrder.pedido_id).mp_order_id, undefined);
     assert.equal(readOrder(pixErrorUser, errorOrder.pedido_id).mp_payment_id, undefined);
@@ -694,6 +860,39 @@ async function run() {
       readOrder(pixCanceledUser, canceledOrder.pedido_id).pix_tentativa,
       2
     );
+    const regeneratedGatewayOrder = gateway.created.get(
+      String(regeneratedPix.payload.order_id)
+    );
+    gateway.approved.set(String(regeneratedPix.payload.order_id), {
+      ...regeneratedGatewayOrder,
+      status: "expired",
+      transactions: {
+        payments: [{
+          ...regeneratedGatewayOrder.transactions.payments[0],
+          status: "expired"
+        }]
+      }
+    });
+    const expiredWebhook = await webhook(
+      baseUrl,
+      regeneratedPix.payload.order_id
+    );
+    assert.equal(expiredWebhook.response.status, 200);
+    assert.equal(expiredWebhook.payload.terminal, true);
+    const pixAfterExpired = await generatePix(
+      baseUrl,
+      pixCanceledUser,
+      canceledOrder.pedido_id
+    );
+    assert.equal(pixAfterExpired.response.status, 200);
+    assert.notEqual(
+      pixAfterExpired.payload.order_id,
+      regeneratedPix.payload.order_id
+    );
+    assert.equal(
+      readOrder(pixCanceledUser, canceledOrder.pedido_id).pix_tentativa,
+      3
+    );
 
     const mismatchOrder = await createResult(baseUrl, pixMismatchUser, "economica", "pix_mismatch");
     const mismatchPix = await generatePix(baseUrl, pixMismatchUser, mismatchOrder.pedido_id);
@@ -706,7 +905,8 @@ async function run() {
         payments: [{
           ...mismatchGatewayOrder.transactions.payments[0],
           amount: "8.00",
-          status: "processed"
+          status: "processed",
+          status_detail: "accredited"
         }]
       }
     });
@@ -714,10 +914,163 @@ async function run() {
     assert.equal(mismatchWebhook.response.status, 200);
     assert.equal(mismatchWebhook.payload.rejeitado, true);
     assert.equal(readOrder(pixMismatchUser, mismatchOrder.pedido_id).pagamento_pendente, true);
-    const mismatchAudit = readJson(MP_PROCESSADOS_FILE, {})[String(mismatchPix.payload.order_id)];
-    assert.equal(mismatchAudit.status, "pagamento_divergente");
-    assert.equal(mismatchAudit.valor_devido, 4);
-    assert.equal(mismatchAudit.valor_aprovado, 8);
+    const mismatchLedger = readJson(MP_ORDERS_V2_FILE, {});
+    const mismatchAttempt = mismatchLedger.attempts[
+      mismatchLedger.by_order_id[String(mismatchPix.payload.order_id)]
+    ];
+    assert.equal(mismatchAttempt.state, "divergent");
+    assert.equal(mismatchAttempt.divergence_reason, "valor_divergente");
+    assert.equal(mismatchAttempt.divergence.valor_esperado, 4);
+    assert.equal(mismatchAttempt.divergence.valor_order, 8);
+
+    const currencyOrder = await createResult(
+      baseUrl,
+      currencyMismatchUser,
+      "economica",
+      "pix_currency_mismatch"
+    );
+    const currencyPix = await generatePix(
+      baseUrl,
+      currencyMismatchUser,
+      currencyOrder.pedido_id
+    );
+    const currencyGatewayOrder = gateway.created.get(String(currencyPix.payload.order_id));
+    gateway.approved.set(String(currencyPix.payload.order_id), {
+      ...currencyGatewayOrder,
+      status: "processed",
+      transactions: {
+        payments: [{
+          ...currencyGatewayOrder.transactions.payments[0],
+          currency_id: "USD",
+          status: "processed",
+          status_detail: "accredited"
+        }]
+      }
+    });
+    const currencyWebhook = await webhook(baseUrl, currencyPix.payload.order_id);
+    assert.equal(currencyWebhook.response.status, 200);
+    assert.equal(currencyWebhook.payload.rejeitado, true);
+    assert.equal(currencyWebhook.payload.reason, "moeda_divergente");
+    assert.equal(
+      readOrder(currencyMismatchUser, currencyOrder.pedido_id).pagamento_pendente,
+      true
+    );
+
+    const wrongOwnerOrder = await createResult(
+      baseUrl,
+      wrongOwnerUser,
+      "economica",
+      "wrong_owner"
+    );
+    const wrongOwnerPix = await generatePix(
+      baseUrl,
+      wrongOwnerUser,
+      wrongOwnerOrder.pedido_id
+    );
+    const wrongOwnerGatewayOrder = gateway.created.get(String(wrongOwnerPix.payload.order_id));
+    gateway.approved.set(String(wrongOwnerPix.payload.order_id), {
+      ...wrongOwnerGatewayOrder,
+      status: "processed",
+      transactions: {
+        payments: [{
+          ...wrongOwnerGatewayOrder.transactions.payments[0],
+          status: "processed",
+          status_detail: "accredited"
+        }]
+      }
+    });
+    const ownerRejected = await __mpOrdersV2Test.processarOrderV2(
+      wrongOwnerPix.payload.order_id,
+      {
+        source: "teste_proprietario_divergente",
+        expectedOwnerId: autoPlayerUser,
+        expectedPedidoId: wrongOwnerOrder.pedido_id
+      }
+    );
+    assert.equal(ownerRejected.rejected, true);
+    assert.equal(ownerRejected.reason, "proprietario_divergente");
+    assert.equal(
+      readOrder(wrongOwnerUser, wrongOwnerOrder.pedido_id).pagamento_pendente,
+      true
+    );
+
+    const interruptedOrder = await createResult(
+      baseUrl,
+      interruptionUser,
+      "economica",
+      "processing_interruption"
+    );
+    const interruptedPix = await generatePix(
+      baseUrl,
+      interruptionUser,
+      interruptedOrder.pedido_id
+    );
+    const interruptedGatewayOrder = gateway.created.get(String(interruptedPix.payload.order_id));
+    gateway.approved.set(String(interruptedPix.payload.order_id), {
+      ...interruptedGatewayOrder,
+      status: "processed",
+      transactions: {
+        payments: [{
+          ...interruptedGatewayOrder.transactions.payments[0],
+          status: "processed",
+          status_detail: "accredited"
+        }]
+      }
+    });
+    let interruptionInjected = false;
+    __mpOrdersV2Test.setHooks({
+      async afterCoreWrite() {
+        if (!interruptionInjected) {
+          interruptionInjected = true;
+          throw new Error("interrupcao simulada");
+        }
+      }
+    });
+    const interruptedWebhook = await webhook(
+      baseUrl,
+      interruptedPix.payload.order_id
+    );
+    assert.equal(interruptedWebhook.response.status, 500);
+    assert.equal(
+      readOrder(interruptionUser, interruptedOrder.pedido_id).pagamento_pendente,
+      false
+    );
+    __mpOrdersV2Test.resetHooks();
+    const resumedWebhook = await webhook(
+      baseUrl,
+      interruptedPix.payload.order_id
+    );
+    assert.equal(resumedWebhook.response.status, 200);
+    assert.equal(resumedWebhook.payload.confirmed, true);
+    const resumedOrder = readOrder(interruptionUser, interruptedOrder.pedido_id);
+    assert.equal(
+      resumedOrder.mensagens_cliente.filter(item => item.tipo === "pagamento_confirmado").length,
+      1
+    );
+    assert.equal(readJson(CLIENTES_FILE, {})[interruptionUser].saldo_extra, 4);
+
+    gateway.nextGetMode = "unavailable";
+    await assert.rejects(
+      __mpOrdersV2Test.processarOrderV2(wrongOwnerPix.payload.order_id, {
+        source: "teste_indisponibilidade",
+        expectedOwnerId: wrongOwnerUser,
+        expectedPedidoId: wrongOwnerOrder.pedido_id
+      }),
+      error => error?.code === "MP_UNAVAILABLE" && error?.retryable === true
+    );
+    gateway.nextGetMode = "slow";
+    await assert.rejects(
+      __mpOrdersV2Test.processarOrderV2(wrongOwnerPix.payload.order_id, {
+        source: "teste_timeout",
+        expectedOwnerId: wrongOwnerUser,
+        expectedPedidoId: wrongOwnerOrder.pedido_id
+      }),
+      error => error?.code === "MP_TIMEOUT" && error?.retryable === true
+    );
+    assert.equal(
+      readOrder(wrongOwnerUser, wrongOwnerOrder.pedido_id).pagamento_pendente,
+      true
+    );
 
     const invalidModeUser = "551100000009";
     putClient(invalidModeUser, 20);
@@ -733,6 +1086,119 @@ async function run() {
     assert.equal(invalidMode.payload.criados.length, 0);
     assert.match(invalidMode.payload.falhas[0].error, /Modalidade/);
     assert.equal((await getMe(baseUrl, invalidModeUser)).saldo, 20);
+
+    const untouchedLegacyId = "legacy-order-untouched";
+    const untouchedLegacy = createLegacyOrder(
+      legacyUntouchedUser,
+      untouchedLegacyId,
+      {
+        mp_order_id: "ORD-LEGACY-UNTOUCHED",
+        mp_payment_id: "PAY-LEGACY-UNTOUCHED"
+      }
+    );
+    const untouchedPath = path.join(untouchedLegacy.base, "pedido.json");
+    const untouchedBefore = crypto
+      .createHash("sha256")
+      .update(fs.readFileSync(untouchedPath))
+      .digest("hex");
+    gateway.created.set("ORD-LEGACY-UNTOUCHED", {
+      id: "ORD-LEGACY-UNTOUCHED",
+      status: "action_required",
+      country_code: "BRA",
+      total_amount: "4.00",
+      external_reference: "pedido_antigo_sem_vinculo_v2",
+      transactions: {
+        payments: [{
+          id: "PAY-LEGACY-UNTOUCHED",
+          amount: "4.00",
+          status: "action_required",
+          payment_method: { id: "pix", type: "bank_transfer" }
+        }]
+      }
+    });
+    const ignoredLegacyWebhook = await webhook(
+      baseUrl,
+      "ORD-LEGACY-UNTOUCHED"
+    );
+    assert.equal(ignoredLegacyWebhook.response.status, 200);
+    assert.equal(ignoredLegacyWebhook.payload.ignored, true);
+    const legacyGenerateAttempt = await generatePix(
+      baseUrl,
+      legacyUntouchedUser,
+      untouchedLegacyId
+    );
+    assert.equal(legacyGenerateAttempt.response.status, 409);
+    const untouchedAfter = crypto
+      .createHash("sha256")
+      .update(fs.readFileSync(untouchedPath))
+      .digest("hex");
+    assert.equal(untouchedAfter, untouchedBefore);
+
+    const legacyBalancePaymentId = "900001";
+    gateway.approved.set(legacyBalancePaymentId, {
+      id: legacyBalancePaymentId,
+      status: "approved",
+      transaction_amount: 8,
+      currency_id: "BRL",
+      external_reference: `${legacyBalanceUser}|saldo_800|${Date.now()}`,
+      metadata: {
+        tipo: "saldo",
+        whatsapp: legacyBalanceUser,
+        pacote: "saldo_800",
+        credito: 8
+      },
+      payer: { email: "saldo@example.test" }
+    });
+    const balanceWebhook = await webhook(
+      baseUrl,
+      legacyBalancePaymentId,
+      "payment"
+    );
+    assert.equal(balanceWebhook.response.status, 200);
+    assert.equal(readJson(CLIENTES_FILE, {})[legacyBalanceUser].saldo_extra, 8);
+    const balanceDuplicate = await webhook(
+      baseUrl,
+      legacyBalancePaymentId,
+      "payment"
+    );
+    assert.equal(balanceDuplicate.response.status, 200);
+    assert.equal(balanceDuplicate.payload.duplicado, true);
+    assert.equal(readJson(CLIENTES_FILE, {})[legacyBalanceUser].saldo_extra, 8);
+
+    const legacyPaymentOrderId = "legacy-payment-order";
+    const legacyPaymentId = "900002";
+    createLegacyOrder(legacyPaymentsUser, legacyPaymentOrderId, {
+      mp_payment_id: legacyPaymentId
+    });
+    gateway.approved.set(legacyPaymentId, {
+      id: legacyPaymentId,
+      status: "approved",
+      transaction_amount: 4,
+      currency_id: "BRL",
+      external_reference:
+        `pedido_pix|${legacyPaymentsUser}|${legacyPaymentOrderId}|resultado|economica`,
+      metadata: {
+        tipo: "pedido_pix",
+        whatsapp: legacyPaymentsUser,
+        pedido_id: legacyPaymentOrderId,
+        modalidade_criacao: "economica"
+      },
+      payer: { email: "legacy@example.test" }
+    });
+    const legacyPaymentWebhook = await webhook(
+      baseUrl,
+      legacyPaymentId,
+      "payment"
+    );
+    assert.equal(legacyPaymentWebhook.response.status, 200);
+    assert.equal(
+      readOrder(legacyPaymentsUser, legacyPaymentOrderId).pagamento_pendente,
+      false
+    );
+    assert.equal(
+      readOrder(legacyPaymentsUser, legacyPaymentOrderId).pagamento_info.payment_id,
+      legacyPaymentId
+    );
 
     const botOrders = await api(baseUrl, "GET", "/bot/pedidos/novos", { token: botToken });
     assert.equal(botOrders.response.status, 200);
@@ -805,6 +1271,15 @@ async function run() {
     console.log("OK - gateway com erro ou cancelamento nao libera pedido e permite novo PIX");
     console.log("OK - webhook com assinatura invalida e rejeitado antes do processamento");
     console.log("OK - webhook rejeita pagamento divergente de R$8 para pedido economico de R$4");
+    console.log("OK - conta auto_jogador funciona com webhook e recuperacao simultaneos");
+    console.log("OK - notificacao duplicada e Order ja processada nao duplicam efeitos");
+    console.log("OK - interrupcao no processamento retoma sem duplicar bonus ou mensagem");
+    console.log("OK - Order cancelada ou expirada permite gerar outro PIX");
+    console.log("OK - valor, moeda e proprietario divergentes nao liberam o pedido");
+    console.log("OK - falha, lentidao e indisponibilidade do Mercado Pago mantem o pedido pendente");
+    console.log("OK - historico nao consulta o Mercado Pago");
+    console.log("OK - pedido anterior ao V2 permanece byte a byte inalterado");
+    console.log("OK - compra de saldo e pagamentos antigos via Payments permanecem idempotentes");
     console.log("OK - modalidade invalida e adulteracao de preco sao rejeitadas/ignoradas");
     console.log("OK - worker nao acessa pedido economico pendente e conclui apos pagamento");
     console.log("OK - historico grava R$4 e bloqueia ajuste personalizado");

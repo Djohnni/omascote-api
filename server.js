@@ -63,6 +63,19 @@ const PUBLIC_API_BASE_URL = String(
   process.env.PUBLIC_API_BASE_URL || "https://api.omascote.com.br"
 ).replace(/\/+$/, "");
 const MP_PROCESSADOS_FILE = path.join(DATA_DIR, "mp_processados.json");
+const MP_ORDERS_V2_FILE = path.join(DATA_DIR, "mp_orders_v2.json");
+const MP_ORDERS_V2_EVENTS_FILE = path.join(DATA_DIR, "mp_orders_v2_events.jsonl");
+const MP_ORDERS_V2_VERSION = "orders_v2_20260729";
+const MP_ORDERS_V2_TIMEOUT_MS = Math.min(
+  Math.max(
+    Number(process.env.MP_ORDERS_V2_TIMEOUT_MS || 8_000),
+    process.env.NODE_ENV === "test" ? 25 : 1_000
+  ),
+  20_000
+);
+const MP_ORDERS_V2_CREATE_ENABLED = !["0", "false", "off"].includes(
+  String(process.env.MP_ORDERS_V2_CREATE_ENABLED || "true").trim().toLowerCase()
+);
 const TEMPO_ESTIMADO_FILE = path.join(DATA_DIR, "tempo_estimado.json");
 const ONLINE_FILE = path.join(DATA_DIR, "usuarios_online.json");
 const SUPORTE_ABERTAS_FILE = path.join(DATA_DIR, "suporte_conversas_abertas.json");
@@ -524,6 +537,96 @@ function writeMpProcessados(obj) {
   fs.writeFileSync(MP_PROCESSADOS_FILE, JSON.stringify(obj, null, 2), "utf8");
 }
 
+function writeJsonAtomic(filePath, value) {
+  ensureDir(path.dirname(filePath));
+  const tempPath = `${filePath}.${process.pid}.${crypto.randomBytes(6).toString("hex")}.tmp`;
+
+  try {
+    fs.writeFileSync(tempPath, JSON.stringify(value, null, 2), "utf8");
+    fs.renameSync(tempPath, filePath);
+  } finally {
+    try {
+      if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+    } catch {}
+  }
+}
+
+function writePedidoAtomic(base, pedido) {
+  writeJsonAtomic(path.join(base, "pedido.json"), pedido);
+}
+
+function readMpOrdersV2() {
+  const data = safeReadJson(MP_ORDERS_V2_FILE);
+  const ledger = data && typeof data === "object" && !Array.isArray(data)
+    ? data
+    : {};
+
+  ledger.version = 2;
+  ledger.attempts = ledger.attempts && typeof ledger.attempts === "object" && !Array.isArray(ledger.attempts)
+    ? ledger.attempts
+    : {};
+  ledger.by_order_id = ledger.by_order_id && typeof ledger.by_order_id === "object" && !Array.isArray(ledger.by_order_id)
+    ? ledger.by_order_id
+    : {};
+  ledger.active_by_scope = ledger.active_by_scope && typeof ledger.active_by_scope === "object" && !Array.isArray(ledger.active_by_scope)
+    ? ledger.active_by_scope
+    : {};
+
+  return ledger;
+}
+
+function writeMpOrdersV2(ledger) {
+  writeJsonAtomic(MP_ORDERS_V2_FILE, ledger);
+}
+
+function sanitizarEventoMercadoPago(value, depth = 0) {
+  if (depth > 8) return "[limite]";
+  if (Array.isArray(value)) {
+    return value.slice(0, 50).map(item => sanitizarEventoMercadoPago(item, depth + 1));
+  }
+  if (!value || typeof value !== "object") {
+    return typeof value === "string" ? value.slice(0, 500) : value;
+  }
+
+  const out = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (/authorization|token|secret|signature|password|qr_code|ticket_url/i.test(key)) {
+      out[key] = "[redigido]";
+      continue;
+    }
+    out[key] = sanitizarEventoMercadoPago(item, depth + 1);
+  }
+  return out;
+}
+
+function registrarEventoMpOrdersV2(evento, detalhes = {}) {
+  const registro = {
+    evento,
+    registrado_em: new Date().toISOString(),
+    ...sanitizarEventoMercadoPago(detalhes)
+  };
+
+  try {
+    fs.appendFileSync(MP_ORDERS_V2_EVENTS_FILE, `${JSON.stringify(registro)}\n`, "utf8");
+  } catch (error) {
+    console.error("[MP_ORDERS_V2] falha_auditoria", {
+      evento,
+      erro: error?.message || "erro"
+    });
+  }
+
+  console.log("[MP_ORDERS_V2]", JSON.stringify(registro));
+  return registro;
+}
+
+let mpOrdersV2Queue = Promise.resolve();
+
+function withMpOrdersV2Lock(callback) {
+  const run = mpOrdersV2Queue.then(callback, callback);
+  mpOrdersV2Queue = run.catch(() => {});
+  return run;
+}
+
 function readPreviewLimiter() {
   try {
     const data = JSON.parse(fs.readFileSync(PREVIEW_LIMITER_FILE, "utf8") || "[]");
@@ -760,6 +863,867 @@ function valorFinanceiroEmCentavos(valor) {
   return Math.round(normalizarValorFinanceiro(valor) * 100);
 }
 
+let mpOrdersV2TestHooks = {};
+
+function pedidoUsaMpOrdersV2(pedido) {
+  return String(pedido?.payment_flow_version || "") === MP_ORDERS_V2_VERSION;
+}
+
+function criarErroMpOrdersV2(code, message, options = {}) {
+  const error = new Error(message);
+  error.code = code;
+  error.status = Number(options.status || 500);
+  error.retryable = options.retryable === true;
+  error.detalhe = options.detalhe;
+  return error;
+}
+
+async function requestMercadoPagoOrdersV2(endpoint, options = {}) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), MP_ORDERS_V2_TIMEOUT_MS);
+  let response;
+
+  try {
+    response = await fetch(`https://api.mercadopago.com${endpoint}`, {
+      ...options,
+      headers: {
+        "Authorization": `Bearer ${MP_ACCESS_TOKEN}`,
+        "Content-Type": "application/json",
+        ...(options.headers || {})
+      },
+      signal: controller.signal
+    });
+  } catch (error) {
+    const timeout = error?.name === "AbortError";
+    throw criarErroMpOrdersV2(
+      timeout ? "MP_TIMEOUT" : "MP_UNAVAILABLE",
+      timeout
+        ? "O Mercado Pago demorou para responder."
+        : "O Mercado Pago esta temporariamente indisponivel.",
+      { status: 503, retryable: true }
+    );
+  } finally {
+    clearTimeout(timeoutId);
+  }
+
+  let payload = {};
+  try {
+    payload = await response.json();
+  } catch {}
+
+  if (!response.ok) {
+    const retryable = response.status === 408 ||
+      response.status === 429 ||
+      response.status >= 500;
+    throw criarErroMpOrdersV2(
+      "MP_HTTP_ERROR",
+      retryable
+        ? "O Mercado Pago nao conseguiu concluir a operacao agora."
+        : "O Mercado Pago recusou a operacao.",
+      {
+        status: retryable ? 503 : 502,
+        retryable,
+        detalhe: {
+          http_status: response.status,
+          error: payload?.error || payload?.message || ""
+        }
+      }
+    );
+  }
+
+  return {
+    response,
+    payload
+  };
+}
+
+async function obterOrderMercadoPagoV2(orderId) {
+  const id = String(orderId || "").trim();
+  if (!id) {
+    throw criarErroMpOrdersV2("ORDER_ID_AUSENTE", "Order sem identificador.", {
+      status: 400
+    });
+  }
+  const resultado = await requestMercadoPagoOrdersV2(
+    `/v1/orders/${encodeURIComponent(id)}`
+  );
+  return resultado.payload;
+}
+
+function normalizarEstadoOrderV2(order) {
+  const pagamento = obterPagamentoDaOrderMercadoPago(order);
+  const orderStatus = String(order?.status || "").trim().toLowerCase();
+  const paymentStatus = String(pagamento?.status || "").trim().toLowerCase();
+  const statusDetail = String(
+    pagamento?.status_detail || order?.status_detail || ""
+  ).trim().toLowerCase();
+  const countryCode = String(order?.country_code || "").trim().toUpperCase();
+  const moedaInformada = String(
+    pagamento?.currency_id ||
+    pagamento?.currency ||
+    order?.currency_id ||
+    order?.currency ||
+    ""
+  ).trim().toUpperCase();
+  const currency = moedaInformada ||
+    (["BRA", "BR"].includes(countryCode) ? "BRL" : "");
+  const terminalStatuses = new Set([
+    "cancelled",
+    "canceled",
+    "expired",
+    "failed",
+    "rejected"
+  ]);
+
+  return {
+    order_id: String(order?.id || ""),
+    payment_id: String(pagamento?.id || ""),
+    order_status: orderStatus,
+    payment_status: paymentStatus,
+    status_detail: statusDetail,
+    total_amount: normalizarValorFinanceiro(order?.total_amount),
+    payment_amount: normalizarValorFinanceiro(pagamento?.amount),
+    currency,
+    country_code: countryCode,
+    external_reference: String(order?.external_reference || ""),
+    aprovado:
+      orderStatus === "processed" &&
+      paymentStatus === "processed" &&
+      statusDetail === "accredited",
+    terminal:
+      terminalStatuses.has(orderStatus) ||
+      terminalStatuses.has(paymentStatus),
+    terminal_status: terminalStatuses.has(paymentStatus)
+      ? paymentStatus
+      : terminalStatuses.has(orderStatus)
+        ? orderStatus
+        : ""
+  };
+}
+
+function scopeKeyMpOrdersV2({ ownerId, flow, pedidoIds, batchId }) {
+  if (flow === "batch") {
+    return `batch|${String(ownerId)}|${String(batchId || "")}`;
+  }
+  return `individual|${String(ownerId)}|${String(pedidoIds?.[0] || "")}`;
+}
+
+function criarTentativaMpOrdersV2({ ownerId, flow, itens, batchId, valor }) {
+  const attemptId = crypto.randomBytes(12).toString("hex");
+  const pedidoIds = itens.map(item => String(item.id));
+  const scopeKey = scopeKeyMpOrdersV2({
+    ownerId,
+    flow,
+    pedidoIds,
+    batchId
+  });
+  const agora = new Date().toISOString();
+
+  return {
+    attempt_id: attemptId,
+    version: MP_ORDERS_V2_VERSION,
+    scope_key: scopeKey,
+    flow,
+    owner_id: String(ownerId),
+    pedido_ids: pedidoIds,
+    order_items: itens.map(item => ({
+      pedido_id: String(item.id),
+      expected_amount: normalizarValorFinanceiro(
+        item.pedido?.valor_pendente || item.pedido?.valor_final
+      )
+    })),
+    batch_id: flow === "batch" ? String(batchId || "") : "",
+    expected_amount: normalizarValorFinanceiro(valor),
+    expected_currency: "BRL",
+    external_reference: `omv2_${attemptId}`,
+    idempotency_key: `omascote_orders_v2_${attemptId}`,
+    state: "creating",
+    effects: {},
+    created_at: agora,
+    updated_at: agora
+  };
+}
+
+function obterTentativaPorOrderIdMpOrdersV2(ledger, orderId, order = null) {
+  const id = String(orderId || "");
+  let attemptId = String(ledger.by_order_id?.[id] || "");
+
+  if (!attemptId && order) {
+    const external = String(order.external_reference || "");
+    const match = external.match(/^omv2_([a-f0-9]{24})$/);
+    if (match && ledger.attempts?.[match[1]]) {
+      attemptId = match[1];
+      ledger.by_order_id[id] = attemptId;
+    }
+  }
+
+  return attemptId ? ledger.attempts?.[attemptId] || null : null;
+}
+
+function carregarItensLocaisMpOrdersV2(attempt) {
+  return (Array.isArray(attempt?.pedido_ids) ? attempt.pedido_ids : []).map(pedidoId => {
+    const base = getPedidoBase(attempt.owner_id, pedidoId);
+    const pedido = base ? readPedido(base) || {} : null;
+    return {
+      id: String(pedidoId),
+      base,
+      pedido
+    };
+  });
+}
+
+function validarItensLocaisMpOrdersV2(attempt, estado, options = {}) {
+  if (options.expectedOwnerId &&
+      String(options.expectedOwnerId) !== String(attempt.owner_id)) {
+    return { ok: false, reason: "proprietario_divergente" };
+  }
+  if (options.expectedPedidoId &&
+      !attempt.pedido_ids.includes(String(options.expectedPedidoId))) {
+    return { ok: false, reason: "pedido_divergente" };
+  }
+
+  const itens = carregarItensLocaisMpOrdersV2(attempt);
+  if (!itens.length || itens.some(item => !item.base || !item.pedido)) {
+    return { ok: false, reason: "pedido_nao_encontrado", itens };
+  }
+
+  const snapshotById = new Map(
+    (attempt.order_items || []).map(item => [String(item.pedido_id), item])
+  );
+  let somaLocal = 0;
+
+  for (const item of itens) {
+    const pedido = item.pedido;
+    const snapshot = snapshotById.get(item.id);
+    const valorLocal = normalizarValorFinanceiro(
+      pedido.valor_pendente || pedido.valor_final
+    );
+    const valorEsperadoItem = normalizarValorFinanceiro(
+      snapshot?.expected_amount
+    );
+    const confirmadoMesmaOrder =
+      pedido.pagamento_pendente !== true &&
+      String(pedido.payment_v2_confirmation_order_id || "") === estado.order_id;
+
+    if (!pedidoUsaMpOrdersV2(pedido)) {
+      return { ok: false, reason: "pedido_anterior_ao_v2", itens };
+    }
+    if (String(pedido.mp_order_id || "") !== estado.order_id) {
+      return { ok: false, reason: "order_id_divergente", itens };
+    }
+    if (pedido.mp_payment_id &&
+        estado.payment_id &&
+        String(pedido.mp_payment_id) !== estado.payment_id) {
+      return { ok: false, reason: "payment_id_divergente", itens };
+    }
+    if (!confirmadoMesmaOrder && pedido.pagamento_pendente !== true) {
+      return { ok: false, reason: "pedido_liberado_por_outro_pagamento", itens };
+    }
+    if (valorEsperadoItem <= 0 ||
+        Math.abs(valorLocal - valorEsperadoItem) >= 0.01) {
+      return { ok: false, reason: "valor_item_divergente", itens };
+    }
+
+    somaLocal = normalizarValorFinanceiro(somaLocal + valorEsperadoItem);
+  }
+
+  if (Math.abs(somaLocal - normalizarValorFinanceiro(attempt.expected_amount)) >= 0.01) {
+    return { ok: false, reason: "valor_lote_local_divergente", itens };
+  }
+
+  return { ok: true, itens };
+}
+
+function atualizarStatusLocalOrderV2(attempt, estado) {
+  const agora = new Date().toISOString();
+  const itens = carregarItensLocaisMpOrdersV2(attempt);
+
+  for (const item of itens) {
+    if (!item.base || !item.pedido || !pedidoUsaMpOrdersV2(item.pedido)) continue;
+    if (String(item.pedido.mp_order_id || "") !== estado.order_id) continue;
+    item.pedido.mp_order_status = estado.order_status || estado.terminal_status || "pending";
+    item.pedido.mp_payment_status = estado.payment_status || estado.terminal_status || "pending";
+    item.pedido.pix_status_atualizado_em = agora;
+    writePedidoAtomic(item.base, item.pedido);
+  }
+}
+
+function registrarBonusPrimeiraCompraOrderV2(attempt, item, estado, confirmadoEm) {
+  if (attempt.flow !== "individual") return;
+  const valorBonus = calcularBonusPrimeiraCompraSeguro(item.pedido, {
+    transaction_amount: estado.payment_amount || estado.total_amount,
+    metadata: {}
+  });
+  if (valorBonus <= 0) return;
+
+  const clientes = readClientes();
+  const cliente = clientes[attempt.owner_id];
+  if (!cliente || cliente.primeira_compra_bonus_concedido === true) return;
+
+  cliente.saldo_extra = Number(cliente.saldo_extra || 0) + valorBonus;
+  cliente.primeira_compra_bonus_concedido = true;
+  cliente.primeira_compra_bonus_valor = valorBonus;
+  cliente.primeira_compra_bonus_em = confirmadoEm;
+  clientes[attempt.owner_id] = cliente;
+  writeClientes(clientes);
+
+  item.pedido.bonus_primeira_compra = true;
+  item.pedido.bonus_saldo_extra = valorBonus;
+  item.pedido.bonus_saldo_extra_em = confirmadoEm;
+  writePedidoAtomic(item.base, item.pedido);
+}
+
+async function confirmarItemOrderV2(attempt, item, estado, ledger) {
+  const effectKey = String(item.id);
+  attempt.effects[effectKey] = attempt.effects[effectKey] || {};
+  const effects = attempt.effects[effectKey];
+  let pedido = readPedido(item.base) || {};
+
+  if (
+    pedido.pagamento_pendente !== true &&
+    String(pedido.payment_v2_confirmation_order_id || "") === estado.order_id
+  ) {
+    effects.core_confirmed = true;
+  } else if (!effects.core_confirmed) {
+    const confirmadoEm = new Date().toISOString();
+    pedido.pagamento_pendente = false;
+    pedido.pagamento_metodo = "pix";
+    pedido.pagamento_confirmado_em = confirmadoEm;
+    pedido.mp_payment_status = "processed";
+    pedido.mp_order_status = "processed";
+    pedido.payment_v2_confirmation_order_id = estado.order_id;
+    pedido.payment_v2_confirmation_payment_id = estado.payment_id;
+    pedido.payment_v2_confirmed_at = confirmadoEm;
+    pedido.pagamento_info = {
+      tipo: attempt.flow === "batch" ? "pedido_pix_lote" : "pedido_pix",
+      status: "processed",
+      status_detail: estado.status_detail,
+      valor_pago: normalizarValorFinanceiro(
+        (attempt.order_items || []).find(x => String(x.pedido_id) === item.id)?.expected_amount
+      ),
+      valor_lote: attempt.flow === "batch"
+        ? normalizarValorFinanceiro(attempt.expected_amount)
+        : undefined,
+      quantidade_lote: attempt.flow === "batch"
+        ? attempt.pedido_ids.length
+        : undefined,
+      order_id: estado.order_id,
+      payment_id: estado.payment_id,
+      whatsapp: attempt.owner_id,
+      pedido_id: item.id,
+      batch_id: attempt.batch_id || "",
+      modalidade_criacao: normalizarModalidadeCriacao(pedido.modalidade_criacao),
+      confirmado_em: confirmadoEm
+    };
+    pedido.mensagens_cliente = Array.isArray(pedido.mensagens_cliente)
+      ? pedido.mensagens_cliente
+      : [];
+    const messageId = `msg_pagamento_order_${estado.order_id}_${item.id}`;
+    if (!pedido.mensagens_cliente.some(msg => String(msg?.id || "") === messageId)) {
+      pedido.mensagens_cliente.push({
+        id: messageId,
+        tipo: "pagamento_confirmado",
+        titulo: "Pagamento confirmado",
+        texto: attempt.flow === "batch"
+          ? "Pagamento aprovado. Sua arte foi enviada para producao."
+          : "Seu pagamento foi aprovado. Sua arte ja esta liberada ou sera liberada assim que ficar pronta.",
+        lida: false,
+        payment_id: estado.payment_id,
+        criado_em: confirmadoEm
+      });
+    }
+    writePedidoAtomic(item.base, pedido);
+    item.pedido = pedido;
+    effects.core_confirmed = true;
+    effects.core_confirmed_at = confirmadoEm;
+    attempt.updated_at = confirmadoEm;
+    writeMpOrdersV2(ledger);
+
+    if (process.env.NODE_ENV === "test" &&
+        typeof mpOrdersV2TestHooks.afterCoreWrite === "function") {
+      await mpOrdersV2TestHooks.afterCoreWrite({
+        attempt,
+        pedidoId: item.id
+      });
+    }
+  } else {
+    item.pedido = pedido;
+  }
+
+  pedido = readPedido(item.base) || item.pedido;
+  item.pedido = pedido;
+  const confirmadoEm = pedido.pagamento_confirmado_em || new Date().toISOString();
+
+  if (!effects.bonus_checked) {
+    registrarBonusPrimeiraCompraOrderV2(attempt, item, estado, confirmadoEm);
+    effects.bonus_checked = true;
+    writeMpOrdersV2(ledger);
+  }
+
+  if (!effects.coupon_checked) {
+    const cupom = registrarUsoCupomPedido(item.pedido, attempt.owner_id, {
+      idempotencyKey: `mp_order_v2|${estado.order_id}|${item.id}`
+    });
+    if (!cupom.ok) {
+      throw criarErroMpOrdersV2(
+        "CUPOM_TEMPORARIAMENTE_BLOQUEADO",
+        cupom.error || "Cupom temporariamente bloqueado.",
+        { status: 503, retryable: true }
+      );
+    }
+    writePedidoAtomic(item.base, item.pedido);
+    effects.coupon_checked = true;
+    writeMpOrdersV2(ledger);
+  }
+
+  if (!effects.queue_released) {
+    liberarPedidoEconomicoAposPagamento(item.base, item.pedido);
+    effects.queue_released = true;
+    writeMpOrdersV2(ledger);
+  }
+}
+
+async function processarOrderV2Locked(orderId, options = {}) {
+  let ledger = readMpOrdersV2();
+  let order = options.prefetchedOrder || null;
+  let attempt = obterTentativaPorOrderIdMpOrdersV2(ledger, orderId, order);
+
+  if (!attempt) {
+    order = order || await obterOrderMercadoPagoV2(orderId);
+    attempt = obterTentativaPorOrderIdMpOrdersV2(ledger, orderId, order);
+  }
+
+  if (!attempt || attempt.version !== MP_ORDERS_V2_VERSION) {
+    registrarEventoMpOrdersV2("order_ignorada_anterior_ao_v2", {
+      order_id: String(orderId),
+      origem: options.source || "desconhecida"
+    });
+    return { ok: true, ignored: true, reason: "order_anterior_ao_v2" };
+  }
+
+  if (options.expectedOwnerId &&
+      String(options.expectedOwnerId) !== String(attempt.owner_id)) {
+    registrarEventoMpOrdersV2("order_rejeitada_proprietario", {
+      order_id: String(orderId),
+      owner_binding: attempt.owner_id,
+      owner_request: String(options.expectedOwnerId),
+      pedido_id: String(options.expectedPedidoId || "")
+    });
+    return { ok: false, rejected: true, reason: "proprietario_divergente" };
+  }
+
+  order = order || await obterOrderMercadoPagoV2(orderId);
+  const estado = normalizarEstadoOrderV2(order);
+  const agora = new Date().toISOString();
+  attempt.last_provider_status = {
+    order_status: estado.order_status,
+    payment_status: estado.payment_status,
+    status_detail: estado.status_detail,
+    checked_at: agora,
+    source: options.source || "desconhecida"
+  };
+  attempt.updated_at = agora;
+
+  if (estado.order_id !== String(orderId) ||
+      estado.order_id !== String(attempt.mp_order_id || estado.order_id) ||
+      estado.external_reference !== String(attempt.external_reference || "")) {
+    attempt.state = "divergent";
+    attempt.divergence_reason = "identidade_order_divergente";
+    writeMpOrdersV2(ledger);
+    registrarEventoMpOrdersV2("order_rejeitada_identidade", {
+      order_id: String(orderId),
+      attempt_id: attempt.attempt_id
+    });
+    return { ok: false, rejected: true, reason: attempt.divergence_reason };
+  }
+
+  if (estado.terminal) {
+    attempt.state = estado.terminal_status || "terminal";
+    attempt.terminal_at = agora;
+    if (ledger.active_by_scope[attempt.scope_key] === attempt.attempt_id) {
+      delete ledger.active_by_scope[attempt.scope_key];
+    }
+    writeMpOrdersV2(ledger);
+    atualizarStatusLocalOrderV2(attempt, estado);
+    registrarEventoMpOrdersV2("order_terminal", {
+      order_id: estado.order_id,
+      attempt_id: attempt.attempt_id,
+      status: attempt.state,
+      origem: options.source || "desconhecida"
+    });
+    return { ok: true, terminal: true, status: attempt.state };
+  }
+
+  if (!estado.aprovado) {
+    attempt.state = "pending";
+    writeMpOrdersV2(ledger);
+    atualizarStatusLocalOrderV2(attempt, estado);
+    return {
+      ok: true,
+      pending: true,
+      order_status: estado.order_status,
+      payment_status: estado.payment_status,
+      status_detail: estado.status_detail
+    };
+  }
+
+  const valorEsperado = normalizarValorFinanceiro(attempt.expected_amount);
+  const valorOrderOk =
+    valorEsperado > 0 &&
+    estado.total_amount > 0 &&
+    Math.abs(valorEsperado - estado.total_amount) < 0.01;
+  const valorPagamentoOk =
+    estado.payment_amount > 0 &&
+    Math.abs(valorEsperado - estado.payment_amount) < 0.01;
+  const moedaOk =
+    String(attempt.expected_currency || "") === "BRL" &&
+    estado.currency === "BRL";
+  const paymentIdOk =
+    !attempt.mp_payment_id ||
+    !estado.payment_id ||
+    String(attempt.mp_payment_id) === estado.payment_id;
+  const local = validarItensLocaisMpOrdersV2(attempt, estado, options);
+
+  if (!valorOrderOk || !valorPagamentoOk || !moedaOk || !paymentIdOk || !local.ok) {
+    attempt.state = "divergent";
+    attempt.divergence_reason =
+      local.reason ||
+      (!valorOrderOk || !valorPagamentoOk ? "valor_divergente" :
+        !moedaOk ? "moeda_divergente" : "payment_id_divergente");
+    attempt.divergence = {
+      valor_esperado: valorEsperado,
+      valor_order: estado.total_amount,
+      valor_pagamento: estado.payment_amount,
+      moeda: estado.currency,
+      registrado_em: agora
+    };
+    writeMpOrdersV2(ledger);
+    registrarEventoMpOrdersV2("order_rejeitada_validacao", {
+      order_id: estado.order_id,
+      attempt_id: attempt.attempt_id,
+      reason: attempt.divergence_reason,
+      valor_esperado: valorEsperado,
+      valor_order: estado.total_amount,
+      valor_pagamento: estado.payment_amount,
+      moeda: estado.currency
+    });
+    return { ok: false, rejected: true, reason: attempt.divergence_reason };
+  }
+
+  attempt.state = "provider_confirmed";
+  attempt.provider_confirmed_at = attempt.provider_confirmed_at || agora;
+  attempt.mp_payment_id = attempt.mp_payment_id || estado.payment_id;
+  writeMpOrdersV2(ledger);
+
+  let liberados = 0;
+  for (const item of local.itens) {
+    const antesPendente = item.pedido.pagamento_pendente === true;
+    await confirmarItemOrderV2(attempt, item, estado, ledger);
+    if (antesPendente) liberados += 1;
+  }
+
+  attempt.state = "confirmed";
+  attempt.confirmed_at = attempt.confirmed_at || new Date().toISOString();
+  if (ledger.active_by_scope[attempt.scope_key] === attempt.attempt_id) {
+    delete ledger.active_by_scope[attempt.scope_key];
+  }
+  writeMpOrdersV2(ledger);
+  registrarEventoMpOrdersV2("order_confirmada", {
+    order_id: estado.order_id,
+    payment_id: estado.payment_id,
+    attempt_id: attempt.attempt_id,
+    owner_id: attempt.owner_id,
+    pedido_ids: attempt.pedido_ids,
+    flow: attempt.flow,
+    liberados,
+    origem: options.source || "desconhecida"
+  });
+
+  return {
+    ok: true,
+    confirmed: true,
+    liberados,
+    pedido_ids: attempt.pedido_ids
+  };
+}
+
+function processarOrderV2(orderId, options = {}) {
+  return withMpOrdersV2Lock(
+    () => processarOrderV2Locked(orderId, options)
+  );
+}
+
+function extrairDadosPixOrderV2(order) {
+  const pagamento = obterPagamentoDaOrderMercadoPago(order);
+  const metodo = pagamento?.payment_method || {};
+  return {
+    order_id: String(order?.id || ""),
+    payment_id: String(pagamento?.id || ""),
+    order_status: String(order?.status || "action_required"),
+    payment_status: String(pagamento?.status || order?.status || "action_required"),
+    pix_copia_cola: String(metodo?.qr_code || ""),
+    qr_code_base64: String(metodo?.qr_code_base64 || ""),
+    ticket_url: String(metodo?.ticket_url || "")
+  };
+}
+
+function aplicarDadosPixOrderV2(attempt, order, ledger) {
+  const pix = extrairDadosPixOrderV2(order);
+  if (!pix.order_id || !pix.pix_copia_cola) {
+    throw criarErroMpOrdersV2(
+      "PIX_AUSENTE",
+      "O Mercado Pago nao retornou o codigo PIX.",
+      { status: 502 }
+    );
+  }
+
+  const agora = new Date().toISOString();
+  const itens = carregarItensLocaisMpOrdersV2(attempt);
+  if (itens.some(item => !item.base || !item.pedido || !pedidoUsaMpOrdersV2(item.pedido))) {
+    throw criarErroMpOrdersV2(
+      "PEDIDO_FORA_DO_V2",
+      "O pedido nao pertence ao novo fluxo de pagamento.",
+      { status: 409 }
+    );
+  }
+
+  attempt.mp_order_id = pix.order_id;
+  attempt.mp_payment_id = pix.payment_id;
+  attempt.state = "pending";
+  attempt.updated_at = agora;
+  ledger.by_order_id[pix.order_id] = attempt.attempt_id;
+  ledger.active_by_scope[attempt.scope_key] = attempt.attempt_id;
+  writeMpOrdersV2(ledger);
+
+  for (const item of itens) {
+    const pedido = readPedido(item.base) || item.pedido;
+    const novaTentativaNoPedido =
+      String(pedido.mp_orders_v2_attempt_id || "") !== attempt.attempt_id;
+    pedido.pagamento_metodo_pendente = "pix";
+    pedido.mp_order_id = pix.order_id;
+    pedido.mp_payment_id = pix.payment_id;
+    pedido.mp_order_status = pix.order_status;
+    pedido.mp_payment_status = pix.payment_status;
+    pedido.mp_orders_v2_attempt_id = attempt.attempt_id;
+    pedido.pix_tentativa = novaTentativaNoPedido
+      ? Math.max(1, Number(pedido.pix_tentativa || 0) + 1)
+      : Math.max(1, Number(pedido.pix_tentativa || 1));
+    pedido.pix_copia_cola = pix.pix_copia_cola;
+    pedido.pix_qr_code_base64 = pix.qr_code_base64;
+    pedido.pix_ticket_url = pix.ticket_url;
+    pedido.pix_gerado_em = agora;
+    if (attempt.flow === "batch") {
+      pedido.pix_lote_valor = attempt.expected_amount;
+      pedido.pix_lote_quantidade = attempt.pedido_ids.length;
+      pedido.pix_lote_ref = attempt.attempt_id;
+    }
+    writePedidoAtomic(item.base, pedido);
+  }
+
+  return pix;
+}
+
+async function criarOuReutilizarOrderV2Locked({ ownerId, flow, itens, batchId = "" }) {
+  if (!MP_ORDERS_V2_CREATE_ENABLED) {
+    throw criarErroMpOrdersV2(
+      "MP_ORDERS_V2_CREATE_DISABLED",
+      "A geracao de novos pagamentos esta temporariamente pausada.",
+      { status: 503, retryable: true }
+    );
+  }
+
+  if (!MP_ACCESS_TOKEN) {
+    throw criarErroMpOrdersV2(
+      "MP_ACCESS_TOKEN_AUSENTE",
+      "Mercado Pago nao configurado.",
+      { status: 500 }
+    );
+  }
+  if (!itens.length || itens.some(item => !pedidoUsaMpOrdersV2(item.pedido))) {
+    throw criarErroMpOrdersV2(
+      "PEDIDO_ANTERIOR_AO_V2",
+      "Este pedido foi criado antes do novo fluxo de pagamento e nao sera alterado automaticamente.",
+      { status: 409 }
+    );
+  }
+
+  const valor = normalizarValorFinanceiro(
+    itens.reduce(
+      (total, item) =>
+        total + Number(item.pedido.valor_pendente || item.pedido.valor_final || 0),
+      0
+    )
+  );
+  if (valor <= 0) {
+    throw criarErroMpOrdersV2("VALOR_INVALIDO", "Valor pendente invalido.", {
+      status: 400
+    });
+  }
+
+  let ledger = readMpOrdersV2();
+  const pedidoIds = itens.map(item => String(item.id));
+  const scopeKey = scopeKeyMpOrdersV2({
+    ownerId,
+    flow,
+    pedidoIds,
+    batchId
+  });
+  let attemptId = String(ledger.active_by_scope[scopeKey] || "");
+  let attempt = attemptId ? ledger.attempts[attemptId] : null;
+
+  if (attempt?.mp_order_id) {
+    const order = await obterOrderMercadoPagoV2(attempt.mp_order_id);
+    const itensAtuais = carregarItensLocaisMpOrdersV2(attempt);
+    const vinculoLocalPodeSerRestaurado =
+      itensAtuais.length === attempt.pedido_ids.length &&
+      itensAtuais.every(item =>
+        item.base &&
+        item.pedido &&
+        pedidoUsaMpOrdersV2(item.pedido) &&
+        item.pedido.pagamento_pendente === true &&
+        (
+          !item.pedido.mp_orders_v2_attempt_id ||
+          String(item.pedido.mp_orders_v2_attempt_id) === attempt.attempt_id
+        ) &&
+        (
+          !item.pedido.mp_order_id ||
+          String(item.pedido.mp_order_id) === String(attempt.mp_order_id)
+        )
+      );
+    if (vinculoLocalPodeSerRestaurado) {
+      aplicarDadosPixOrderV2(attempt, order, ledger);
+    }
+    const resultado = await processarOrderV2Locked(attempt.mp_order_id, {
+      source: "gerar_pix_reconsulta",
+      expectedOwnerId: ownerId,
+      expectedPedidoId: flow === "individual" ? pedidoIds[0] : "",
+      prefetchedOrder: order
+    });
+    if (resultado.confirmed) {
+      throw criarErroMpOrdersV2(
+        "PEDIDO_JA_PAGO",
+        "O pagamento ja foi confirmado.",
+        { status: 409 }
+      );
+    }
+    if (!resultado.terminal && !resultado.rejected) {
+      ledger = readMpOrdersV2();
+      attempt = ledger.attempts[attempt.attempt_id];
+      const pix = aplicarDadosPixOrderV2(attempt, order, ledger);
+      return { attempt, pix, valor, reused: true };
+    }
+    ledger = readMpOrdersV2();
+    attempt = null;
+  }
+
+  if (!attempt) {
+    attempt = criarTentativaMpOrdersV2({
+      ownerId,
+      flow,
+      itens,
+      batchId,
+      valor
+    });
+    ledger.attempts[attempt.attempt_id] = attempt;
+    ledger.active_by_scope[attempt.scope_key] = attempt.attempt_id;
+    writeMpOrdersV2(ledger);
+  }
+
+  const payerEmail = MP_SANDBOX_MODE
+    ? "test_user_br@testuser.com"
+    : `${String(ownerId).replace(/\D/g, "") || "cliente"}@ia4tube.com.br`;
+  const orderPayload = {
+    type: "online",
+    processing_mode: "automatic",
+    total_amount: valor.toFixed(2),
+    external_reference: attempt.external_reference,
+    payer: { email: payerEmail },
+    transactions: {
+      payments: [{
+        amount: valor.toFixed(2),
+        payment_method: { id: "pix", type: "bank_transfer" }
+      }]
+    }
+  };
+
+  let order;
+  try {
+    const created = await requestMercadoPagoOrdersV2("/v1/orders", {
+      method: "POST",
+      headers: {
+        "X-Idempotency-Key": attempt.idempotency_key
+      },
+      body: JSON.stringify(orderPayload)
+    });
+    order = created.payload;
+  } catch (error) {
+    ledger = readMpOrdersV2();
+    const atual = ledger.attempts[attempt.attempt_id] || attempt;
+    atual.last_error = {
+      code: error.code || "MP_ERROR",
+      retryable: error.retryable === true,
+      registrado_em: new Date().toISOString()
+    };
+    atual.updated_at = new Date().toISOString();
+    ledger.attempts[attempt.attempt_id] = atual;
+    writeMpOrdersV2(ledger);
+    throw error;
+  }
+
+  ledger = readMpOrdersV2();
+  attempt = ledger.attempts[attempt.attempt_id] || attempt;
+  const pix = aplicarDadosPixOrderV2(attempt, order, ledger);
+  registrarEventoMpOrdersV2("order_criada", {
+    order_id: pix.order_id,
+    payment_id: pix.payment_id,
+    attempt_id: attempt.attempt_id,
+    owner_id: attempt.owner_id,
+    pedido_ids: attempt.pedido_ids,
+    flow: attempt.flow,
+    valor
+  });
+  return { attempt, pix, valor, reused: false };
+}
+
+function criarOuReutilizarOrderV2(options) {
+  return withMpOrdersV2Lock(
+    () => criarOuReutilizarOrderV2Locked(options)
+  );
+}
+
+async function tentarRecuperarOrderV2Pedido(ownerId, pedidoId, source) {
+  const base = getPedidoBase(ownerId, pedidoId);
+  const pedido = base ? readPedido(base) || {} : null;
+  if (!base || !pedido ||
+      !pedidoUsaMpOrdersV2(pedido) ||
+      pedido.pagamento_pendente !== true ||
+      !pedido.mp_order_id) {
+    return { ok: true, skipped: true };
+  }
+
+  try {
+    return await processarOrderV2(pedido.mp_order_id, {
+      source,
+      expectedOwnerId: ownerId,
+      expectedPedidoId: pedidoId
+    });
+  } catch (error) {
+    registrarEventoMpOrdersV2("recuperacao_indisponivel", {
+      order_id: pedido.mp_order_id,
+      owner_id: ownerId,
+      pedido_id: pedidoId,
+      origem: source,
+      code: error.code || "ERRO",
+      retryable: error.retryable === true
+    });
+    return {
+      ok: false,
+      temporary_error: error.retryable === true,
+      reason: error.code || "ERRO"
+    };
+  }
+}
+
 function validarCreditoSaldoMercadoPago(valor) {
   const credito = normalizarValorFinanceiro(valor);
   const creditoCentavos = valorFinanceiroEmCentavos(credito);
@@ -940,11 +1904,12 @@ function aplicarResumoCupomNoPedido(pedido, resultadoCupom) {
   };
 }
 
-function registrarUsoCupomPedido(pedido, whatsapp) {
+function registrarUsoCupomPedido(pedido, whatsapp, options = {}) {
   if (!pedido?.cupom_aplicado || pedido.cupom_uso_registrado === true) return { ok: true, skipped: true };
 
   const codigo = normalizarCupomCodigo(pedido.cupom_codigo_normalizado || pedido.cupom_codigo || pedido.desconto_info?.cupom_codigo);
   if (!codigo) return { ok: true, skipped: true };
+  const idempotencyKey = String(options.idempotencyKey || "").trim().slice(0, 180);
 
   let lockAtivo = false;
 
@@ -962,6 +1927,16 @@ function registrarUsoCupomPedido(pedido, whatsapp) {
       return { ok: true, skipped: true };
     }
 
+    cupom.usos_idempotencia = Array.isArray(cupom.usos_idempotencia)
+      ? cupom.usos_idempotencia.map(String).slice(-5_000)
+      : [];
+
+    if (idempotencyKey && cupom.usos_idempotencia.includes(idempotencyKey)) {
+      pedido.cupom_uso_registrado = true;
+      pedido.cupom_uso_registrado_em = pedido.cupom_uso_registrado_em || new Date().toISOString();
+      return { ok: true, skipped: true, idempotent_replay: true };
+    }
+
     const chaveCliente = normalizarCupomCodigo(whatsapp);
     cupom.usos_total = Number(cupom.usos_total || 0) + 1;
     cupom.usos_por_cliente = cupom.usos_por_cliente && typeof cupom.usos_por_cliente === "object" && !Array.isArray(cupom.usos_por_cliente)
@@ -970,6 +1945,11 @@ function registrarUsoCupomPedido(pedido, whatsapp) {
 
     if (chaveCliente) {
       cupom.usos_por_cliente[chaveCliente] = Number(cupom.usos_por_cliente[chaveCliente] || 0) + 1;
+    }
+
+    if (idempotencyKey) {
+      cupom.usos_idempotencia.push(idempotencyKey);
+      cupom.usos_idempotencia = cupom.usos_idempotencia.slice(-5_000);
     }
 
     cupom.atualizado_em = new Date().toISOString();
@@ -9505,6 +10485,47 @@ app.post("/webhook/mercadopago", async (req, res) => {
       return res.json({ ok: true });
     }
 
+    if (notificacaoOrder) {
+      registrarEventoMpOrdersV2("webhook_recebido", {
+        order_id: String(paymentId),
+        type: tipoNotificacao,
+        payload_bruto_sanitizado: body,
+        query_sanitizada: req.query || {},
+        headers_sanitizados: {
+          x_request_id: String(req.headers?.["x-request-id"] || ""),
+          assinatura_presente: Boolean(req.headers?.["x-signature"]),
+          user_agent: String(req.headers?.["user-agent"] || "").slice(0, 200)
+        }
+      });
+
+      try {
+        const resultado = await processarOrderV2(paymentId, {
+          source: "webhook"
+        });
+        return res.json({
+          ok: true,
+          ignored: resultado.ignored === true,
+          pending: resultado.pending === true,
+          confirmed: resultado.confirmed === true,
+          terminal: resultado.terminal === true,
+          rejected: resultado.rejected === true,
+          rejeitado: resultado.rejected === true,
+          liberados: Number(resultado.liberados || 0),
+          reason: resultado.reason || ""
+        });
+      } catch (error) {
+        registrarEventoMpOrdersV2("webhook_falha_temporaria", {
+          order_id: String(paymentId),
+          code: error.code || "ERRO",
+          retryable: error.retryable === true
+        });
+        return res.status(error.retryable === true ? 503 : 500).json({
+          ok: false,
+          retryable: error.retryable === true
+        });
+      }
+    }
+
     let processados = readMpProcessados();
 
     if (processados[paymentId]) {
@@ -10338,6 +11359,8 @@ function criarPedidoHandler(categoria) {
     } else {
       draft.pedido.pagamento_pendente = true;
       draft.pedido.valor_pendente = custoEfetivoPedido;
+      draft.pedido.payment_flow_version = MP_ORDERS_V2_VERSION;
+      draft.pedido.payment_flow_created_at = new Date().toISOString();
       draft.pedido.motivo_pagamento_pendente = pagamentoAntecipadoObrigatorio
         ? (pedidoAssistente ? "pix_obrigatorio_assistente" : "pix_obrigatorio_criacao_economica")
         : "saldo_insuficiente";
@@ -10876,9 +11899,6 @@ app.post("/pedidos/:id/pagar-com-saldo", auth, (req, res) => {
 app.post("/pedidos/gerar-pix-lote", auth, async (req, res) => {
   try {
     if (bloquearRecursoPagamentoNoApp(req, res)) return;
-    if (!MP_ACCESS_TOKEN) {
-      return res.status(500).json({ ok: false, error: "MP_ACCESS_TOKEN nao configurado" });
-    }
 
     const whatsapp = req.user.whatsapp;
     const batchId = normalizarFotoJogosBatchId(req.body?.batch_id || "");
@@ -10895,127 +11915,41 @@ app.post("/pedidos/gerar-pix-lote", auth, async (req, res) => {
     if (!itens.length) {
       return res.status(404).json({ ok: false, error: "Nenhum item pendente encontrado para este lote." });
     }
-
-    const valorPix = normalizarValorFinanceiro(
-      itens.reduce((total, item) => total + Number(item.pedido.valor_pendente || item.pedido.valor_final || 0), 0)
-    );
-    if (valorPix <= 0) {
-      return res.status(400).json({ ok: false, error: "Valor pendente invalido." });
-    }
-
-    const existente = itens[0].pedido;
-    const todosNaMesmaCobranca = itens.every(item =>
-      item.pedido.mp_order_id &&
-      item.pedido.mp_order_id === existente.mp_order_id &&
-      item.pedido.pix_copia_cola === existente.pix_copia_cola
-    );
-    if (
-      todosNaMesmaCobranca &&
-      existente.pix_copia_cola &&
-      ["action_required", "pending"].includes(String(existente.mp_payment_status || "").toLowerCase())
-    ) {
-      return res.json({
-        ok: true,
-        batch_id: batchId,
-        pedido_ids: itens.map(item => item.id),
-        quantidade: itens.length,
-        pix_copia_cola: existente.pix_copia_cola,
-        qr_code_base64: existente.pix_qr_code_base64 || "",
-        ticket_url: existente.pix_ticket_url || "",
-        order_id: existente.mp_order_id,
-        payment_id: existente.mp_payment_id || "",
-        valor_final: valorPix,
-        valor_pendente: valorPix
-      });
-    }
-
-    const payerEmail = MP_SANDBOX_MODE
-      ? "test_user_br@testuser.com"
-      : `${String(whatsapp).replace(/\D/g, "") || "cliente"}@ia4tube.com.br`;
-    const pixTentativa = Math.max(
-      1,
-      ...itens.map(item => Number(item.pedido.pix_tentativa || 0) + 1)
-    );
-    const externalReference = criarReferenciaExternaLotePix(whatsapp, batchId);
-    const batchRef = externalReference.split("_").pop() || "";
-    const orderPayload = {
-      type: "online",
-      processing_mode: "automatic",
-      total_amount: valorPix.toFixed(2),
-      external_reference: externalReference,
-      payer: { email: payerEmail },
-      transactions: {
-        payments: [{
-          amount: valorPix.toFixed(2),
-          payment_method: { id: "pix", type: "bank_transfer" }
-        }]
-      }
-    };
-    const r = await fetch("https://api.mercadopago.com/v1/orders", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${MP_ACCESS_TOKEN}`,
-        "Content-Type": "application/json",
-        "X-Idempotency-Key": `pedido_pix_lote_${whatsapp}_${batchId}_${pixTentativa}`
-      },
-      body: JSON.stringify(orderPayload)
+    const resultado = await criarOuReutilizarOrderV2({
+      ownerId: whatsapp,
+      flow: "batch",
+      itens,
+      batchId
     });
-    const data = await r.json();
-    if (!r.ok) {
-      return res.status(500).json({ ok: false, error: "Erro ao gerar Pix", detalhe: data });
-    }
-
-    const pagamentoOrder = obterPagamentoDaOrderMercadoPago(data);
-    const metodoPagamento = pagamentoOrder?.payment_method || {};
-    const pixCopiaCola = metodoPagamento.qr_code || "";
-    if (!pixCopiaCola) {
-      return res.status(500).json({ ok: false, error: "Mercado Pago nao retornou codigo Pix", detalhe: data });
-    }
-
-    const geradoEm = new Date().toISOString();
-    for (const item of itens) {
-      const pedido = item.pedido;
-      pedido.pagamento_metodo_pendente = "pix";
-      pedido.mp_order_id = String(data.id || "");
-      pedido.mp_payment_id = String(pagamentoOrder.id || "");
-      pedido.mp_payment_status = pagamentoOrder.status || data.status || "action_required";
-      pedido.mp_order_status = data.status || "action_required";
-      pedido.pix_tentativa = pixTentativa;
-      pedido.pix_copia_cola = pixCopiaCola;
-      pedido.pix_qr_code_base64 = metodoPagamento.qr_code_base64 || "";
-      pedido.pix_ticket_url = metodoPagamento.ticket_url || "";
-      pedido.pix_gerado_em = geradoEm;
-      pedido.pix_lote_valor = valorPix;
-      pedido.pix_lote_quantidade = itens.length;
-      pedido.pix_lote_ref = batchRef;
-      writePedido(item.base, pedido);
-    }
 
     return res.json({
       ok: true,
       batch_id: batchId,
       pedido_ids: itens.map(item => item.id),
       quantidade: itens.length,
-      pix_copia_cola: pixCopiaCola,
-      qr_code_base64: metodoPagamento.qr_code_base64 || "",
-      ticket_url: metodoPagamento.ticket_url || "",
-      order_id: String(data.id || ""),
-      payment_id: String(pagamentoOrder.id || ""),
-      valor_final: valorPix,
-      valor_pendente: valorPix
+      pix_copia_cola: resultado.pix.pix_copia_cola,
+      qr_code_base64: resultado.pix.qr_code_base64,
+      ticket_url: resultado.pix.ticket_url,
+      order_id: resultado.pix.order_id,
+      payment_id: resultado.pix.payment_id,
+      valor_final: resultado.valor,
+      valor_pendente: resultado.valor,
+      payment_flow_version: MP_ORDERS_V2_VERSION,
+      reused: resultado.reused === true
     });
   } catch (e) {
-    return res.status(500).json({ ok: false, error: "Erro interno ao gerar Pix do lote" });
+    return res.status(Number(e.status || 500)).json({
+      ok: false,
+      error: e.message || "Erro interno ao gerar Pix do lote",
+      code: e.code || "ERRO_PIX_LOTE",
+      retryable: e.retryable === true
+    });
   }
 });
 
 app.post("/pedidos/:id/gerar-pix", auth, async (req, res) => {
   try {
     if (bloquearRecursoPagamentoNoApp(req, res)) return;
-
-    if (!MP_ACCESS_TOKEN) {
-      return res.status(500).json({ ok: false, error: "MP_ACCESS_TOKEN nao configurado" });
-    }
 
     const whatsapp = req.user.whatsapp;
     const id = req.params.id;
@@ -11038,119 +11972,43 @@ app.post("/pedidos/:id/gerar-pix", auth, async (req, res) => {
       return res.status(400).json({ ok: false, error: "Valor pendente invalido." });
     }
 
-    if (
-      pedido.mp_order_id &&
-      pedido.pix_copia_cola &&
-      ["action_required", "pending"].includes(
-        String(pedido.mp_payment_status || "").toLowerCase()
-      )
-    ) {
-      return res.json({
-        ok: true,
-        pix_copia_cola: pedido.pix_copia_cola,
-        qr_code_base64: pedido.pix_qr_code_base64 || "",
-        ticket_url: pedido.pix_ticket_url || "",
-        order_id: pedido.mp_order_id,
-        payment_id: pedido.mp_payment_id || "",
-        valor_pendente: Number(pedido.valor_pendente || 0),
-        valor_original: Number(pedido.valor_original || 0),
-        valor_desconto: Number(pedido.valor_desconto || 0),
-        valor_final: Number(pedido.valor_final || pedido.valor_pendente || 0),
-        modalidade_criacao: normalizarModalidadeCriacao(pedido.modalidade_criacao),
-        desconto_info: pedido.desconto_info || null
+    if (!pedidoUsaMpOrdersV2(pedido)) {
+      return res.status(409).json({
+        ok: false,
+        error: "Este pedido foi criado antes do novo fluxo de pagamento e nao sera alterado automaticamente.",
+        code: "PEDIDO_ANTERIOR_AO_V2"
       });
     }
 
-    const payerEmail = MP_SANDBOX_MODE
-      ? "test_user_br@testuser.com"
-      : `${String(whatsapp).replace(/\D/g, "") || "cliente"}@ia4tube.com.br`;
-    const valorPix = Number(valorPendente.toFixed(2));
-    const modalidadeCriacao = normalizarModalidadeCriacao(pedido.modalidade_criacao);
-    const pixTentativa = Math.max(1, Number(pedido.pix_tentativa || 0) + 1);
-    const externalReference = criarReferenciaExternaPedidoPix(
-      whatsapp,
-      id,
-      modalidadeCriacao
-    );
-    const orderPayload = {
-      type: "online",
-      processing_mode: "automatic",
-      total_amount: valorPix.toFixed(2),
-      external_reference: externalReference,
-      payer: {
-        email: payerEmail
-      },
-      transactions: {
-        payments: [{
-          amount: valorPix.toFixed(2),
-          payment_method: {
-            id: "pix",
-            type: "bank_transfer"
-          }
-        }]
-      }
-    };
-
-    const r = await fetch("https://api.mercadopago.com/v1/orders", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${MP_ACCESS_TOKEN}`,
-        "Content-Type": "application/json",
-        "X-Idempotency-Key": `pedido_pix_order_${id}_${pixTentativa}`
-      },
-      body: JSON.stringify(orderPayload)
+    const resultado = await criarOuReutilizarOrderV2({
+      ownerId: whatsapp,
+      flow: "individual",
+      itens: [{ id, base, pedido }]
     });
-
-    const data = await r.json();
-
-    if (!r.ok) {
-      return res.status(500).json({ ok: false, error: "Erro ao gerar Pix", detalhe: data });
-    }
-
-    const pagamentoOrder = obterPagamentoDaOrderMercadoPago(data);
-    const metodoPagamento = pagamentoOrder?.payment_method || {};
-    const transactionData = {
-      qr_code: metodoPagamento.qr_code || "",
-      qr_code_base64: metodoPagamento.qr_code_base64 || "",
-      ticket_url: metodoPagamento.ticket_url || ""
-    };
-    const pixCopiaCola = transactionData.qr_code || "";
-    const qrCodeBase64 = transactionData.qr_code_base64 || "";
-    const ticketUrl = transactionData.ticket_url || "";
-
-    if (!pixCopiaCola) {
-      return res.status(500).json({ ok: false, error: "Mercado Pago nao retornou codigo Pix", detalhe: data });
-    }
-
-    pedido.pagamento_metodo_pendente = "pix";
-    pedido.mp_order_id = String(data.id || "");
-    pedido.mp_payment_id = String(pagamentoOrder.id || "");
-    pedido.mp_payment_status = pagamentoOrder.status || data.status || "action_required";
-    pedido.mp_order_status = data.status || "action_required";
-    pedido.pix_tentativa = pixTentativa;
-    pedido.pix_copia_cola = pixCopiaCola;
-    pedido.pix_qr_code_base64 = qrCodeBase64;
-    pedido.pix_ticket_url = ticketUrl;
-    pedido.pix_gerado_em = new Date().toISOString();
-
-    fs.writeFileSync(pedidoPath, JSON.stringify(pedido, null, 2), "utf8");
 
     return res.json({
       ok: true,
-      pix_copia_cola: pixCopiaCola,
-      qr_code_base64: qrCodeBase64,
-      ticket_url: ticketUrl,
-      order_id: pedido.mp_order_id,
-      payment_id: pedido.mp_payment_id,
+      pix_copia_cola: resultado.pix.pix_copia_cola,
+      qr_code_base64: resultado.pix.qr_code_base64,
+      ticket_url: resultado.pix.ticket_url,
+      order_id: resultado.pix.order_id,
+      payment_id: resultado.pix.payment_id,
       valor_pendente: Number(pedido.valor_pendente || 0),
       valor_original: Number(pedido.valor_original || 0),
       valor_desconto: Number(pedido.valor_desconto || 0),
       valor_final: Number(pedido.valor_final || pedido.valor_pendente || 0),
       modalidade_criacao: normalizarModalidadeCriacao(pedido.modalidade_criacao),
-      desconto_info: pedido.desconto_info || null
+      desconto_info: pedido.desconto_info || null,
+      payment_flow_version: MP_ORDERS_V2_VERSION,
+      reused: resultado.reused === true
     });
   } catch (e) {
-    return res.status(500).json({ ok: false, error: "Erro interno ao gerar Pix" });
+    return res.status(Number(e.status || 500)).json({
+      ok: false,
+      error: e.message || "Erro interno ao gerar Pix",
+      code: e.code || "ERRO_PIX",
+      retryable: e.retryable === true
+    });
   }
 });
 
@@ -11183,13 +12041,19 @@ app.get("/pedidos/:id/pagamento-info", auth, (req, res) => {
   });
 });
 
-app.post("/pedidos/:id/aprovar", auth, (req, res) => {
+app.post("/pedidos/:id/aprovar", auth, async (req, res) => {
   const whatsapp = req.user.whatsapp;
   const base = getPedidoBase(whatsapp, req.params.id);
 
   if (!base) {
     return res.status(404).json({ ok: false, error: "Pedido não encontrado" });
   }
+
+  await tentarRecuperarOrderV2Pedido(
+    whatsapp,
+    req.params.id,
+    "cliente_aprovar"
+  );
 
   const pedidoPath = path.join(base, "pedido.json");
   const pedido = safeReadJson(pedidoPath) || {};
@@ -11293,7 +12157,7 @@ app.post("/pedidos/:id/solicitar-ajuste", auth, (req, res) => {
   });
 });
 
-app.post("/pedidos/:id/download-ticket", auth, (req, res) => {
+app.post("/pedidos/:id/download-ticket", auth, async (req, res) => {
   const startedAt = Date.now();
   const pedidoId = String(req.params.id || "");
   const formato = String(req.body?.formato || "resultado").toLowerCase();
@@ -11301,6 +12165,12 @@ app.post("/pedidos/:id/download-ticket", auth, (req, res) => {
   if (!["resultado", "zip"].includes(formato)) {
     return res.status(400).json({ ok: false, error: "Formato de download invalido." });
   }
+
+  await tentarRecuperarOrderV2Pedido(
+    req.user.whatsapp,
+    pedidoId,
+    "cliente_download"
+  );
 
   const validated = validateOrderDownload(req.user.whatsapp, pedidoId, {
     requireResult: formato === "resultado"
@@ -12536,5 +13406,15 @@ module.exports = {
     cleanupFotoJogosAnalysisDedupe,
     normalizarModalidadeCriacao,
     calcularCustoPedidoPorModalidade
+  },
+  __mpOrdersV2Test: {
+    version: MP_ORDERS_V2_VERSION,
+    setHooks(hooks = {}) {
+      mpOrdersV2TestHooks = hooks && typeof hooks === "object" ? hooks : {};
+    },
+    resetHooks() {
+      mpOrdersV2TestHooks = {};
+    },
+    processarOrderV2
   }
 };

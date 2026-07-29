@@ -5,7 +5,8 @@
   "type": "commonjs",
   "scripts": {
     "start": "node server.js",
-    "test": "node --test test-download-ticket.js test-download-routes.js"
+    "test": "node --test test-download-ticket.js test-download-routes.js",
+    "test:payments": "node test-economic-creation.js"
   },
   "dependencies": {
     "archiver": "^8.0.0",
