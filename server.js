@@ -2455,7 +2455,7 @@ const LEGACY_GENERATION_CONTRACTS = Object.freeze({
     internalType: "proximo_jogo",
     flyerTipo: "zz1ft",
     promptFile: "prompt_proximo_jogo.txt",
-    promptSha256: "0786248a2f18a4183a0d21f5d4959377d92f71ffcb0c416cda6df54a551a323f"
+    promptSha256: "52332d764971c58dbf076c6fd0bced4ad9267e1e1362fc6ae698170b59bd2605"
   },
   resultado: {
     route: "/resultado_do_jogo",
@@ -2484,6 +2484,13 @@ const LEGACY_GENERATION_CONTRACTS = Object.freeze({
     flyerTipo: "jog_escudo",
     promptFile: "prompt_jogador_escudo.txt",
     promptSha256: "80c1624d9741ea4ef73b237b90400ec647b78a421d6f8084d7d2f009aa33935c"
+  },
+  mascote_uniforme: {
+    route: "/pedidos",
+    internalType: "mascote_uniforme",
+    flyerTipo: "mascote_uniforme",
+    promptFile: "prompt_mascote_uniforme.txt",
+    promptSha256: "a5d8712ca1abf7a8e15742d5074edefe4b1d0e414cddcde4992f8551587b5006"
   }
 });
 const fotoJogosBatchDedupe = new Map();
@@ -3027,12 +3034,12 @@ function normalizarClientRequestId(value) {
 function buildOrderScenarioContext(categoria, body = {}) {
   const legacyFields = orderService.normalizeOrderBody(body);
   const fields = orderService.normalizeOrderBody(body);
-  const resolution = resultScenarioRegistry.resolveResultadoScenario({
+  const resolution = resultScenarioRegistry.resolveProductScenario({
     categoria,
     body
   });
 
-  resultScenarioRegistry.applyResultadoScenario(fields, resolution);
+  resultScenarioRegistry.applyProductScenario(fields, resolution);
 
   const observationConflict = resultScenarioRegistry.getScenarioObservationConflict(
     fields,
@@ -6740,6 +6747,12 @@ function limparUploadsRequest(req) {
 
 const ORDER_CREATE_DEDUPE_TTL_MS = 30 * 1000;
 const ORDER_IDEMPOTENCY_PAYLOAD_VERSION = 2;
+const ORDER_PRE_SCENARIO_V2_COMPAT_PRODUCTS = new Set([
+  "proximo_jogo",
+  "jogador_escudo",
+  "mascote_uniforme",
+  "escalacao"
+]);
 const orderCreateDedupe = new Map();
 
 function stableOrderJson(value) {
@@ -6831,21 +6844,122 @@ function getOrderIdempotencySemanticControls(req) {
   };
 }
 
+function hashOrderPayloadV2({ user, categoria, fields, controls, files }) {
+  return crypto
+    .createHash("sha256")
+    .update(stableOrderJson({
+      user,
+      categoria,
+      fields: getSemanticOrderFields(fields),
+      controls,
+      files
+    }))
+    .digest("hex");
+}
+
+function objectHasScenarioMetadata(value) {
+  return !!value && typeof value === "object" && !Array.isArray(value) &&
+    Object.keys(value).some(key => String(key).toLowerCase().startsWith("scenario"));
+}
+
+function orderHasStoredScenarioMetadata(pedido = {}) {
+  return [
+    pedido,
+    pedido?.fields,
+    pedido?.new_model,
+    pedido?.new_model?.fields
+  ].some(objectHasScenarioMetadata);
+}
+
+function buildPreScenarioDefaultCompatibilityV2({
+  categoria,
+  user,
+  fields,
+  legacyFields,
+  controls,
+  files
+}) {
+  const product = resultScenarioRegistry.getProductDefinition(categoria);
+  const scenarioFields = fields?.new_model?.fields;
+  const legacyNewModel = legacyFields?.new_model;
+  const legacyScenarioFields = legacyNewModel?.fields;
+  const legacyScenarioKeys = legacyScenarioFields && typeof legacyScenarioFields === "object"
+    ? Object.keys(legacyScenarioFields).filter(key =>
+        String(key).toLowerCase().startsWith("scenario")
+      )
+    : [];
+  const legacyScenarioId = legacyScenarioFields?.scenario_id;
+  const eligible = !!(
+    product &&
+    ORDER_PRE_SCENARIO_V2_COMPAT_PRODUCTS.has(product.id) &&
+    legacyFields &&
+    typeof legacyFields === "object" &&
+    scenarioFields &&
+    scenarioFields.scenario_id === product.defaultScenarioId &&
+    Number(scenarioFields.scenario_version || 0) === 1 &&
+    ["default", "explicit"].includes(scenarioFields.scenario_source) &&
+    !objectHasScenarioMetadata(legacyFields) &&
+    !objectHasScenarioMetadata(legacyNewModel) &&
+    legacyScenarioKeys.every(key => key === "scenario_id") &&
+    (
+      legacyScenarioId === undefined ||
+      legacyScenarioId === product.defaultScenarioId
+    )
+  );
+
+  if (!eligible) {
+    return {
+      eligible: false,
+      productId: product?.id || "",
+      payloadHash: ""
+    };
+  }
+
+  const preScenarioFields = {
+    ...legacyFields,
+    new_model: {
+      ...legacyNewModel,
+      fields: {
+        ...legacyScenarioFields
+      }
+    }
+  };
+  delete preScenarioFields.new_model.fields.scenario_id;
+
+  return {
+    eligible: true,
+    productId: product.id,
+    payloadHash: hashOrderPayloadV2({
+      user,
+      categoria,
+      fields: preScenarioFields,
+      controls,
+      files
+    })
+  };
+}
+
 function buildOrderCreateDedupeMeta(req, categoria, whatsapp, fields, options = {}) {
   const userKey = String(whatsapp || req.user?.whatsapp || "").trim();
   const clientRequestId = getRequestIdempotencyKey(req);
   const filesFingerprint = getUploadedFilesFingerprint(req.files || {});
   const legacyFilesFingerprint = getUploadedFilesLegacyFingerprint(req.files || {});
-  const payloadHash = crypto
-    .createHash("sha256")
-    .update(stableOrderJson({
-      user: userKey,
-      categoria,
-      fields: getSemanticOrderFields(fields),
-      controls: getOrderIdempotencySemanticControls(req),
-      files: filesFingerprint
-    }))
-    .digest("hex");
+  const controls = getOrderIdempotencySemanticControls(req);
+  const payloadHash = hashOrderPayloadV2({
+    user: userKey,
+    categoria,
+    fields,
+    controls,
+    files: filesFingerprint
+  });
+  const preScenarioDefaultCompatibilityV2 = buildPreScenarioDefaultCompatibilityV2({
+    categoria,
+    user: userKey,
+    fields,
+    legacyFields: options.legacyFields,
+    controls,
+    files: filesFingerprint
+  });
   const legacyPayloadHash = crypto
     .createHash("sha256")
     .update(stableOrderJson({
@@ -6863,6 +6977,7 @@ function buildOrderCreateDedupeMeta(req, categoria, whatsapp, fields, options = 
     clientRequestId,
     payloadHash,
     payloadVersion: ORDER_IDEMPOTENCY_PAYLOAD_VERSION,
+    preScenarioDefaultCompatibilityV2,
     legacyPayloadHash,
     filesFingerprint
   };
@@ -6925,9 +7040,25 @@ function evaluatePersistentOrderReplay(pedido, dedupeMeta) {
   const storedVersion = Number(pedido?.idempotency_payload_hash_version || 0);
 
   if (storedVersion === ORDER_IDEMPOTENCY_PAYLOAD_VERSION) {
-    return storedHash && storedHash === dedupeMeta.payloadHash
-      ? { replay: true, mode: "v2" }
-      : { conflict: true, reason: "payload_hash_mismatch_v2" };
+    if (storedHash && storedHash === dedupeMeta.payloadHash) {
+      return { replay: true, mode: "v2" };
+    }
+
+    const compatibility = dedupeMeta?.preScenarioDefaultCompatibilityV2;
+    const storedProduct = resultScenarioRegistry.getProductDefinition(
+      pedido?.product_id || pedido?.categoria || pedido?.produto
+    );
+    if (
+      compatibility?.eligible === true &&
+      storedProduct?.id === compatibility.productId &&
+      !orderHasStoredScenarioMetadata(pedido) &&
+      storedHash &&
+      storedHash === compatibility.payloadHash
+    ) {
+      return { replay: true, mode: "v2_pre_scenario_default_compat" };
+    }
+
+    return { conflict: true, reason: "payload_hash_mismatch_v2" };
   }
 
   // Fingerprints anteriores ao v2 nao comprovam os bytes reais do upload.
@@ -7108,7 +7239,6 @@ function gerarAuditoriaGeracaoLegada({ categoria, fields = {}, files = {}, reque
     parametros_esperados: {
       size:"1024x1536",
       quality:"medium",
-      input_fidelity:"high",
       output_format:"jpeg"
     },
     campos_legacy_presentes: legacyFields.sort(),
@@ -12447,25 +12577,7 @@ app.post("/pedidos/:id/solicitar-ajuste", auth, (req, res) => {
 
   const pedidoPath = path.join(base, "pedido.json");
   const pedido = safeReadJson(pedidoPath) || {};
-  const storedScenarioMeta = resultScenarioRegistry.getPedidoScenarioMeta(pedido);
-  const pedidoIsResultado = [
-    pedido.product_id,
-    pedido.categoria,
-    pedido.produto
-  ].some(value =>
-    resultScenarioRegistry.RESULTADO_PRODUCT_ALIASES.has(
-      String(value || "").trim().toLowerCase()
-    )
-  );
-  const scenarioMeta = !storedScenarioMeta.scenario_id && pedidoIsResultado
-    ? {
-        scenario_id: resultScenarioRegistry.RESULTADO_DEFAULT_SCENARIO_ID,
-        scenario_version: resultScenarioRegistry.RESULTADO_SCENARIOS[
-          resultScenarioRegistry.RESULTADO_DEFAULT_SCENARIO_ID
-        ].version,
-        scenario_source: "default"
-      }
-    : storedScenarioMeta;
+  const scenarioMeta = resultScenarioRegistry.getPedidoScenarioMeta(pedido);
 
   if (
     scenarioMeta.scenario_id &&
@@ -13800,9 +13912,11 @@ module.exports = {
   __resultadoScenarioTest: {
     registry: resultScenarioRegistry,
     buildOrderScenarioContext,
+    buildOrderResponsePayloadFromItem,
     buildOrderCreateDedupeMeta,
     buildFotoJogosBatchPayloadHash,
     evaluatePersistentOrderReplay,
+    gerarAuditoriaGeracaoLegada,
     getSemanticOrderFields,
     getUploadedFilesFingerprint,
     stableOrderJson,

@@ -657,10 +657,10 @@ test("piloto local de scenario_id para Resultado", async t => {
         })
       });
       assert.equal(wrongProductSource.response.status, 400);
-      assert.equal(wrongProductSource.payload.code, "SCENARIO_PRODUCT_MISMATCH");
+      assert.equal(wrongProductSource.payload.code, "SCENARIO_TAMPERED");
     });
 
-    await t.test("outros produtos preservam fields legado sem sinal de cenario", async () => {
+    await t.test("produtos com cenario rejeitam containers ambiguos e usam default proprio", async () => {
       const duplicateContainers = await api(baseUrl, "POST", "/pedidos", {
         user: TEST_USER,
         headers: { "X-Idempotency-Key": "legacy-other-product-two-fields" },
@@ -673,10 +673,10 @@ test("piloto local de scenario_id para Resultado", async t => {
       });
       assert.equal(
         duplicateContainers.response.status,
-        200,
+        400,
         JSON.stringify(duplicateContainers.payload)
       );
-      assert.equal(duplicateContainers.payload.scenario_id, "");
+      assert.equal(duplicateContainers.payload.code, "SCENARIO_DUPLICATE_INPUT");
 
       const arrayFields = await api(baseUrl, "POST", "/pedidos", {
         user: TEST_USER,
@@ -687,8 +687,22 @@ test("piloto local de scenario_id para Resultado", async t => {
           structured: []
         })
       });
-      assert.equal(arrayFields.response.status, 200, JSON.stringify(arrayFields.payload));
-      assert.equal(arrayFields.payload.scenario_id, "");
+      assert.equal(arrayFields.response.status, 400, JSON.stringify(arrayFields.payload));
+      assert.equal(arrayFields.payload.code, "SCENARIO_INVALID");
+
+      const defaultScenario = await api(baseUrl, "POST", "/pedidos", {
+        user: TEST_USER,
+        headers: { "X-Idempotency-Key": "other-product-default-scenario" },
+        form: resultForm({
+          legacy: { flyer_tipo: "zz1ft" },
+          productId: "proximo_jogo",
+          structured: { observacao: "Campo estruturado valido." }
+        })
+      });
+      assert.equal(defaultScenario.response.status, 200, JSON.stringify(defaultScenario.payload));
+      assert.equal(defaultScenario.payload.scenario_id, "proximo_jogo_atual_v1");
+      assert.equal(defaultScenario.payload.scenario_version, 1);
+      assert.equal(defaultScenario.payload.scenario_source, "default");
     });
 
     await t.test("customer_notes e ajustes distinguem comando afirmativo de negacao", async () => {
@@ -869,9 +883,11 @@ test("piloto local de scenario_id para Resultado", async t => {
       );
       assert.equal(
         legacyOtherProductSceneChange.response.status,
-        200,
+        422,
         JSON.stringify(legacyOtherProductSceneChange.payload)
       );
+      assert.equal(legacyOtherProductSceneChange.payload.code, "SCENARIO_OBSERVATION_CONFLICT");
+      assert.equal(legacyOtherProductSceneChange.payload.scenario_id, "proximo_jogo_atual_v1");
     });
 
     await t.test("outer batch_id e item persistente comparam hash binario", async () => {
