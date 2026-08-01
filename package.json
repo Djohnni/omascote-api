@@ -6,7 +6,9 @@
   "scripts": {
     "start": "node server.js",
     "test": "node --test test-download-ticket.js test-download-routes.js",
-    "test:payments": "node test-economic-creation.js"
+    "test:payments": "node test-economic-creation.js",
+    "test:scenario": "node --test test-result-scenario-pilot.js",
+    "test:hashing": "node --test test-upload-content-hash.js"
   },
   "dependencies": {
     "archiver": "^8.0.0",

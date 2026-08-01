@@ -353,7 +353,9 @@ function createOrderDraft({
   files,
   clientRequestId = "",
   idempotencyKey = "",
-  idempotencyPayloadHash = ""
+  idempotencyPayloadHash = "",
+  idempotencyPayloadHashVersion = 0,
+  idempotencyInputFiles = []
 }) {
   const id = orderStorage.newPedidoId();
   const base = buildOrderBasePath({ pedidosDir, whatsapp, mesAtual, id });
@@ -380,6 +382,12 @@ function createOrderDraft({
   if (clientRequestId) pedido.client_request_id = clientRequestId;
   if (idempotencyKey) pedido.idempotency_key = idempotencyKey;
   if (idempotencyPayloadHash) pedido.idempotency_payload_hash = idempotencyPayloadHash;
+  if (Number(idempotencyPayloadHashVersion || 0) > 0) {
+    pedido.idempotency_payload_hash_version = Number(idempotencyPayloadHashVersion);
+  }
+  if (Array.isArray(idempotencyInputFiles) && idempotencyInputFiles.length) {
+    pedido.idempotency_input_files = idempotencyInputFiles.map(item => ({ ...item }));
+  }
 
   persistNewOrder({ base, pedido });
 

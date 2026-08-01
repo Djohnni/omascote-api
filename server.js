@@ -12,6 +12,8 @@ const orderStorage = require("./src/orders/order.storage");
 const orderStatus = require("./src/orders/order.status");
 const orderService = require("./src/orders/order.service");
 const productAuditService = require("./src/orders/product-audit.service");
+const resultScenarioRegistry = require("./src/orders/result-scenario-registry");
+const uploadContentHash = require("./src/orders/upload-content-hash");
 const billingService = require("./src/billing/billing.service");
 const {
   DownloadTicketStore,
@@ -2752,8 +2754,48 @@ function getFotoJogosBatchDedupeEntry(key) {
   return entry;
 }
 
-function beginFotoJogosBatchDedupe(key, promise) {
+function buildFotoJogosBatchPayloadHash(req, batchId, items) {
+  const fileMap = getFotoJogosBatchFileMap(req.files || []);
+  const normalizedItems = items.map((item, index) =>
+    normalizarFotoJogosBatchItem(item, index, batchId, fileMap)
+  );
+  const canonicalItems = normalizedItems.map(item => {
+    let canonicalFields;
+
+    try {
+      const context = buildOrderScenarioContext(item.productId, item.body);
+      canonicalFields = getSemanticOrderFields(context.fields);
+    } catch (error) {
+      canonicalFields = {
+        scenario_validation_error: error?.code || "SCENARIO_INVALID",
+        raw: item.body
+      };
+    }
+
+    return {
+      index: item.index,
+      product_id: item.productId,
+      client_request_id: item.clientRequestId,
+      modalidade_criacao: item.modalidadeCriacao,
+      cupom_codigo: normalizarCupomCodigo(item.body?.cupom_codigo),
+      fields: canonicalFields,
+      files: getUploadedFilesFingerprint(item.files)
+    };
+  });
+
+  return crypto
+    .createHash("sha256")
+    .update(stableOrderJson({
+      user: String(req.user?.whatsapp || ""),
+      batch_id: batchId,
+      items: canonicalItems
+    }))
+    .digest("hex");
+}
+
+function beginFotoJogosBatchDedupe(key, payloadHash, promise) {
   const entry = {
+    payloadHash: String(payloadHash || ""),
     promise,
     expiresAt: Date.now() + FOTO_JOGOS_BATCH_DEDUPE_TTL_MS
   };
@@ -2863,19 +2905,6 @@ async function processarFotoJogosCriarArtesBatch(req, batchId, items) {
       continue;
     }
 
-    const existente = findPedidoByClientRequestId(whatsapp, item.clientRequestId);
-    if (existente) {
-      criados.push({
-        ...buildOrderResponsePayloadFromItem(existente, {
-          index: item.index,
-          product_id: item.productId,
-          idempotent_replay: true,
-          encontrado_por_client_request_id: true
-        })
-      });
-      continue;
-    }
-
     validos.push(item);
   }
 
@@ -2888,19 +2917,6 @@ async function processarFotoJogosCriarArtesBatch(req, batchId, items) {
   }
 
   for (const item of validos) {
-    const antes = findPedidoByClientRequestId(whatsapp, item.clientRequestId);
-    if (antes) {
-      criados.push({
-        ...buildOrderResponsePayloadFromItem(antes, {
-          index: item.index,
-          product_id: item.productId,
-          idempotent_replay: true,
-          encontrado_por_client_request_id: true
-        })
-      });
-      continue;
-    }
-
     const resposta = await criarPedidoFotoJogosBatch(req, item);
     const payload = resposta.payload || {};
 
@@ -2915,6 +2931,9 @@ async function processarFotoJogosCriarArtesBatch(req, batchId, items) {
         index: item.index,
         product_id: item.productId,
         client_request_id: item.clientRequestId,
+        status: resposta.status,
+        code: payload.code || "",
+        scenario_id: payload.scenario_id || "",
         error: payload.error || payload.mensagem || payload.erro || "Falha ao criar arte."
       });
     }
@@ -2922,7 +2941,7 @@ async function processarFotoJogosCriarArtesBatch(req, batchId, items) {
 
   limparUploadsRequest(req);
   return {
-    status: criados.length ? 200 : 400,
+    status: criados.length ? 200 : Number(falhas[0]?.status || 400),
     payload: {
       ok: criados.length > 0,
       batch_id: batchId,
@@ -2981,6 +3000,11 @@ function getOrderRequestLogContext(req, extra = {}) {
     categoria: extra.categoria || "",
     status_code: extra.status_code || "",
     idempotent_replay: extra.idempotent_replay === true,
+    scenario_id: extra.scenario_id || "",
+    scenario_version: Number(extra.scenario_version || 0) || 0,
+    scenario_source: extra.scenario_source || "",
+    idempotency_payload_hash: extra.idempotency_payload_hash || "",
+    idempotency_payload_hash_version: Number(extra.idempotency_payload_hash_version || 0) || 0,
     detalhe: extra.detalhe || ""
   };
 }
@@ -3000,9 +3024,80 @@ function normalizarClientRequestId(value) {
   return String(value || "").trim().slice(0, 180);
 }
 
+function buildOrderScenarioContext(categoria, body = {}) {
+  const legacyFields = orderService.normalizeOrderBody(body);
+  const fields = orderService.normalizeOrderBody(body);
+  const resolution = resultScenarioRegistry.resolveResultadoScenario({
+    categoria,
+    body
+  });
+
+  resultScenarioRegistry.applyResultadoScenario(fields, resolution);
+
+  const observationConflict = resultScenarioRegistry.getScenarioObservationConflict(
+    fields,
+    resolution
+  );
+
+  if (observationConflict) {
+    throw resultScenarioRegistry.scenarioError(
+      "SCENARIO_OBSERVATION_CONFLICT",
+      "A observacao nao pode pedir a troca de fundo ou cenario controlado pelo pedido.",
+      422,
+      {
+        scenario_id: resolution.scenario?.id || "",
+        scenario_version: Number(resolution.scenario?.version || 0) || 0,
+        scenario_source: resolution.source || "",
+        conflict_field: observationConflict.field
+      }
+    );
+  }
+
+  return {
+    fields,
+    legacyFields,
+    resolution
+  };
+}
+
+function scenarioErrorPayload(error) {
+  const details = error?.details && typeof error.details === "object"
+    ? error.details
+    : {};
+
+  return {
+    ok: false,
+    code: error?.code || "SCENARIO_INVALID",
+    error: error?.message || "Cenario invalido.",
+    ...(details.scenario_id ? { scenario_id: details.scenario_id } : {}),
+    ...(Number(details.scenario_version || 0) > 0
+      ? { scenario_version: Number(details.scenario_version) }
+      : {}),
+    ...(details.scenario_source ? { scenario_source: details.scenario_source } : {}),
+    ...(details.scenario_status ? { scenario_status: details.scenario_status } : {})
+  };
+}
+
+function getScenarioLogMeta(resolution) {
+  if (!resolution?.applies || !resolution.scenario) {
+    return {
+      scenario_id: "",
+      scenario_version: 0,
+      scenario_source: ""
+    };
+  }
+
+  return {
+    scenario_id: resolution.scenario.id,
+    scenario_version: resolution.scenario.version,
+    scenario_source: resolution.source
+  };
+}
+
 function buildOrderResponsePayloadFromItem(item, extra = {}) {
   const pedido = item?.pedido || {};
   const pedidoId = pedido.id || item?.id || "";
+  const scenarioMeta = resultScenarioRegistry.getPedidoScenarioMeta(pedido);
   const descontoInfo = pedido.desconto_info || null;
   const valorPago = Number(pedido.pagamento_info?.valor_pago || 0);
   const modalidadeCriacao = normalizarModalidadeCriacao(pedido.modalidade_criacao);
@@ -3027,6 +3122,7 @@ function buildOrderResponsePayloadFromItem(item, extra = {}) {
     suporte_personalizado_incluido: modalidadeCriacao !== MODALIDADE_CRIACAO_ECONOMICA,
     status: pedido.status || "",
     criado_em: pedido.criado_em || item?.criado_em || "",
+    ...scenarioMeta,
     ...extra
   };
 }
@@ -6444,18 +6540,45 @@ function clienteResumoParaSolicitacao(whatsapp) {
 const MAX_UPLOAD_FILE_SIZE = 50 * 1024 * 1024;
 const MAX_PERFIL_IMAGE_SIZE = 8 * 1024 * 1024;
 
-const storage = multer.diskStorage({
-  destination: (req, file, cb) =>
-    cb(null, path.join(DATA_DIR, "tmp_uploads")),
+const storageDestination = (req, file, cb) =>
+  cb(null, path.join(DATA_DIR, "tmp_uploads"));
+const storageFilename = (req, file, cb) => {
+  const safe = file.originalname.replace(/[^\w.\-]+/g, "_");
+  cb(null, `${Date.now()}_${crypto.randomBytes(4).toString("hex")}_${safe}`);
+};
 
-  filename: (req, file, cb) => {
-    const safe = file.originalname.replace(/[^\w.\-]+/g, "_");
-    cb(null, `${Date.now()}_${crypto.randomBytes(4).toString("hex")}_${safe}`);
-  }
+const storage = multer.diskStorage({
+  destination: storageDestination,
+  filename: storageFilename
+});
+const hashingOrderStorage = uploadContentHash.createHashingDiskStorage({
+  destination: storageDestination,
+  filename: storageFilename
 });
 
 const upload = multer({
   storage,
+  limits: {
+    fileSize: MAX_UPLOAD_FILE_SIZE
+  },
+  fileFilter: (req, file, cb) => {
+    const permitidos = [
+      "image/png",
+      "image/jpeg",
+      "image/jpg",
+      "image/webp"
+    ];
+
+    if (!permitidos.includes(String(file.mimetype || "").toLowerCase())) {
+      return cb(new Error("Apenas imagens PNG, JPG e WEBP são permitidas."));
+    }
+
+    cb(null, true);
+  }
+});
+
+const orderUpload = multer({
+  storage: hashingOrderStorage,
   limits: {
     fileSize: MAX_UPLOAD_FILE_SIZE
   },
@@ -6616,6 +6739,7 @@ function limparUploadsRequest(req) {
 }
 
 const ORDER_CREATE_DEDUPE_TTL_MS = 30 * 1000;
+const ORDER_IDEMPOTENCY_PAYLOAD_VERSION = 2;
 const orderCreateDedupe = new Map();
 
 function stableOrderJson(value) {
@@ -6641,7 +6765,7 @@ function getRequestIdempotencyKey(req) {
   return normalizarClientRequestId(headerKey || bodyKey || "");
 }
 
-function getUploadedFilesFingerprint(files = {}) {
+function getUploadedFilesLegacyFingerprint(files = {}) {
   return Object.entries(files || {})
     .sort(([a], [b]) => String(a).localeCompare(String(b)))
     .flatMap(([field, values]) => {
@@ -6658,16 +6782,77 @@ function getUploadedFilesFingerprint(files = {}) {
     });
 }
 
-function buildOrderCreateDedupeMeta(req, categoria, whatsapp, fields) {
+function hashUploadedFileBytes(file) {
+  return uploadContentHash.hashUploadedFileBytes(file);
+}
+
+function groupUploadedFiles(files = {}) {
+  return uploadContentHash.groupUploadedFiles(files);
+}
+
+function getUploadedFilesFingerprint(files = {}) {
+  return uploadContentHash.getUploadedFilesFingerprint(files);
+}
+
+function getSemanticOrderFields(fields = {}) {
+  const newModel = fields?.new_model && typeof fields.new_model === "object"
+    ? fields.new_model
+    : null;
+  const cleanFields = newModel?.fields && typeof newModel.fields === "object" && !Array.isArray(newModel.fields)
+    ? { ...newModel.fields }
+    : null;
+
+  if (cleanFields) delete cleanFields.scenario_source;
+
+  return {
+    ...fields,
+    ...(newModel ? {
+      new_model: {
+        ...newModel,
+        ...(cleanFields ? { fields: cleanFields } : {})
+      }
+    } : {})
+  };
+}
+
+function getOrderIdempotencySemanticControls(req) {
+  const isBatchItem = req.fotoJogosBatchItem === true;
+  const assistenteLote = isBatchItem || req.body?.assistente_lote === true;
+
+  return {
+    modalidade_criacao: isBatchItem
+      ? normalizarModalidadeCriacao(req.body?.modalidade_criacao)
+      : MODALIDADE_CRIACAO_COM_SUPORTE,
+    cupom_codigo: normalizarCupomCodigo(req.body?.cupom_codigo),
+    assistente_lote: assistenteLote,
+    batch_id: assistenteLote
+      ? normalizarFotoJogosBatchId(req.body?.batch_id || "")
+      : ""
+  };
+}
+
+function buildOrderCreateDedupeMeta(req, categoria, whatsapp, fields, options = {}) {
   const userKey = String(whatsapp || req.user?.whatsapp || "").trim();
   const clientRequestId = getRequestIdempotencyKey(req);
+  const filesFingerprint = getUploadedFilesFingerprint(req.files || {});
+  const legacyFilesFingerprint = getUploadedFilesLegacyFingerprint(req.files || {});
   const payloadHash = crypto
     .createHash("sha256")
     .update(stableOrderJson({
       user: userKey,
       categoria,
-      fields,
-      files: getUploadedFilesFingerprint(req.files || {})
+      fields: getSemanticOrderFields(fields),
+      controls: getOrderIdempotencySemanticControls(req),
+      files: filesFingerprint
+    }))
+    .digest("hex");
+  const legacyPayloadHash = crypto
+    .createHash("sha256")
+    .update(stableOrderJson({
+      user: userKey,
+      categoria,
+      fields: options.legacyFields || fields,
+      files: legacyFilesFingerprint
     }))
     .digest("hex");
 
@@ -6676,7 +6861,10 @@ function buildOrderCreateDedupeMeta(req, categoria, whatsapp, fields) {
       ? `pedido:${userKey}:${clientRequestId}`
       : `pedido:${userKey}:auto:${payloadHash}`,
     clientRequestId,
-    payloadHash
+    payloadHash,
+    payloadVersion: ORDER_IDEMPOTENCY_PAYLOAD_VERSION,
+    legacyPayloadHash,
+    filesFingerprint
   };
 }
 
@@ -6704,9 +6892,10 @@ function getOrderCreateDedupeEntry(key) {
   return entry;
 }
 
-function beginOrderCreateDedupe(key) {
+function beginOrderCreateDedupe(key, payloadHash) {
   const entry = {
     expiresAt: Date.now() + ORDER_CREATE_DEDUPE_TTL_MS,
+    payloadHash: String(payloadHash || ""),
     responsePayload: null,
     settled: false,
     resolve: null,
@@ -6729,6 +6918,30 @@ function beginOrderCreateDedupe(key) {
 
   orderCreateDedupe.set(key, entry);
   return entry;
+}
+
+function evaluatePersistentOrderReplay(pedido, dedupeMeta) {
+  const storedHash = String(pedido?.idempotency_payload_hash || "").trim().toLowerCase();
+  const storedVersion = Number(pedido?.idempotency_payload_hash_version || 0);
+
+  if (storedVersion === ORDER_IDEMPOTENCY_PAYLOAD_VERSION) {
+    return storedHash && storedHash === dedupeMeta.payloadHash
+      ? { replay: true, mode: "v2" }
+      : { conflict: true, reason: "payload_hash_mismatch_v2" };
+  }
+
+  // Fingerprints anteriores ao v2 nao comprovam os bytes reais do upload.
+  // O cliente deve usar uma nova chave em vez de reutilizar uma chave legada.
+  if (storedVersion > 0 && storedVersion !== ORDER_IDEMPOTENCY_PAYLOAD_VERSION) {
+    return { conflict: true, reason: "payload_hash_version_unknown" };
+  }
+
+  return {
+    conflict: true,
+    reason: storedHash
+      ? "legacy_payload_fingerprint_unverifiable"
+      : "legacy_payload_hash_missing"
+  };
 }
 
 function resolveOrderCreateDedupe(entry, payload) {
@@ -6837,9 +7050,11 @@ function resumirArquivosAuditoria(files = {}) {
     if (!lista.length) return;
     campos.push(field);
     quantidadeImagens += lista.length;
-    assinatura[field] = lista.map(file => ({
+    assinatura[field] = lista.map((file, index) => ({
+      index,
       size: Number(file?.size || 0),
-      mimetype: String(file?.detected_mimetype || file?.mimetype || "").toLowerCase()
+      mimetype: String(file?.detected_mimetype || file?.mimetype || "").toLowerCase(),
+      sha256: String(file?.content_sha256 || "").toLowerCase()
     }));
   });
 
@@ -6854,6 +7069,11 @@ function gerarAuditoriaGeracaoLegada({ categoria, fields = {}, files = {}, reque
   const cleanFields = fields?.new_model?.fields && typeof fields.new_model.fields === "object"
     ? fields.new_model.fields
     : {};
+  const scenarioId = String(cleanFields.scenario_id || "");
+  const scenarioVersion = Number(cleanFields.scenario_version || 0) || 0;
+  const scenarioSource = cleanFields.scenario_source === "explicit"
+    ? "explicit"
+    : (scenarioId ? "default" : "");
   const legacyFields = Object.keys(fields || {}).filter(key => {
     if (key === "new_model") return false;
     const value = fields[key];
@@ -6864,7 +7084,7 @@ function gerarAuditoriaGeracaoLegada({ categoria, fields = {}, files = {}, reque
     .createHash("sha256")
     .update(JSON.stringify(normalizarValorAuditoriaHash({
       produto,
-      fields,
+      fields: getSemanticOrderFields(fields),
       files:fileSummary.assinatura
     })))
     .digest("hex");
@@ -6895,6 +7115,11 @@ function gerarAuditoriaGeracaoLegada({ categoria, fields = {}, files = {}, reque
     campos_estruturados_presentes: Object.keys(cleanFields).sort(),
     campos_arquivo_presentes: fileSummary.campos,
     quantidade_imagens: fileSummary.quantidadeImagens,
+    arquivos_sha256: fileSummary.assinatura,
+    scenario_id: scenarioId,
+    scenario_version: scenarioVersion,
+    scenario_source: scenarioSource,
+    idempotency_payload_hash_version: ORDER_IDEMPOTENCY_PAYLOAD_VERSION,
     payload_sha256: payloadHash
   };
 }
@@ -9250,7 +9475,7 @@ app.post("/me/time/jogos/identificar-por-foto", auth, uploadComErroControlado(up
   }
 });
 
-app.post("/me/time/jogos/criar-artes", auth, uploadComErroControlado(upload.any()), async (req, res) => {
+app.post("/me/time/jogos/criar-artes", auth, uploadComErroControlado(orderUpload.any()), async (req, res) => {
   try {
     const batchId = normalizarFotoJogosBatchId(req.body?.batch_id || req.body?.batchId);
     const items = parseFotoJogosBatchItems(req.body || {});
@@ -9305,16 +9530,48 @@ app.post("/me/time/jogos/criar-artes", auth, uploadComErroControlado(upload.any(
       });
     }
 
+    let batchPayloadHash;
+
+    try {
+      batchPayloadHash = buildFotoJogosBatchPayloadHash(req, batchId, items);
+    } catch (error) {
+      limparUploadsRequest(req);
+      console.warn("[FOTO_JOGOS_BATCH_HASH_ERRO]", {
+        usuario: mascararFotoJogosIdentificador(req.user?.whatsapp || ""),
+        tipo: error?.code || "UPLOAD_HASH_FAILED"
+      });
+      return res.status(400).json({
+        ok: false,
+        code: "UPLOAD_HASH_FAILED",
+        error: "Nao foi possivel validar os arquivos do lote.",
+        batch_id: batchId,
+        criados: [],
+        falhas: []
+      });
+    }
+
     const dedupeKey = `foto-jogos-batch:${req.user.whatsapp}:${batchId}`;
     const dedupe = getFotoJogosBatchDedupeEntry(dedupeKey);
     if (dedupe) {
       limparUploadsRequest(req);
+
+      if (dedupe.payloadHash !== batchPayloadHash) {
+        return res.status(409).json({
+          ok: false,
+          code: "IDEMPOTENCY_CONFLICT",
+          error: "Este batch_id ja foi usado com outro conteudo.",
+          batch_id: batchId,
+          criados: [],
+          falhas: []
+        });
+      }
+
       const resultado = await dedupe.promise;
       return res.status(resultado.status || 200).json(resultado.payload || resultado);
     }
 
     const promise = processarFotoJogosCriarArtesBatch(req, batchId, items);
-    beginFotoJogosBatchDedupe(dedupeKey, promise);
+    beginFotoJogosBatchDedupe(dedupeKey, batchPayloadHash, promise);
     const resultado = await promise;
     return res.status(resultado.status || 200).json(resultado.payload || resultado);
   } catch (err) {
@@ -11014,15 +11271,76 @@ function criarPedidoHandler(categoria) {
       });
     }
 
-    const fields = orderService.normalizeOrderBody(req.body);
+    let scenarioContext;
+
+    try {
+      scenarioContext = buildOrderScenarioContext(categoria, req.body || {});
+    } catch (error) {
+      if (!String(error?.code || "").startsWith("SCENARIO_")) throw error;
+      limparUploadsTemporarios(req.files);
+      logOrderRequestEvent(req, "scenario_rejeitado", {
+        categoria,
+        status_code: Number(error.status || 400),
+        scenario_id: error?.details?.scenario_id || "",
+        scenario_version: Number(error?.details?.scenario_version || 0) || 0,
+        scenario_source: error?.details?.scenario_source || "",
+        detalhe: error.code
+      });
+      return res.status(Number(error.status || 400)).json(scenarioErrorPayload(error));
+    }
+
+    const { fields, legacyFields, resolution: scenarioResolution } = scenarioContext;
+    const scenarioLogMeta = getScenarioLogMeta(scenarioResolution);
     const files = req.files || {};
-    const dedupeMeta = buildOrderCreateDedupeMeta(req, categoria, whatsapp, fields);
+    let dedupeMeta;
+
+    try {
+      dedupeMeta = buildOrderCreateDedupeMeta(req, categoria, whatsapp, fields, {
+        legacyFields
+      });
+    } catch (error) {
+      limparUploadsTemporarios(req.files);
+      logOrderRequestEvent(req, "upload_hash_falhou", {
+        categoria,
+        status_code: 400,
+        ...scenarioLogMeta,
+        detalhe: error?.code || "UPLOAD_HASH_FAILED"
+      });
+      return res.status(400).json({
+        ok: false,
+        code: "UPLOAD_HASH_FAILED",
+        error: "Nao foi possivel validar os arquivos enviados."
+      });
+    }
 
     if (dedupeMeta.clientRequestId) {
       const pedidoExistente = findPedidoByClientRequestId(whatsapp, dedupeMeta.clientRequestId);
 
       if (pedidoExistente) {
+        const replayEvaluation = evaluatePersistentOrderReplay(
+          pedidoExistente.pedido,
+          dedupeMeta
+        );
         limparUploadsTemporarios(req.files);
+
+        if (replayEvaluation.conflict) {
+          logOrderRequestEvent(req, "idempotency_conflito_persistente", {
+            categoria,
+            client_request_id: dedupeMeta.clientRequestId,
+            pedido_id: pedidoExistente.id || pedidoExistente.pedido?.id || "",
+            status_code: 409,
+            ...scenarioLogMeta,
+            idempotency_payload_hash: dedupeMeta.payloadHash,
+            idempotency_payload_hash_version: dedupeMeta.payloadVersion,
+            detalhe: replayEvaluation.reason
+          });
+          return res.status(409).json({
+            ok: false,
+            code: "IDEMPOTENCY_CONFLICT",
+            error: "A chave deste pedido ja foi usada com outro conteudo."
+          });
+        }
+
         const payload = buildOrderResponsePayloadFromItem(pedidoExistente, {
           idempotent_replay: true,
           encontrado_por_client_request_id: true
@@ -11033,7 +11351,11 @@ function criarPedidoHandler(categoria) {
           client_request_id: dedupeMeta.clientRequestId,
           pedido_id: payload.pedido_id,
           status_code: 200,
-          idempotent_replay: true
+          idempotent_replay: true,
+          ...scenarioLogMeta,
+          idempotency_payload_hash: dedupeMeta.payloadHash,
+          idempotency_payload_hash_version: dedupeMeta.payloadVersion,
+          detalhe: replayEvaluation.mode
         });
 
         return res.json(payload);
@@ -11045,11 +11367,31 @@ function criarPedidoHandler(categoria) {
     if (existingDedupe) {
       limparUploadsTemporarios(req.files);
 
+      if (existingDedupe.payloadHash !== dedupeMeta.payloadHash) {
+        logOrderRequestEvent(req, "idempotency_conflito_em_memoria", {
+          categoria,
+          client_request_id: dedupeMeta.clientRequestId,
+          status_code: 409,
+          ...scenarioLogMeta,
+          idempotency_payload_hash: dedupeMeta.payloadHash,
+          idempotency_payload_hash_version: dedupeMeta.payloadVersion,
+          detalhe: "payload_hash_mismatch_v2"
+        });
+        return res.status(409).json({
+          ok: false,
+          code: "IDEMPOTENCY_CONFLICT",
+          error: "A chave deste pedido ja foi usada com outro conteudo."
+        });
+      }
+
       logOrderRequestEvent(req, "idempotent_replay_em_memoria", {
         categoria,
         client_request_id: dedupeMeta.clientRequestId,
         status_code: existingDedupe.responsePayload ? 200 : 202,
-        idempotent_replay: true
+        idempotent_replay: true,
+        ...scenarioLogMeta,
+        idempotency_payload_hash: dedupeMeta.payloadHash,
+        idempotency_payload_hash_version: dedupeMeta.payloadVersion
       });
 
       if (existingDedupe.responsePayload) {
@@ -11185,7 +11527,7 @@ function criarPedidoHandler(categoria) {
     }
 
     let draft;
-    const dedupeEntry = beginOrderCreateDedupe(dedupeMeta.key);
+    const dedupeEntry = beginOrderCreateDedupe(dedupeMeta.key, dedupeMeta.payloadHash);
 
     try {
       draft = orderService.createOrderDraft({
@@ -11197,7 +11539,9 @@ function criarPedidoHandler(categoria) {
         files,
         clientRequestId: dedupeMeta.clientRequestId,
         idempotencyKey: dedupeMeta.key,
-        idempotencyPayloadHash: dedupeMeta.payloadHash
+        idempotencyPayloadHash: dedupeMeta.payloadHash,
+        idempotencyPayloadHashVersion: dedupeMeta.payloadVersion,
+        idempotencyInputFiles: dedupeMeta.filesFingerprint
       });
     } catch (e) {
       console.error("[pedido] erro ao criar pedido", {
@@ -11224,6 +11568,8 @@ function criarPedidoHandler(categoria) {
     draft.pedido.client_request_id = dedupeMeta.clientRequestId;
     draft.pedido.idempotency_key = dedupeMeta.key;
     draft.pedido.idempotency_payload_hash = dedupeMeta.payloadHash;
+    draft.pedido.idempotency_payload_hash_version = dedupeMeta.payloadVersion;
+    draft.pedido.idempotency_input_files = dedupeMeta.filesFingerprint;
     draft.pedido.modalidade_criacao = modalidadeCriacao;
     draft.pedido.assistente_lote = pedidoAssistente;
     draft.pedido.batch_id = pedidoAssistente
@@ -11397,6 +11743,7 @@ function criarPedidoHandler(categoria) {
       batch_id: draft.pedido.batch_id || "",
       assistente_lote: draft.pedido.assistente_lote === true,
       client_request_id: dedupeMeta.clientRequestId,
+      ...scenarioLogMeta,
       mensagem: cupomAplicado
         ? `Cupom ${resultadoCupom.resumo.codigo} aplicado. Valor final: R$ ${resultadoCupom.valorFinal.toFixed(2).replace(".", ",")}.`
         : undefined
@@ -11406,7 +11753,10 @@ function criarPedidoHandler(categoria) {
       categoria,
       client_request_id: dedupeMeta.clientRequestId,
       pedido_id: id,
-      status_code: 200
+      status_code: 200,
+      ...scenarioLogMeta,
+      idempotency_payload_hash: dedupeMeta.payloadHash,
+      idempotency_payload_hash_version: dedupeMeta.payloadVersion
     });
 
     resolveOrderCreateDedupe(dedupeEntry, responsePayload);
@@ -11550,7 +11900,7 @@ app.get("/pedidos/por-client-request-id/:clientRequestId", auth, (req, res) => {
 app.post(
   "/pedidos",
   auth,
-  uploadComErroControlado(upload.fields([
+  uploadComErroControlado(orderUpload.fields([
     { name: "escudo1", maxCount: 1 },
     { name: "escudo2", maxCount: 1 },
     { name: "mascote", maxCount: 4 },
@@ -11589,7 +11939,7 @@ app.post(
 app.post(
   "/mascotes",
   auth,
-  uploadComErroControlado(upload.fields([
+  uploadComErroControlado(orderUpload.fields([
     { name: "escudo1", maxCount: 1 },
     { name: "escudo2", maxCount: 1 },
     { name: "mascote", maxCount: 1 },
@@ -11601,7 +11951,7 @@ app.post(
 app.post(
   "/resultado_do_jogo",
   auth,
-  uploadComErroControlado(upload.fields([
+  uploadComErroControlado(orderUpload.fields([
     { name: "escudo1", maxCount: 1 },
     { name: "escudo2", maxCount: 1 },
     { name: "mascote", maxCount: 4 },
@@ -12097,6 +12447,46 @@ app.post("/pedidos/:id/solicitar-ajuste", auth, (req, res) => {
 
   const pedidoPath = path.join(base, "pedido.json");
   const pedido = safeReadJson(pedidoPath) || {};
+  const storedScenarioMeta = resultScenarioRegistry.getPedidoScenarioMeta(pedido);
+  const pedidoIsResultado = [
+    pedido.product_id,
+    pedido.categoria,
+    pedido.produto
+  ].some(value =>
+    resultScenarioRegistry.RESULTADO_PRODUCT_ALIASES.has(
+      String(value || "").trim().toLowerCase()
+    )
+  );
+  const scenarioMeta = !storedScenarioMeta.scenario_id && pedidoIsResultado
+    ? {
+        scenario_id: resultScenarioRegistry.RESULTADO_DEFAULT_SCENARIO_ID,
+        scenario_version: resultScenarioRegistry.RESULTADO_SCENARIOS[
+          resultScenarioRegistry.RESULTADO_DEFAULT_SCENARIO_ID
+        ].version,
+        scenario_source: "default"
+      }
+    : storedScenarioMeta;
+
+  if (
+    scenarioMeta.scenario_id &&
+    resultScenarioRegistry.hasScenarioObservationConflict(motivo)
+  ) {
+    logOrderRequestEvent(req, "scenario_ajuste_rejeitado", {
+      categoria: pedido.categoria || pedido.product_id || "",
+      pedido_id: pedido.id || req.params.id,
+      status_code: 422,
+      ...scenarioMeta,
+      detalhe: "SCENARIO_OBSERVATION_CONFLICT"
+    });
+    return res.status(422).json({
+      ok: false,
+      code: "SCENARIO_OBSERVATION_CONFLICT",
+      error: "O ajuste nao pode pedir a troca de fundo ou cenario controlado pelo pedido.",
+      scenario_id: scenarioMeta.scenario_id,
+      scenario_version: scenarioMeta.scenario_version,
+      scenario_source: scenarioMeta.scenario_source
+    });
+  }
 
   if (pedido.modalidade_criacao === MODALIDADE_CRIACAO_ECONOMICA) {
     return res.status(403).json({
@@ -13406,6 +13796,23 @@ module.exports = {
     cleanupFotoJogosAnalysisDedupe,
     normalizarModalidadeCriacao,
     calcularCustoPedidoPorModalidade
+  },
+  __resultadoScenarioTest: {
+    registry: resultScenarioRegistry,
+    buildOrderScenarioContext,
+    buildOrderCreateDedupeMeta,
+    buildFotoJogosBatchPayloadHash,
+    evaluatePersistentOrderReplay,
+    getSemanticOrderFields,
+    getUploadedFilesFingerprint,
+    stableOrderJson,
+    resetDedupe() {
+      for (const entry of orderCreateDedupe.values()) {
+        if (entry?.watchdogTimer) clearTimeout(entry.watchdogTimer);
+      }
+      orderCreateDedupe.clear();
+      fotoJogosBatchDedupe.clear();
+    }
   },
   __mpOrdersV2Test: {
     version: MP_ORDERS_V2_VERSION,
