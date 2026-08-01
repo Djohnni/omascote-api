@@ -1,63 +1,88 @@
-const RESULTADO_SCENARIO_SCHEMA_VERSION = 2;
-const RESULTADO_DEFAULT_SCENARIO_ID = "resultado_atual_v1";
+const SCENARIO_SCHEMA_VERSION = 2;
 const RESULTADO_PRODUCT_ID = "resultado";
 
-const RESULTADO_PRODUCT_ALIASES = new Set([
-  "resultado",
-  "resultado_jogo",
-  "resultado_do_jogo"
+const SCENARIO_VARIANTS = Object.freeze([
+  "atual",
+  "sol",
+  "noite",
+  "chuva",
+  "estadio_grande_dia",
+  "estadio_varzea_dia",
+  "fumaca",
+  "futsal"
 ]);
 
-const RESULTADO_RESERVED_SCENARIO_IDS = Object.freeze([
-  "resultado_estadio_noturno_v1",
-  "resultado_estadio_dia_v1"
-]);
-const RESULTADO_RESERVED_SCENARIO_ID_SET = new Set(
-  RESULTADO_RESERVED_SCENARIO_IDS
-);
+function buildProductScenarios(productId) {
+  return Object.freeze(Object.fromEntries(
+    SCENARIO_VARIANTS.map(variant => {
+      const id = `${productId}_${variant}_v1`;
+      return [id, Object.freeze({
+        id,
+        product_id: productId,
+        version: 1,
+        status: "active"
+      })];
+    })
+  ));
+}
 
-const RESULTADO_SCENARIOS = Object.freeze({
-  resultado_atual_v1: Object.freeze({
-    id: "resultado_atual_v1",
-    version: 1,
-    status: "active"
-  }),
-  resultado_sol_v1: Object.freeze({
-    id: "resultado_sol_v1",
-    version: 1,
-    status: "active"
-  }),
-  resultado_noite_v1: Object.freeze({
-    id: "resultado_noite_v1",
-    version: 1,
-    status: "active"
-  }),
-  resultado_chuva_v1: Object.freeze({
-    id: "resultado_chuva_v1",
-    version: 1,
-    status: "active"
-  }),
-  resultado_estadio_grande_dia_v1: Object.freeze({
-    id: "resultado_estadio_grande_dia_v1",
-    version: 1,
-    status: "active"
-  }),
-  resultado_estadio_varzea_dia_v1: Object.freeze({
-    id: "resultado_estadio_varzea_dia_v1",
-    version: 1,
-    status: "active"
-  }),
-  resultado_fumaca_v1: Object.freeze({
-    id: "resultado_fumaca_v1",
-    version: 1,
-    status: "active"
-  }),
-  resultado_futsal_v1: Object.freeze({
-    id: "resultado_futsal_v1",
-    version: 1,
-    status: "active"
-  })
+function buildProductDefinition(productId, aliases, reservedScenarioIds = []) {
+  const scenarios = buildProductScenarios(productId);
+  return Object.freeze({
+    id: productId,
+    aliases: new Set(aliases),
+    defaultScenarioId: `${productId}_atual_v1`,
+    reservedScenarioIds: Object.freeze([...reservedScenarioIds]),
+    reservedScenarioIdSet: new Set(reservedScenarioIds),
+    scenarios
+  });
+}
+
+const SCENARIO_PRODUCTS = Object.freeze({
+  resultado: buildProductDefinition(
+    "resultado",
+    ["resultado", "resultado_jogo", "resultado_do_jogo"],
+    ["resultado_estadio_noturno_v1", "resultado_estadio_dia_v1"]
+  ),
+  proximo_jogo: buildProductDefinition(
+    "proximo_jogo",
+    ["proximo_jogo", "proximo-jogo", "proximo jogo"]
+  ),
+  jogador_escudo: buildProductDefinition(
+    "jogador_escudo",
+    ["jogador_escudo", "jogador-escudo", "jogador escudo", "jogador + escudo"]
+  ),
+  mascote_uniforme: buildProductDefinition(
+    "mascote_uniforme",
+    ["mascote_uniforme", "mascote-uniforme", "mascote uniforme"]
+  ),
+  escalacao: buildProductDefinition(
+    "escalacao",
+    ["escalacao", "escalação"]
+  )
 });
+
+const SCENARIOS = Object.freeze(Object.fromEntries(
+  Object.values(SCENARIO_PRODUCTS).flatMap(product => Object.entries(product.scenarios))
+));
+
+const SCENARIO_ID_OWNERS = new Map();
+for (const product of Object.values(SCENARIO_PRODUCTS)) {
+  for (const scenarioId of Object.keys(product.scenarios)) {
+    SCENARIO_ID_OWNERS.set(scenarioId, product.id);
+  }
+  for (const scenarioId of product.reservedScenarioIds) {
+    SCENARIO_ID_OWNERS.set(scenarioId, product.id);
+  }
+}
+
+// Exports antigos permanecem como aliases para nao quebrar consumidores existentes.
+const RESULTADO_SCENARIO_SCHEMA_VERSION = SCENARIO_SCHEMA_VERSION;
+const RESULTADO_DEFAULT_SCENARIO_ID = SCENARIO_PRODUCTS.resultado.defaultScenarioId;
+const RESULTADO_PRODUCT_ALIASES = SCENARIO_PRODUCTS.resultado.aliases;
+const RESULTADO_RESERVED_SCENARIO_IDS = SCENARIO_PRODUCTS.resultado.reservedScenarioIds;
+const RESULTADO_RESERVED_SCENARIO_ID_SET = SCENARIO_PRODUCTS.resultado.reservedScenarioIdSet;
+const RESULTADO_SCENARIOS = SCENARIO_PRODUCTS.resultado.scenarios;
 
 const SCENARIO_OBSERVATION_KEYS = Object.freeze([
   "observacao",
@@ -208,6 +233,19 @@ function normalizeProductAlias(value) {
   return value.trim().toLowerCase();
 }
 
+function getProductDefinition(value) {
+  const normalized = normalizeProductAlias(value);
+  if (!normalized) return null;
+
+  return Object.values(SCENARIO_PRODUCTS).find(product =>
+    product.aliases.has(normalized)
+  ) || null;
+}
+
+function getScenarioOwner(scenarioId) {
+  return SCENARIO_ID_OWNERS.get(String(scenarioId || "")) || "";
+}
+
 function scenarioError(code, message, status = 400, details = {}) {
   const error = new Error(message);
   error.code = code;
@@ -279,15 +317,16 @@ function getStructuredScenarioInput(body = {}) {
   };
 }
 
-function resolveResultadoScenario({ categoria, body = {} }) {
+function resolveProductScenario({ categoria, body = {} }) {
   const normalizedCategory = String(categoria || "").trim().toLowerCase();
+  const product = getProductDefinition(normalizedCategory);
   const flatScenarioKeys = Object.keys(body).filter(isScenarioClientKey);
 
-  if (normalizedCategory !== RESULTADO_PRODUCT_ID) {
+  if (!product) {
     if (flatScenarioKeys.length || bodyHasStructuredScenarioSignal(body)) {
       throw scenarioError(
         "SCENARIO_PRODUCT_MISMATCH",
-        "Metadados de cenario estao disponiveis somente para Resultado.",
+        "Metadados de cenario nao estao disponiveis para este produto.",
         400
       );
     }
@@ -313,16 +352,17 @@ function resolveResultadoScenario({ categoria, body = {} }) {
 
   for (const key of ["product_id", "categoria"]) {
     const normalized = normalizeProductAlias(body[key]);
-    if (normalized === null || (normalized && !RESULTADO_PRODUCT_ALIASES.has(normalized))) {
+    if (normalized === null || (normalized && !product.aliases.has(normalized))) {
       throw scenarioError(
         "SCENARIO_PRODUCT_MISMATCH",
-        "product_id e categoria devem identificar o produto Resultado.",
-        400
+        "product_id e categoria devem identificar o produto da rota.",
+        400,
+        { product_id: product.id }
       );
     }
   }
 
-  let scenarioId = RESULTADO_DEFAULT_SCENARIO_ID;
+  let scenarioId = product.defaultScenarioId;
   let source = "default";
 
   if (structured.explicit) {
@@ -351,9 +391,23 @@ function resolveResultadoScenario({ categoria, body = {} }) {
     }
   }
 
-  const scenario = RESULTADO_SCENARIOS[scenarioId] || null;
+  const scenarioOwner = getScenarioOwner(scenarioId);
+  if (scenarioOwner && scenarioOwner !== product.id) {
+    throw scenarioError(
+      "SCENARIO_PRODUCT_MISMATCH",
+      "scenario_id pertence a outro produto.",
+      400,
+      {
+        product_id: product.id,
+        scenario_id: scenarioId,
+        scenario_product_id: scenarioOwner
+      }
+    );
+  }
 
-  if (RESULTADO_RESERVED_SCENARIO_ID_SET.has(scenarioId)) {
+  const scenario = product.scenarios[scenarioId] || null;
+
+  if (product.reservedScenarioIdSet.has(scenarioId)) {
     throw scenarioError(
       "SCENARIO_RESERVED",
       "Este identificador de cenario foi reservado e nao pode ser utilizado.",
@@ -388,12 +442,13 @@ function resolveResultadoScenario({ categoria, body = {} }) {
     applies: true,
     explicit: structured.explicit,
     source,
+    product,
     scenario,
     structuredFields: structured.fields
   };
 }
 
-function applyResultadoScenario(fields, resolution) {
+function applyProductScenario(fields, resolution) {
   if (!resolution?.applies || !resolution.scenario) return fields;
 
   const newModel = fields.new_model && typeof fields.new_model === "object"
@@ -404,10 +459,10 @@ function applyResultadoScenario(fields, resolution) {
   fields.new_model = {
     ...newModel,
     schema_version: Math.max(
-      RESULTADO_SCENARIO_SCHEMA_VERSION,
+      SCENARIO_SCHEMA_VERSION,
       Number(newModel.schema_version || 0) || 0
     ),
-    product_id: RESULTADO_PRODUCT_ID,
+    product_id: resolution.product?.id || resolution.scenario.product_id,
     fields: {
       ...cleanFields,
       scenario_id: resolution.scenario.id,
@@ -419,8 +474,18 @@ function applyResultadoScenario(fields, resolution) {
   return fields;
 }
 
+function resolveResultadoScenario(options) {
+  return resolveProductScenario(options);
+}
+
+function applyResultadoScenario(fields, resolution) {
+  return applyProductScenario(fields, resolution);
+}
+
 function normalizeObservationText(value) {
   return String(value || "")
+    .toLowerCase()
+    .replace(/(^|[^a-z\u00c0-\u00ff])p\u00f4r(?=$|[^a-z\u00c0-\u00ff])/g, "$1por_acao")
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase();
@@ -430,23 +495,48 @@ function hasScenarioObservationConflict(value) {
   const normalized = normalizeObservationText(value);
   if (!normalized.trim()) return false;
 
-  const actionPattern = /\b(trocar|troque|mudar|mude|alterar|altere|substituir|substitua|transformar|transforme|remover|remova|colocar|coloque|usar|use)\b/g;
-  const scenePattern = /\b(fundo|cenario|ambiente|estadio|campo|quadra|arquibancada|ginasio|vestiario|gramado|torcida|iluminacao|clima|sol|dia|noite|chuva|fumaca|futsal)\b/;
-  const negationPattern = /\b(nao|nunca|jamais|sem)\b/;
+  const actionPattern = /\b(trocar|troque|mudar|mude|alterar|altere|substituir|substitua|transformar|transforme|remover|remova|colocar|coloque|adicionar|adicione|usar|use|deixar|deixe|quero|queremos|definir|defina|selecionar|selecione|escolher|escolha|aplicar|aplique|configurar|configure|fazer|faca|criar|crie|botar|bote|ponha|por_acao)\b/g;
+  const scenePattern = /\b(fundo|cenario|ambiente|estadio|quadra|arquibancada|ginasio|vestiario|gramado|torcida|iluminacao|clima)\b|\bcampo\b(?!\s+de\s+observa(?:cao|coes)\b)/;
+  const visualVariantPattern = /\b(noite|noturno|noturna|madrugada|dia|diurno|diurna|manha|tarde|amanhecer|sol|ensolarado|ensolarada|chuva|chuvoso|chuvosa|fumaca|varzea|futsal)\b/;
+  const directVariantPattern = /^\s+(?:(?:um|uma|o|a|outro|outra|para|em|como|com|de|do|da|no|na|arte|imagem|visual)\s+){0,6}(?:noite|noturno|noturna|madrugada|diurno|diurna|manha|tarde|amanhecer|sol|ensolarado|ensolarada|chuva|chuvoso|chuvosa|fumaca|varzea|futsal)\b/;
+  const visualDayPattern = /^\s*(?:para\s+dia\b|(?:(?:um|uma|o|a|outro|outra|novo|nova)\s+){0,3}(?:imagem|arte|visual)\s+(?:de|durante\s+o)\s+dia\b)/;
+  const negationPattern = /\b(nao|nunca|jamais|nem|sem|evite|evitar|proibido|proibida)\b/;
+  const followingNegationPattern = /^\s+(?:que\s+)?(?:nao|nunca|jamais|nem|sem)\b/;
 
   return normalized
-    .split(/[\n,.!?;]+/)
+    .split(/[\n,.!?;:]+|\b(?:mas|porem|contudo|entretanto|e)\b/)
     .some(segment => {
-      if (!scenePattern.test(segment)) return false;
-
       actionPattern.lastIndex = 0;
-      for (const match of segment.matchAll(actionPattern)) {
+      const matches = [...segment.matchAll(actionPattern)];
+      for (let index = 0; index < matches.length; index += 1) {
+        const match = matches[index];
         const previousWords = segment
           .slice(0, match.index)
           .match(/[a-z0-9]+/g) || [];
-        const negationWindow = previousWords.slice(-5).join(" ");
+        const negationWindow = previousWords.slice(-6).join(" ");
+        const nextActionIndex = matches[index + 1]?.index ?? segment.length;
+        const followingText = segment.slice(
+          match.index + match[0].length,
+          nextActionIndex
+        );
 
-        if (!negationPattern.test(negationWindow)) return true;
+        if (
+          negationPattern.test(negationWindow) ||
+          followingNegationPattern.test(followingText)
+        ) {
+          continue;
+        }
+
+        if (scenePattern.test(followingText)) return true;
+        if (
+          visualVariantPattern.test(followingText) &&
+          (
+            directVariantPattern.test(followingText) ||
+            visualDayPattern.test(followingText)
+          )
+        ) {
+          return true;
+        }
       }
 
       return false;
@@ -469,9 +559,24 @@ function getScenarioObservationConflict(fields, resolution) {
 
 function getPedidoScenarioMeta(pedido = {}) {
   const fields = isPlainObject(pedido.fields) ? pedido.fields : {};
-  const scenarioId = typeof fields.scenario_id === "string" ? fields.scenario_id : "";
-  const scenarioVersion = Number(fields.scenario_version || 0) || 0;
-  const scenarioSource = fields.scenario_source === "explicit" ? "explicit" : (scenarioId ? "default" : "");
+  const product = [pedido.product_id, pedido.categoria, pedido.produto]
+    .map(getProductDefinition)
+    .find(Boolean) || null;
+  let scenarioId = typeof fields.scenario_id === "string"
+    ? fields.scenario_id.trim().toLowerCase()
+    : "";
+
+  if (!scenarioId && product) scenarioId = product.defaultScenarioId;
+
+  const scenario = scenarioId ? SCENARIOS[scenarioId] : null;
+  const owner = getScenarioOwner(scenarioId);
+  const scenarioMatchesProduct = !product || !owner || owner === product.id;
+  const scenarioVersion = Number(fields.scenario_version || 0) || (
+    scenario && scenarioMatchesProduct ? scenario.version : 0
+  );
+  const scenarioSource = fields.scenario_source === "explicit"
+    ? "explicit"
+    : (scenarioId ? "default" : "");
 
   return {
     scenario_id: scenarioId,
@@ -481,16 +586,24 @@ function getPedidoScenarioMeta(pedido = {}) {
 }
 
 module.exports = {
+  SCENARIO_SCHEMA_VERSION,
+  SCENARIO_VARIANTS,
+  SCENARIO_PRODUCTS,
+  SCENARIOS,
   RESULTADO_DEFAULT_SCENARIO_ID,
   RESULTADO_PRODUCT_ID,
   RESULTADO_PRODUCT_ALIASES,
   RESULTADO_RESERVED_SCENARIO_IDS,
   RESULTADO_SCENARIO_SCHEMA_VERSION,
   RESULTADO_SCENARIOS,
+  applyProductScenario,
   applyResultadoScenario,
+  getProductDefinition,
   getPedidoScenarioMeta,
+  getScenarioOwner,
   getScenarioObservationConflict,
   hasScenarioObservationConflict,
+  resolveProductScenario,
   resolveResultadoScenario,
   scenarioError
 };
