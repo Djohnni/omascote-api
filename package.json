@@ -5,7 +5,7 @@
   "type": "commonjs",
   "scripts": {
     "start": "node server.js",
-    "test": "node --test test-download-ticket.js test-download-routes.js",
+    "test": "node --test test-download-ticket.js test-download-routes.js test-browser-handoff-store.js test-browser-handoff-routes.js",
     "test:payments": "node test-economic-creation.js",
     "test:scenario": "node --test test-result-scenario-pilot.js test-multi-product-scenarios.js",
     "test:hashing": "node --test test-upload-content-hash.js"
