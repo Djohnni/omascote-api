@@ -20,6 +20,10 @@ const {
   attachmentContentDisposition,
   safeDownloadFilename
 } = require("./src/download/download-ticket");
+const {
+  BrowserHandoffStore,
+  BrowserHandoffStoreError
+} = require("./src/auth/browser-handoff-store");
 
 function criarArquivoZip(options = {}) {
   if (typeof archiverModule === "function") {
@@ -97,6 +101,9 @@ const CUPONS_JOGADOR_ESCUDO_LOCK = path.join(DATA_DIR, "cupons_jogador_escudo.lo
 const PRODUTO_AUDITORIA_FILE = path.join(DATA_DIR, "produto_auditoria.jsonl");
 const SOLICITACOES_EXCLUSAO_CONTA_FILE = path.join(DATA_DIR, "solicitacoes_exclusao_conta.json");
 const DENUNCIAS_CONTEUDO_IA_FILE = path.join(DATA_DIR, "denuncias_conteudo_ia.json");
+const AUTH_BROWSER_HANDOFF_FILE = process.env.AUTH_BROWSER_HANDOFF_FILE
+  ? path.resolve(process.env.AUTH_BROWSER_HANDOFF_FILE)
+  : path.join(DATA_DIR, "auth_browser_handoffs.json");
 const PREVIEW_LIMITER_MAX = 3;
 const PREVIEW_LIMITER_TTL_MS = 6 * 60 * 60 * 1000;
 const FOTO_JOGOS_RATE_LIMIT_MINUTE_MS = 60 * 1000;
@@ -106,6 +113,19 @@ const FOTO_JOGOS_RATE_LIMIT_MAX_PER_MINUTE = 3;
 const FOTO_JOGOS_RATE_LIMIT_MAX_PER_DAY = 30;
 const FOTO_JOGOS_RATE_LIMIT_MAX_PER_IP_MINUTE = 12;
 const FOTO_JOGOS_ANALYSIS_DEDUPE_TTL_MS = 15 * 60 * 1000;
+const AUTH_BROWSER_HANDOFF_ORIGINS = new Set([
+  "https://omascote.com.br",
+  "https://www.omascote.com.br"
+]);
+const authBrowserHandoffs = new BrowserHandoffStore({
+  filePath: AUTH_BROWSER_HANDOFF_FILE,
+  ttlMs: process.env.AUTH_BROWSER_HANDOFF_TTL_MS || 180_000,
+  rateWindowMs: process.env.AUTH_BROWSER_HANDOFF_RATE_WINDOW_MS || 10 * 60 * 1000,
+  issueUserLimit: process.env.AUTH_BROWSER_HANDOFF_ISSUE_USER_LIMIT || 3,
+  issueIpLimit: process.env.AUTH_BROWSER_HANDOFF_ISSUE_IP_LIMIT || 10,
+  redeemIpLimit: process.env.AUTH_BROWSER_HANDOFF_REDEEM_IP_LIMIT || 20,
+  identifierSecret: JWT_SECRET
+});
 
 const CLIENTES_TESTE = [
   "Los Hermanos",
@@ -118,6 +138,58 @@ app.use(cors({
   origin: ["https://omascote.com.br", "https://www.omascote.com.br"],
   credentials: false
 }));
+
+const authBrowserHandoffJsonParser = express.json({ limit: "2kb" });
+app.use("/auth/browser-handoff", (req, res, next) => {
+  if (req.method !== "POST") return next();
+
+  const contentLength = Number(req.headers["content-length"] || 0);
+  const hasBody = contentLength > 0 || Boolean(req.headers["transfer-encoding"]);
+
+  if (Number.isFinite(contentLength) && contentLength > 2 * 1024) {
+    setPrivateBrowserHandoffHeaders(res);
+    logAuthBrowserHandoff(req, {
+      evento: "handoff_payload_recusado",
+      status: 413,
+      motivo: "invalid"
+    });
+    return res.status(413).json({
+      ok: false,
+      error: "Dados de transferencia muito grandes."
+    });
+  }
+
+  if (hasBody && !req.is("application/json")) {
+    setPrivateBrowserHandoffHeaders(res);
+    logAuthBrowserHandoff(req, {
+      evento: "handoff_payload_recusado",
+      status: 415,
+      motivo: "invalid"
+    });
+    return res.status(415).json({
+      ok: false,
+      error: "Envie os dados de transferencia em formato JSON."
+    });
+  }
+
+  return authBrowserHandoffJsonParser(req, res, error => {
+    if (!error) return next();
+
+    setPrivateBrowserHandoffHeaders(res);
+    const tooLarge = error?.type === "entity.too.large";
+    logAuthBrowserHandoff(req, {
+      evento: "handoff_payload_recusado",
+      status: tooLarge ? 413 : 400,
+      motivo: "invalid"
+    });
+    return res.status(tooLarge ? 413 : 400).json({
+      ok: false,
+      error: tooLarge
+        ? "Dados de transferencia muito grandes."
+        : "Dados de transferencia invalidos."
+    });
+  });
+});
 
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: false, limit: "8kb" }));
@@ -6387,6 +6459,133 @@ function downloadClientInfo(userAgent = "") {
   return { browser, os };
 }
 
+function authBrowserHandoffEnabled() {
+  return ["1", "true", "on", "yes"].includes(
+    String(process.env.AUTH_BROWSER_HANDOFF_ENABLED || "").trim().toLowerCase()
+  );
+}
+
+function authBrowserHandoffHasSecureJwtSecret() {
+  const configured = String(process.env.JWT_SECRET || "").trim();
+  return (
+    Boolean(configured) &&
+    configured !== "TROQUE_ISSO_AGORA" &&
+    JWT_SECRET !== "TROQUE_ISSO_AGORA"
+  );
+}
+
+function setPrivateBrowserHandoffHeaders(res) {
+  res.setHeader("Cache-Control", "private, no-store, max-age=0");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+}
+
+function requireAuthBrowserHandoffEnabled(req, res, next) {
+  setPrivateBrowserHandoffHeaders(res);
+
+  if (!authBrowserHandoffEnabled()) {
+    return res.status(404).json({ ok: false, error: "Recurso nao encontrado." });
+  }
+
+  if (!authBrowserHandoffHasSecureJwtSecret()) {
+    logAuthBrowserHandoff(req, {
+      evento: "handoff_configuracao_indisponivel",
+      status: 503,
+      motivo: "configuration_unavailable"
+    });
+    return res.status(503).json({
+      ok: false,
+      error: "Transferencia temporariamente indisponivel."
+    });
+  }
+
+  return next();
+}
+
+function requireAuthBrowserHandoffOrigin(req, res, next) {
+  const origin = String(req.headers.origin || "").trim().toLowerCase();
+
+  if (!AUTH_BROWSER_HANDOFF_ORIGINS.has(origin)) {
+    logAuthBrowserHandoff(req, {
+      evento: "handoff_origem_recusada",
+      status: 403,
+      motivo: "origin_forbidden"
+    });
+    return res.status(403).json({ ok: false, error: "Origem nao permitida." });
+  }
+
+  return next();
+}
+
+function logAuthBrowserHandoff(req, details = {}) {
+  const client = downloadClientInfo(req.headers["user-agent"]);
+  const allowedReasons = new Set([
+    "account_unavailable",
+    "configuration_unavailable",
+    "expired",
+    "invalid",
+    "origin_forbidden",
+    "rate_limited",
+    "session_expired",
+    "storage_busy",
+    "storage_unavailable",
+    "superseded",
+    "unexpected",
+    "used"
+  ]);
+  const rawReason = String(details.motivo || "");
+  const allowed = {
+    evento: String(details.evento || "auth_handoff"),
+    navegador: client.browser,
+    sistema: client.os,
+    status_http: Number(details.status || 0),
+    motivo: allowedReasons.has(rawReason) ? rawReason : "",
+    idade_ms: Math.max(0, Number(details.idadeMs || 0)),
+    duracao_ms: Math.max(0, Number(details.duracaoMs || 0))
+  };
+
+  // Nunca registrar codigo, JWT, Authorization, URL, IP, login ou User-Agent completo.
+  console.info("[auth-handoff]", JSON.stringify(allowed));
+}
+
+function authBrowserHandoffRateLimited(req, res, result, details = {}) {
+  const retryAfterMs = Math.max(1_000, Number(result?.retryAfterMs || 1_000));
+  res.setHeader("Retry-After", String(Math.ceil(retryAfterMs / 1000)));
+  logAuthBrowserHandoff(req, {
+    ...details,
+    evento: "handoff_rate_limited",
+    status: 429,
+    motivo: "rate_limited"
+  });
+  return res.status(429).json({
+    ok: false,
+    error: "Muitas tentativas. Aguarde um pouco e tente novamente.",
+    retry_after: Math.ceil(retryAfterMs / 1000)
+  });
+}
+
+function authBrowserHandoffStoreFailure(req, res, error, details = {}) {
+  const motivo = error instanceof BrowserHandoffStoreError && [
+    "storage_busy",
+    "storage_unavailable"
+  ].includes(error.code)
+    ? error.code
+    : "unexpected";
+
+  logAuthBrowserHandoff(req, {
+    ...details,
+    evento: "handoff_store_error",
+    status: 503,
+    motivo
+  });
+  return res.status(503).json({
+    ok: false,
+    error: "Transferencia temporariamente indisponivel. Tente novamente."
+  });
+}
+
 function logDownloadTechnical(req, details = {}) {
   const client = downloadClientInfo(req.headers["user-agent"]);
   const allowed = {
@@ -7365,6 +7564,206 @@ app.get("/auth/google-config", (req, res) => {
     client_id: GOOGLE_CLIENT_ID
   });
 });
+
+app.post(
+  "/auth/browser-handoff",
+  requireAuthBrowserHandoffEnabled,
+  requireAuthBrowserHandoffOrigin,
+  auth,
+  (req, res) => {
+    const startedAt = Date.now();
+    const userId = String(req.user?.whatsapp || "").trim();
+    const sessionExpiresAt = Number(req.user?.exp || 0) * 1000;
+
+    try {
+      if (!Number.isFinite(sessionExpiresAt) || sessionExpiresAt <= Date.now()) {
+        logAuthBrowserHandoff(req, {
+          evento: "handoff_emissao_recusada",
+          status: 401,
+          motivo: "session_expired",
+          duracaoMs: Date.now() - startedAt
+        });
+        return res.status(401).json({
+          ok: false,
+          error: "Sessao invalida para transferencia."
+        });
+      }
+
+      const clientes = readClientes();
+      const cliente = clientes[userId];
+
+      if (!cliente || cliente.ativo !== true) {
+        logAuthBrowserHandoff(req, {
+          evento: "handoff_emissao_recusada",
+          status: 403,
+          motivo: "account_unavailable",
+          duracaoMs: Date.now() - startedAt
+        });
+        return res.status(403).json({
+          ok: false,
+          error: "Conta indisponivel para transferencia."
+        });
+      }
+
+      const issued = authBrowserHandoffs.issue({
+        userId,
+        ipAddress: getPreviewLimiterIp(req),
+        sessionExpiresAt
+      });
+
+      if (!issued.ok && issued.reason === "rate_limited") {
+        return authBrowserHandoffRateLimited(req, res, issued, {
+          duracaoMs: Date.now() - startedAt
+        });
+      }
+
+      if (!issued.ok && issued.reason === "session_expired") {
+        logAuthBrowserHandoff(req, {
+          evento: "handoff_emissao_recusada",
+          status: 401,
+          motivo: "session_expired",
+          duracaoMs: Date.now() - startedAt
+        });
+        return res.status(401).json({
+          ok: false,
+          error: "Sessao invalida para transferencia."
+        });
+      }
+
+      logAuthBrowserHandoff(req, {
+        evento: "handoff_emitido",
+        status: 201,
+        duracaoMs: Date.now() - startedAt
+      });
+      return res.status(201).json({
+        ok: true,
+        handoff_code: issued.token,
+        expires_in: Math.ceil(issued.expiresInMs / 1000)
+      });
+    } catch (error) {
+      return authBrowserHandoffStoreFailure(req, res, error, {
+        duracaoMs: Date.now() - startedAt
+      });
+    }
+  }
+);
+
+app.post(
+  "/auth/browser-handoff/redeem",
+  requireAuthBrowserHandoffEnabled,
+  requireAuthBrowserHandoffOrigin,
+  (req, res) => {
+    const startedAt = Date.now();
+
+    if (!req.is("application/json")) {
+      logAuthBrowserHandoff(req, {
+        evento: "handoff_resgate_recusado",
+        status: 415,
+        motivo: "invalid",
+        duracaoMs: Date.now() - startedAt
+      });
+      return res.status(415).json({
+        ok: false,
+        error: "Envie o codigo em formato JSON."
+      });
+    }
+
+    try {
+      const redeemed = authBrowserHandoffs.redeem(req.body?.code, {
+        ipAddress: getPreviewLimiterIp(req)
+      });
+
+      if (!redeemed.ok && redeemed.reason === "rate_limited") {
+        return authBrowserHandoffRateLimited(req, res, redeemed, {
+          duracaoMs: Date.now() - startedAt
+        });
+      }
+
+      if (!redeemed.ok) {
+        const gone = ["expired", "superseded", "used"].includes(redeemed.reason);
+        const status = gone ? 410 : 400;
+        logAuthBrowserHandoff(req, {
+          evento: gone ? "handoff_indisponivel" : "handoff_resgate_recusado",
+          status,
+          motivo: redeemed.reason,
+          duracaoMs: Date.now() - startedAt
+        });
+        return res.status(status).json({
+          ok: false,
+          error: gone
+            ? "Esta transferencia expirou ou ja foi utilizada."
+            : "Codigo de transferencia invalido.",
+          codigo: redeemed.reason
+        });
+      }
+
+      const userId = String(redeemed.record?.user_id || "").trim();
+      const remainingSessionSeconds = Math.floor(
+        (Number(redeemed.record?.session_expires_at || 0) - Date.now()) / 1000
+      );
+
+      if (!Number.isFinite(remainingSessionSeconds) || remainingSessionSeconds < 1) {
+        logAuthBrowserHandoff(req, {
+          evento: "handoff_indisponivel",
+          status: 410,
+          motivo: "session_expired",
+          idadeMs: redeemed.ageMs,
+          duracaoMs: Date.now() - startedAt
+        });
+        return res.status(410).json({
+          ok: false,
+          error: "Esta transferencia expirou.",
+          codigo: "session_expired"
+        });
+      }
+
+      const clientes = readClientes();
+      const cliente = clientes[userId];
+
+      if (!cliente || cliente.ativo !== true) {
+        logAuthBrowserHandoff(req, {
+          evento: "handoff_resgate_recusado",
+          status: 403,
+          motivo: "account_unavailable",
+          idadeMs: redeemed.ageMs,
+          duracaoMs: Date.now() - startedAt
+        });
+        return res.status(403).json({
+          ok: false,
+          error: "Conta indisponivel para transferencia."
+        });
+      }
+
+      const token = jwt.sign(
+        { whatsapp: userId },
+        JWT_SECRET,
+        { expiresIn: remainingSessionSeconds }
+      );
+      const saldoInfo = billingService.getBalanceFields(cliente);
+
+      logAuthBrowserHandoff(req, {
+        evento: "handoff_resgatado",
+        status: 200,
+        idadeMs: redeemed.ageMs,
+        duracaoMs: Date.now() - startedAt
+      });
+      return res.json({
+        ok: true,
+        token,
+        whatsapp: userId,
+        nome_time: cliente.nome_time,
+        plano: cliente.plano,
+        conta_auto_pendente: cliente.cadastro_automatico === true && cliente.conta_finalizada !== true,
+        ...saldoInfo,
+        usados_no_ciclo: Number(cliente.usados_no_ciclo || 0)
+      });
+    } catch (error) {
+      return authBrowserHandoffStoreFailure(req, res, error, {
+        duracaoMs: Date.now() - startedAt
+      });
+    }
+  }
+);
 
 app.post("/auth/google", async (req, res) => {
   try {
