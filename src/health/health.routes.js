@@ -28,11 +28,14 @@ function createHealthRouter({ config, buildInfo, checkDatabase }) {
     }
 
     const database = await checkDatabase();
-    return res.status(database.ok ? 200 : 503).json({
-      ok: database.ok,
+    const verificationConfigured = config.instagramVerificationConfigured === true;
+    const ready = database.ok && verificationConfigured;
+    return res.status(ready ? 200 : 503).json({
+      ok: ready,
       ...metadata,
       radar_amistosos: "enabled",
-      database: database.ok ? "ready" : database.reason
+      database: database.ok ? "ready" : database.reason,
+      instagram_verification: verificationConfigured ? "configured" : "not_configured"
     });
   });
 

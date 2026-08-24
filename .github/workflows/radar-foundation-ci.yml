@@ -7,6 +7,7 @@ on:
       - main
       - codex/radar-amistosos-api-foundation-20260824
       - codex/radar-amistosos-api-identity-20260824
+      - codex/radar-amistosos-api-instagram-verification-20260824
 
 permissions:
   contents: read

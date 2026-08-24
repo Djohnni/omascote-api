@@ -41,7 +41,8 @@ test("clean PostgreSQL schema migrates idempotently and rejects cross-match conf
     assert.deepEqual(await migrate({ pool }), [
       "001_radar_amistosos_foundation.sql",
       "002_result_confirmation_match_integrity.sql",
-      "003_radar_identity_authorization.sql"
+      "003_radar_identity_authorization.sql",
+      "004_instagram_verification_review.sql"
     ]);
     assert.deepEqual(await migrate({ pool }), []);
     assert.deepEqual(await checkDatabase(pool), { ok: true });

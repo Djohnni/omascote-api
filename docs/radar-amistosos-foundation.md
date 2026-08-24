@@ -16,6 +16,13 @@ as rotas legadas nem migra os arquivos JSON existentes.
 | `RADAR_PUBLIC_RATING_MIN_MATCHES` | `3` | Mínimo para publicar reputação agregada. |
 | `RADAR_PILOT_CITY_IBGE_CODE` | vazio | Cidade canônica do piloto, definida por ambiente. |
 | `RADAR_MODERATION_SLA_HOURS` | vazio | SLA operacional, definido antes do piloto. |
+| `RADAR_INSTAGRAM_VERIFICATION_SECRET` | vazio | Segredo independente, com pelo menos 32 bytes, usado apenas nos HMACs da verificação. Sem ele, o readiness falha fechado. |
+| `RADAR_INSTAGRAM_CHALLENGE_TTL_MINUTES` | `20` | Validade do desafio de bio. |
+| `RADAR_INSTAGRAM_CHALLENGE_MAX_ATTEMPTS` | `5` | Máximo de tentativas por desafio. |
+| `RADAR_INSTAGRAM_RATE_WINDOW_SECONDS` | `3600` | Janela dos limites por conta, time e IP. |
+| `RADAR_INSTAGRAM_INITIATE_ACCOUNT_LIMIT` / `RADAR_INSTAGRAM_INITIATE_TEAM_LIMIT` / `RADAR_INSTAGRAM_INITIATE_IP_LIMIT` | `5` / `5` / `20` | Limites para iniciar desafios. |
+| `RADAR_INSTAGRAM_CONFIRM_ACCOUNT_LIMIT` / `RADAR_INSTAGRAM_CONFIRM_TEAM_LIMIT` / `RADAR_INSTAGRAM_CONFIRM_IP_LIMIT` | `20` / `20` / `60` | Limites para confirmar desafios. |
+| `RADAR_TRUST_PROXY_HOPS` | `0` | Quantidade explícita de proxies confiáveis para obter o IP do limite; manter zero até comprovar a topologia. |
 | `RENDER_GIT_COMMIT` / `GIT_COMMIT` | vazio | Commit exibido nos health checks. |
 | `BUILD_ID` | vazio | Identificador de build exibido nos health checks. |
 
@@ -31,6 +38,33 @@ Com o Radar ligado, o readiness exige conexão com PostgreSQL e o registro da
 migration obrigatória mais recente em `schema_migrations`. Banco acessível com
 schema ausente ou desatualizado permanece fora de serviço; liveness continua
 independente para distinguir processo vivo de dependência pronta.
+
+## Revisão manual do Instagram
+
+O endpoint de confirmação registra apenas a declaração do responsável e coloca
+o item na fila. Ele nunca verifica ou aprova automaticamente o Instagram. O
+código completo não é persistido nem devolvido como uma única string: o cliente
+monta localmente os segmentos recebidos e o servidor mantém somente HMAC.
+
+Revisores são provisionados diretamente no PostgreSQL por um procedimento
+operacional autenticado. Não existe rota pública para conceder função. Exemplo
+com referências opacas previamente comprovadas:
+
+```sql
+INSERT INTO radar_account_roles(
+  account_reference,
+  role,
+  granted_by_account_reference
+) VALUES (
+  '<referencia-opaca-do-revisor>',
+  'verification_reviewer',
+  '<referencia-opaca-de-quem-autorizou>'
+);
+```
+
+Antes do piloto, registrar quem pode executar esse procedimento, como a
+revogação será aprovada e como a rotação do segredo invalidará desafios ainda
+abertos.
 
 Comandos locais:
 

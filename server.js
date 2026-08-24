@@ -31,6 +31,10 @@ const { createHealthRouter } = require("./src/health/health.routes");
 const { createFriendliesRouter } = require("./src/friendlies/friendlies.routes");
 const { createRadarIdentityRouter } = require("./src/friendlies/radar-identity.routes");
 const {
+  createInstagramVerificationRouter,
+  createInstagramVerificationAdminRouter
+} = require("./src/friendlies/instagram-verification.routes");
+const {
   createLegacyRadarIdentityResolver
 } = require("./src/friendlies/radar-identity.policy");
 
@@ -205,7 +209,14 @@ app.use("/auth/browser-handoff", (req, res, next) => {
 
 const generalJsonParser = express.json({ limit: "50mb" });
 app.use((req, res, next) => {
-  if (req.path === "/me/time/radar" || req.path.startsWith("/me/time/radar/")) {
+  if (
+    req.path === "/me/time/radar" ||
+    req.path.startsWith("/me/time/radar/") ||
+    req.path === "/me/time/verificacao" ||
+    req.path.startsWith("/me/time/verificacoes/") ||
+    req.path === "/admin/radar/verificacoes" ||
+    req.path.startsWith("/admin/radar/verificacoes/")
+  ) {
     return next();
   }
   return generalJsonParser(req, res, next);
@@ -7512,6 +7523,18 @@ const resolveRadarIdentity = createLegacyRadarIdentityResolver({
 });
 app.use("/amistosos", createFriendliesRouter({ config: radarConfig }));
 app.use("/me/time/radar", createRadarIdentityRouter({
+  config: radarConfig,
+  auth,
+  pool: radarPool,
+  resolveIdentity: resolveRadarIdentity
+}));
+app.use("/me/time", createInstagramVerificationRouter({
+  config: radarConfig,
+  auth,
+  pool: radarPool,
+  resolveIdentity: resolveRadarIdentity
+}));
+app.use("/admin/radar/verificacoes", createInstagramVerificationAdminRouter({
   config: radarConfig,
   auth,
   pool: radarPool,

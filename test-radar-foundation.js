@@ -49,6 +49,11 @@ test("Radar feature flag is off by default and keeps policy defaults", () => {
   assert.equal(config.publicRatingMinimumMatches, 3);
   assert.equal(config.pilotCityIbgeCode, null);
   assert.equal(config.moderationSlaHours, null);
+  assert.equal(config.instagramVerificationSecret, null);
+  assert.equal(Object.hasOwn(JSON.parse(JSON.stringify(config)), "instagramVerificationSecret"), false);
+  assert.equal(config.instagramVerificationConfigured, false);
+  assert.equal(config.instagramChallengeMaxAttempts, 5);
+  assert.equal(config.instagramTrustedProxyHops, 0);
   assert.equal(config.databaseSslRejectUnauthorized, true);
 });
 
@@ -123,12 +128,17 @@ test("server integration preserves the legacy root while Radar is disabled", asy
 
 test("enabled Radar status exposes only non-sensitive policy metadata", async () => {
   const app = express();
-  const config = createRadarConfig({ RADAR_AMISTOSOS_ENABLED: "true" });
+  const verificationSecret = "status-test-verification-secret-32bytes";
+  const config = createRadarConfig({
+    RADAR_AMISTOSOS_ENABLED: "true",
+    RADAR_INSTAGRAM_VERIFICATION_SECRET: verificationSecret
+  });
   app.use("/amistosos", createFriendliesRouter({ config }));
   const response = await request(app, "/amistosos/status");
   assert.equal(response.status, 200);
   assert.equal(response.body.feature, "radar_amistosos");
   assert.equal(response.body.pilot_free, true);
+  assert.equal(JSON.stringify(response.body).includes(verificationSecret), false);
   assert.equal(response.headers.get("cache-control"), "private, no-store");
 });
 
@@ -157,7 +167,10 @@ test("liveness returns build metadata and readiness does not require DB while fl
 test("readiness fails closed when enabled Radar cannot reach PostgreSQL", async () => {
   const app = express();
   app.use(createHealthRouter({
-    config: createRadarConfig({ RADAR_AMISTOSOS_ENABLED: "true" }),
+    config: createRadarConfig({
+      RADAR_AMISTOSOS_ENABLED: "true",
+      RADAR_INSTAGRAM_VERIFICATION_SECRET: "x".repeat(32)
+    }),
     buildInfo: { commit: null, build: null },
     checkDatabase: async () => ({ ok: false, reason: "database_unavailable" })
   }));
@@ -177,7 +190,10 @@ for (const reason of ["database_schema_missing", "database_schema_outdated"]) {
   test(`readiness returns a non-sensitive 503 for ${reason}`, async () => {
     const app = express();
     app.use(createHealthRouter({
-      config: createRadarConfig({ RADAR_AMISTOSOS_ENABLED: "true" }),
+      config: createRadarConfig({
+        RADAR_AMISTOSOS_ENABLED: "true",
+        RADAR_INSTAGRAM_VERIFICATION_SECRET: "x".repeat(32)
+      }),
       buildInfo: { commit: null, build: null },
       checkDatabase: async () => ({ ok: false, reason })
     }));
@@ -190,10 +206,25 @@ for (const reason of ["database_schema_missing", "database_schema_outdated"]) {
       commit: null,
       build: null,
       radar_amistosos: "enabled",
-      database: reason
+      database: reason,
+      instagram_verification: "configured"
     });
   });
 }
+
+test("readiness fails closed when Instagram verification secret is absent", async () => {
+  const app = express();
+  app.use(createHealthRouter({
+    config: createRadarConfig({ RADAR_AMISTOSOS_ENABLED: "true" }),
+    buildInfo: { commit: null, build: null },
+    checkDatabase: async () => ({ ok: true })
+  }));
+  const response = await request(app, "/health/ready");
+  assert.equal(response.status, 503);
+  assert.equal(response.body.ok, false);
+  assert.equal(response.body.database, "ready");
+  assert.equal(response.body.instagram_verification, "not_configured");
+});
 
 test("database readiness requires the latest mandatory migration", async () => {
   const missingSchemaPool = {
@@ -251,7 +282,8 @@ test("versioned migration contains transactional integrity foundations", () => {
   assert.deepEqual(migrations, [
     "001_radar_amistosos_foundation.sql",
     "002_result_confirmation_match_integrity.sql",
-    "003_radar_identity_authorization.sql"
+    "003_radar_identity_authorization.sql",
+    "004_instagram_verification_review.sql"
   ]);
   assert.equal(migrations.at(-1), LATEST_REQUIRED_MIGRATION);
 
@@ -282,4 +314,12 @@ test("versioned migration contains transactional integrity foundations", () => {
   assert.match(identitySql, /public_id uuid NOT NULL DEFAULT gen_random_uuid\(\)/);
   assert.match(identitySql, /radar_team_profiles_account_reference_key/);
   assert.match(identitySql, /radar_profile_mutation_requests_append_only/);
+
+  const verificationSql = fs.readFileSync(
+    path.join(directory, "004_instagram_verification_review.sql"),
+    "utf8"
+  );
+  assert.match(verificationSql, /team_verifications_one_open_instagram_challenge_idx/);
+  assert.match(verificationSql, /radar_account_roles/);
+  assert.match(verificationSql, /radar_verification_mutation_requests_append_only/);
 });

@@ -194,6 +194,7 @@ module.exports = {
   validateRadarProfileInput,
   validateIdempotencyKey,
   validateExpectedVersion,
+  normalizeInstagramHandle: instagramHandle,
   MODALITIES,
   LEVELS,
   VENUE_PREFERENCES,

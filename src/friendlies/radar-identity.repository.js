@@ -216,6 +216,34 @@ function createRadarIdentityRepository({ pool }) {
         team = rowToTeam(updated.rows[0]);
       }
 
+      if (changedFields.includes("instagramHandle")) {
+        const invalidated = await client.query(`
+          UPDATE team_verifications
+          SET status = 'cancelled',
+              decided_at = now(),
+              decision_details = '{"source":"system","reason_code":"instagram_changed"}'::jsonb,
+              version = version + 1,
+              updated_at = now()
+          WHERE team_id = $1
+            AND method = 'instagram_bio_code'
+            AND status = 'pending'
+          RETURNING id
+        `, [team.id]);
+        if (invalidated.rowCount > 0) {
+          await client.query(`
+            INSERT INTO match_audit_events(
+              actor_team_id, actor_reference, event_type, entity_version, payload, request_id
+            ) VALUES ($1, $2, 'instagram_verification.invalidated_by_profile_change', $3, $4::jsonb, $5)
+          `, [
+            team.id,
+            identity.accountId,
+            team.version,
+            JSON.stringify({ invalidated_count: invalidated.rowCount }),
+            requestId || null
+          ]);
+        }
+      }
+
       await client.query(`
         INSERT INTO radar_profile_mutation_requests(
           account_reference, idempotency_key, payload_hash,
