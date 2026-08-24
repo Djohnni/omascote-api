@@ -32,7 +32,8 @@ function createHealthRouter({ config, buildInfo, checkDatabase }) {
     const profilePrintConfigured = config.profilePrintImportEnabled !== true ||
       config.profilePrintOpenAiConfigured === true;
     const searchConfigured = config.searchEnabled !== true || config.searchConfigured === true;
-    const ready = database.ok && verificationConfigured && profilePrintConfigured && searchConfigured;
+    const invitationsConfigured = config.invitationsEnabled !== true || config.invitationsConfigured === true;
+    const ready = database.ok && verificationConfigured && profilePrintConfigured && searchConfigured && invitationsConfigured;
     return res.status(ready ? 200 : 503).json({
       ok: ready,
       ...metadata,
@@ -47,6 +48,11 @@ function createHealthRouter({ config, buildInfo, checkDatabase }) {
       friendly_search: config.searchEnabled !== true
         ? "disabled"
         : searchConfigured
+          ? "configured"
+          : "not_configured",
+      friendly_invitations: config.invitationsEnabled !== true
+        ? "disabled"
+        : invitationsConfigured
           ? "configured"
           : "not_configured"
     });

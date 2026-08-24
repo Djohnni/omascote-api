@@ -1,5 +1,5 @@
 "use strict";
 
-const LATEST_REQUIRED_MIGRATION = "007_friendly_team_discovery.sql";
+const LATEST_REQUIRED_MIGRATION = "008_friendly_invitations_notifications.sql";
 
 module.exports = { LATEST_REQUIRED_MIGRATION };

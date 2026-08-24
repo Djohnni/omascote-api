@@ -112,12 +112,12 @@ function service(pool, overrides = {}, now = BASE_NOW) {
   });
 }
 
-test("migrations through 007 run twice safely and preserve immutable availability history", async () => {
+test("migrations through 008 run twice safely and preserve immutable availability history", async () => {
   const database = new PGlite();
   const pool = createPoolAdapter(database);
   try {
     const first = await migrate({ pool });
-    assert.equal(first.at(-1), "007_friendly_team_discovery.sql");
+    assert.equal(first.at(-1), "008_friendly_invitations_notifications.sql");
     assert.deepEqual(await migrate({ pool }), []);
     const applied = await database.query(
       "SELECT name FROM schema_migrations WHERE name = '006_friendly_availability_management.sql'"

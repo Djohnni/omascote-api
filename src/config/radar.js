@@ -62,6 +62,9 @@ function createRadarConfig(env = process.env) {
   const searchRateLimitSecret = String(
     env.RADAR_SEARCH_RATE_LIMIT_SECRET || ""
   ).trim() || null;
+  const invitationsSecuritySecret = String(
+    env.RADAR_INVITATIONS_SECURITY_SECRET || ""
+  ).trim() || null;
   const searchPageMaximum = boundedPositiveInteger(
     env.RADAR_SEARCH_PAGE_MAXIMUM,
     24,
@@ -71,9 +74,28 @@ function createRadarConfig(env = process.env) {
     boundedPositiveInteger(env.RADAR_SEARCH_PAGE_DEFAULT, 12, 24),
     searchPageMaximum
   );
+  const invitationPageMaximum = boundedPositiveInteger(
+    env.RADAR_INVITATION_PAGE_MAXIMUM,
+    50,
+    100
+  );
+  const invitationPageDefault = Math.min(
+    boundedPositiveInteger(env.RADAR_INVITATION_PAGE_DEFAULT, 20, 50),
+    invitationPageMaximum
+  );
+  const notificationPageMaximum = boundedPositiveInteger(
+    env.RADAR_NOTIFICATION_PAGE_MAXIMUM,
+    50,
+    100
+  );
+  const notificationPageDefault = Math.min(
+    boundedPositiveInteger(env.RADAR_NOTIFICATION_PAGE_DEFAULT, 20, 50),
+    notificationPageMaximum
+  );
   const config = {
     enabled: parseBoolean(env.RADAR_AMISTOSOS_ENABLED, false),
     searchEnabled: parseBoolean(env.RADAR_SEARCH_ENABLED, false),
+    invitationsEnabled: parseBoolean(env.RADAR_INVITATIONS_ENABLED, false),
     profilePrintImportEnabled: parseBoolean(
       env.RADAR_PROFILE_PRINT_IMPORT_ENABLED,
       false
@@ -287,6 +309,44 @@ function createRadarConfig(env = process.env) {
       500,
       5_000
     ),
+    invitationsConfigured: Boolean(
+      invitationsSecuritySecret &&
+      Buffer.byteLength(invitationsSecuritySecret, "utf8") >= 32
+    ),
+    invitationExpirationHours: boundedPositiveInteger(
+      env.RADAR_INVITATION_EXPIRATION_HOURS,
+      72,
+      7 * 24
+    ),
+    invitationMaxHorizonDays: boundedPositiveInteger(
+      env.RADAR_INVITATION_MAX_HORIZON_DAYS,
+      180,
+      365
+    ),
+    invitationPageDefault,
+    invitationPageMaximum,
+    notificationPageDefault,
+    notificationPageMaximum,
+    invitationRateWindowSeconds: boundedPositiveInteger(
+      env.RADAR_INVITATION_RATE_WINDOW_SECONDS,
+      60 * 60,
+      24 * 60 * 60
+    ),
+    invitationAccountLimit: boundedPositiveInteger(
+      env.RADAR_INVITATION_ACCOUNT_LIMIT,
+      60,
+      1_000
+    ),
+    invitationTeamLimit: boundedPositiveInteger(
+      env.RADAR_INVITATION_TEAM_LIMIT,
+      60,
+      1_000
+    ),
+    invitationIpLimit: boundedPositiveInteger(
+      env.RADAR_INVITATION_IP_LIMIT,
+      180,
+      5_000
+    ),
     databaseUrl: String(env.DATABASE_URL || "").trim() || null,
     databaseSsl: parseBoolean(env.DATABASE_SSL, false),
     databaseSslRejectUnauthorized:
@@ -326,6 +386,12 @@ function createRadarConfig(env = process.env) {
   });
   Object.defineProperty(config, "searchRateLimitSecret", {
     value: searchRateLimitSecret,
+    enumerable: false,
+    writable: false,
+    configurable: false
+  });
+  Object.defineProperty(config, "invitationsSecuritySecret", {
+    value: invitationsSecuritySecret,
     enumerable: false,
     writable: false,
     configurable: false

@@ -218,7 +218,8 @@ for (const reason of ["database_schema_missing", "database_schema_outdated"]) {
       database: reason,
       instagram_verification: "configured",
       profile_print_import: "disabled",
-      friendly_search: "disabled"
+      friendly_search: "disabled",
+      friendly_invitations: "disabled"
     });
   });
 }
@@ -313,7 +314,8 @@ test("versioned migration contains transactional integrity foundations", () => {
     "004_instagram_verification_review.sql",
     "005_profile_print_import.sql",
     "006_friendly_availability_management.sql",
-    "007_friendly_team_discovery.sql"
+    "007_friendly_team_discovery.sql",
+    "008_friendly_invitations_notifications.sql"
   ]);
   assert.equal(migrations.at(-1), LATEST_REQUIRED_MIGRATION);
 

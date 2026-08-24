@@ -45,7 +45,8 @@ test("clean PostgreSQL schema migrates idempotently and rejects cross-match conf
       "004_instagram_verification_review.sql",
       "005_profile_print_import.sql",
       "006_friendly_availability_management.sql",
-      "007_friendly_team_discovery.sql"
+      "007_friendly_team_discovery.sql",
+      "008_friendly_invitations_notifications.sql"
     ]);
     assert.deepEqual(await migrate({ pool }), []);
     assert.deepEqual(await checkDatabase(pool), { ok: true });
@@ -60,16 +61,16 @@ test("clean PostgreSQL schema migrates idempotently and rejects cross-match conf
     const invitationOne = (await database.query(`
       INSERT INTO friendly_invitations(
         requester_team_id, invited_team_id, state, proposal, proposal_hash,
-        idempotency_key, idempotency_payload_hash, expires_at
-      ) VALUES ($1, $2, 'accepted', '{}', $3, 'db-invite-1', $4, now() + interval '1 hour')
+        idempotency_key, idempotency_payload_hash, expires_at, accepted_at
+      ) VALUES ($1, $2, 'accepted', '{}', $3, 'db-invite-1', $4, now() + interval '1 hour', now())
       RETURNING id
     `, [teamA, teamB, "a".repeat(64), "b".repeat(64)])).rows[0].id;
 
     const invitationTwo = (await database.query(`
       INSERT INTO friendly_invitations(
         requester_team_id, invited_team_id, state, proposal, proposal_hash,
-        idempotency_key, idempotency_payload_hash, expires_at
-      ) VALUES ($1, $2, 'accepted', '{}', $3, 'db-invite-2', $4, now() + interval '1 hour')
+        idempotency_key, idempotency_payload_hash, expires_at, accepted_at
+      ) VALUES ($1, $2, 'accepted', '{}', $3, 'db-invite-2', $4, now() + interval '1 hour', now())
       RETURNING id
     `, [teamA, teamB, "c".repeat(64), "d".repeat(64)])).rows[0].id;
 
