@@ -29,13 +29,20 @@ function createHealthRouter({ config, buildInfo, checkDatabase }) {
 
     const database = await checkDatabase();
     const verificationConfigured = config.instagramVerificationConfigured === true;
-    const ready = database.ok && verificationConfigured;
+    const profilePrintConfigured = config.profilePrintImportEnabled !== true ||
+      config.profilePrintOpenAiConfigured === true;
+    const ready = database.ok && verificationConfigured && profilePrintConfigured;
     return res.status(ready ? 200 : 503).json({
       ok: ready,
       ...metadata,
       radar_amistosos: "enabled",
       database: database.ok ? "ready" : database.reason,
-      instagram_verification: verificationConfigured ? "configured" : "not_configured"
+      instagram_verification: verificationConfigured ? "configured" : "not_configured",
+      profile_print_import: config.profilePrintImportEnabled !== true
+        ? "disabled"
+        : profilePrintConfigured
+          ? "configured"
+          : "not_configured"
     });
   });
 

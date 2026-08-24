@@ -22,6 +22,20 @@ as rotas legadas nem migra os arquivos JSON existentes.
 | `RADAR_INSTAGRAM_RATE_WINDOW_SECONDS` | `3600` | Janela dos limites por conta, time e IP. |
 | `RADAR_INSTAGRAM_INITIATE_ACCOUNT_LIMIT` / `RADAR_INSTAGRAM_INITIATE_TEAM_LIMIT` / `RADAR_INSTAGRAM_INITIATE_IP_LIMIT` | `5` / `5` / `20` | Limites para iniciar desafios. |
 | `RADAR_INSTAGRAM_CONFIRM_ACCOUNT_LIMIT` / `RADAR_INSTAGRAM_CONFIRM_TEAM_LIMIT` / `RADAR_INSTAGRAM_CONFIRM_IP_LIMIT` | `20` / `20` / `60` | Limites para confirmar desafios. |
+| `RADAR_PROFILE_PRINT_IMPORT_ENABLED` | `false` | Habilita apenas a importação de rascunho por print. Desligada, chave e modelo da OpenAI não afetam o restante do Radar. |
+| `OPENAI_API_KEY` | vazio | Chave da API, lida somente do ambiente e nunca persistida ou registrada. Obrigatória quando a importação por print estiver habilitada. |
+| `RADAR_PROFILE_PRINT_OPENAI_MODEL` | vazio | Modelo multimodal da Responses API. Configurar como `gpt-5.6-sol` para esta fase. |
+| `RADAR_PROFILE_PRINT_REASONING_EFFORT` | `xhigh` | Esforço de raciocínio do modelo; aceita `none`, `low`, `medium`, `high`, `xhigh` ou `max`. |
+| `RADAR_PROFILE_PRINT_SECURITY_SECRET` | vazio | Segredo independente de pelo menos 32 bytes para proteger os identificadores dos limites e hashes de idempotência. |
+| `RADAR_PROFILE_PRINT_MAX_FILE_BYTES` | `8388608` | Tamanho máximo do upload; limitado internamente a 20 MiB. |
+| `RADAR_PROFILE_PRINT_MAX_WIDTH` / `RADAR_PROFILE_PRINT_MAX_HEIGHT` | `6000` / `6000` | Dimensões máximas antes da análise. |
+| `RADAR_PROFILE_PRINT_MAX_PIXELS` | `20000000` | Limite contra imagens abusivas e bombas de descompressão. |
+| `RADAR_PROFILE_PRINT_OPENAI_TIMEOUT_MS` | `45000` | Prazo máximo da chamada à Responses API. |
+| `RADAR_PROFILE_PRINT_OPENAI_MAX_OUTPUT_TOKENS` | `1800` | Limite da saída estruturada. |
+| `RADAR_PROFILE_PRINT_DRAFT_TTL_MINUTES` | `120` | Retenção curta do rascunho; limitada internamente a 24 horas. |
+| `RADAR_PROFILE_PRINT_CLEANUP_INTERVAL_MS` | `900000` | Intervalo da limpeza automática; mínimo de um minuto e máximo de 24 horas. |
+| `RADAR_PROFILE_PRINT_RATE_WINDOW_SECONDS` | `3600` | Janela persistente dos limites da importação. |
+| `RADAR_PROFILE_PRINT_ACCOUNT_LIMIT` / `RADAR_PROFILE_PRINT_TEAM_LIMIT` / `RADAR_PROFILE_PRINT_IP_LIMIT` | `5` / `5` / `20` | Limites persistentes por conta, time e IP. |
 | `RADAR_TRUST_PROXY_HOPS` | `0` | Quantidade explícita de proxies confiáveis para obter o IP do limite; manter zero até comprovar a topologia. |
 | `RENDER_GIT_COMMIT` / `GIT_COMMIT` | vazio | Commit exibido nos health checks. |
 | `BUILD_ID` | vazio | Identificador de build exibido nos health checks. |
@@ -65,6 +79,31 @@ INSERT INTO radar_account_roles(
 Antes do piloto, registrar quem pode executar esse procedimento, como a
 revogação será aprovada e como a rotação do segredo invalidará desafios ainda
 abertos.
+
+## Importação de perfil por print
+
+`POST /me/time/perfil/importar-print` aceita `multipart/form-data`, um único
+arquivo no campo `imagem` e, opcionalmente, `instagram_handle`. O arquivo deve
+ser PNG, JPEG ou WebP estático. Assinatura, MIME, extensão, integridade,
+dimensões e volume de pixels são validados; depois a imagem é reprocessada para
+remover metadados antes de seguir para `POST /v1/responses`.
+
+A chamada usa `store: false`, não oferece ferramentas e exige Structured
+Outputs com JSON Schema estrito. O texto da imagem é tratado como conteúdo não
+confiável. O resultado fica em `team_verifications.ai_draft` por retenção curta
+e é somente uma sugestão com valor, confiança e evidência. A rota não chama a
+atualização do perfil, não verifica o Instagram e não ativa disponibilidade. O
+responsável precisa revisar e salvar manualmente pelos endpoints normais.
+
+Bytes, base64, caminho temporário, resposta bruta e identificadores internos do
+provedor não são persistidos. A limpeza automática marca rascunhos vencidos
+como expirados e remove o conteúdo do rascunho, mantendo apenas o histórico
+operacional não sensível e a auditoria append-only. O mesmo saneamento ocorre
+antes de uma nova importação do time.
+
+O processamento seguro usa Sharp 0.35 ou superior e, portanto, esta versão da
+API exige Node.js 20.9 ou superior. Confirmar a versão do runtime de staging
+antes de habilitar a flag específica.
 
 Comandos locais:
 

@@ -35,6 +35,12 @@ const {
   createInstagramVerificationAdminRouter
 } = require("./src/friendlies/instagram-verification.routes");
 const {
+  createProfilePrintImportRouter
+} = require("./src/friendlies/profile-print-import.routes");
+const {
+  createProfilePrintImportRepository
+} = require("./src/friendlies/profile-print-import.repository");
+const {
   createLegacyRadarIdentityResolver
 } = require("./src/friendlies/radar-identity.policy");
 
@@ -214,6 +220,7 @@ app.use((req, res, next) => {
     req.path.startsWith("/me/time/radar/") ||
     req.path === "/me/time/verificacao" ||
     req.path.startsWith("/me/time/verificacoes/") ||
+    req.path === "/me/time/perfil/importar-print" ||
     req.path === "/admin/radar/verificacoes" ||
     req.path.startsWith("/admin/radar/verificacoes/")
   ) {
@@ -7528,6 +7535,12 @@ app.use("/me/time/radar", createRadarIdentityRouter({
   pool: radarPool,
   resolveIdentity: resolveRadarIdentity
 }));
+app.use("/me/time/perfil", createProfilePrintImportRouter({
+  config: radarConfig,
+  auth,
+  pool: radarPool,
+  resolveIdentity: resolveRadarIdentity
+}));
 app.use("/me/time", createInstagramVerificationRouter({
   config: radarConfig,
   auth,
@@ -14347,8 +14360,39 @@ app.post("/bot/suporte/limpar-finalizadas", auth, (req, res) => {
   }
 });
 
+let profilePrintRetentionRunning = false;
+
+async function runProfilePrintRetentionCleanup() {
+  if (
+    profilePrintRetentionRunning ||
+    !radarPool ||
+    !radarConfig.enabled ||
+    !radarConfig.profilePrintImportEnabled
+  ) return;
+
+  profilePrintRetentionRunning = true;
+  try {
+    const repository = createProfilePrintImportRepository({ pool: radarPool });
+    await repository.expireStale({ now: new Date(), limit: 500 });
+  } catch (error) {
+    console.error("[RADAR_PROFILE_PRINT_RETENTION] cleanup failed", {
+      error: error?.name || "Error"
+    });
+  } finally {
+    profilePrintRetentionRunning = false;
+  }
+}
+
 if (require.main === module) {
   setInterval(finalizarConversasSuporteInativas, 60 * 1000);
+  if (radarConfig.enabled && radarConfig.profilePrintImportEnabled && radarPool) {
+    runProfilePrintRetentionCleanup();
+    const retentionTimer = setInterval(
+      runProfilePrintRetentionCleanup,
+      radarConfig.profilePrintCleanupIntervalMs
+    );
+    retentionTimer.unref?.();
+  }
   app.listen(PORT, () => {
     console.log("API rodando na porta", PORT);
   });

@@ -88,7 +88,8 @@ test("Instagram verification lifecycle is private, reviewed, bounded and migrati
       "001_radar_amistosos_foundation.sql",
       "002_result_confirmation_match_integrity.sql",
       "003_radar_identity_authorization.sql",
-      "004_instagram_verification_review.sql"
+      "004_instagram_verification_review.sql",
+      "005_profile_print_import.sql"
     ]);
     assert.deepEqual(await migrate({ pool }), []);
 

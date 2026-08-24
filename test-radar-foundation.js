@@ -91,6 +91,7 @@ test("server integration preserves the legacy root while Radar is disabled", asy
   const previous = {
     dataDirectory: process.env.OMASCOTE_DATA_DIR,
     enabled: process.env.RADAR_AMISTOSOS_ENABLED,
+    profilePrintEnabled: process.env.RADAR_PROFILE_PRINT_IMPORT_ENABLED,
     databaseUrl: process.env.DATABASE_URL,
     jwtSecret: process.env.JWT_SECRET
   };
@@ -98,6 +99,7 @@ test("server integration preserves the legacy root while Radar is disabled", asy
   process.env.OMASCOTE_DATA_DIR = dataDirectory;
   process.env.JWT_SECRET = "radar-foundation-test-secret";
   delete process.env.RADAR_AMISTOSOS_ENABLED;
+  delete process.env.RADAR_PROFILE_PRINT_IMPORT_ENABLED;
   delete process.env.DATABASE_URL;
 
   try {
@@ -105,12 +107,14 @@ test("server integration preserves the legacy root while Radar is disabled", asy
     const legacy = await request(app, "/");
     const radar = await request(app, "/amistosos/status");
     const radarIdentity = await request(app, "/me/time/radar");
+    const profilePrint = await request(app, "/me/time/perfil/importar-print", { method: "POST" });
     const ready = await request(app, "/health/ready");
 
     assert.equal(legacy.status, 200);
     assert.equal(legacy.body.msg, "omascote-api online");
     assert.equal(radar.status, 404);
     assert.equal(radarIdentity.status, 404);
+    assert.equal(profilePrint.status, 404);
     assert.equal(ready.status, 200);
     assert.equal(ready.body.database, "not_required");
   } finally {
@@ -118,6 +122,11 @@ test("server integration preserves the legacy root while Radar is disabled", asy
     else process.env.OMASCOTE_DATA_DIR = previous.dataDirectory;
     if (previous.enabled === undefined) delete process.env.RADAR_AMISTOSOS_ENABLED;
     else process.env.RADAR_AMISTOSOS_ENABLED = previous.enabled;
+    if (previous.profilePrintEnabled === undefined) {
+      delete process.env.RADAR_PROFILE_PRINT_IMPORT_ENABLED;
+    } else {
+      process.env.RADAR_PROFILE_PRINT_IMPORT_ENABLED = previous.profilePrintEnabled;
+    }
     if (previous.databaseUrl === undefined) delete process.env.DATABASE_URL;
     else process.env.DATABASE_URL = previous.databaseUrl;
     if (previous.jwtSecret === undefined) delete process.env.JWT_SECRET;
@@ -207,7 +216,8 @@ for (const reason of ["database_schema_missing", "database_schema_outdated"]) {
       build: null,
       radar_amistosos: "enabled",
       database: reason,
-      instagram_verification: "configured"
+      instagram_verification: "configured",
+      profile_print_import: "disabled"
     });
   });
 }
@@ -283,7 +293,8 @@ test("versioned migration contains transactional integrity foundations", () => {
     "001_radar_amistosos_foundation.sql",
     "002_result_confirmation_match_integrity.sql",
     "003_radar_identity_authorization.sql",
-    "004_instagram_verification_review.sql"
+    "004_instagram_verification_review.sql",
+    "005_profile_print_import.sql"
   ]);
   assert.equal(migrations.at(-1), LATEST_REQUIRED_MIGRATION);
 
@@ -322,4 +333,12 @@ test("versioned migration contains transactional integrity foundations", () => {
   assert.match(verificationSql, /team_verifications_one_open_instagram_challenge_idx/);
   assert.match(verificationSql, /radar_account_roles/);
   assert.match(verificationSql, /radar_verification_mutation_requests_append_only/);
+
+  const profilePrintSql = fs.readFileSync(
+    path.join(directory, "005_profile_print_import.sql"),
+    "utf8"
+  );
+  assert.match(profilePrintSql, /team_verifications_one_processing_profile_print_idx/);
+  assert.match(profilePrintSql, /radar_profile_print_import_requests/);
+  assert.match(profilePrintSql, /radar_profile_print_rate_limits/);
 });
