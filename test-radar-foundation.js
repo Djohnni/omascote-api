@@ -99,11 +99,13 @@ test("server integration preserves the legacy root while Radar is disabled", asy
     const { app } = require("./server");
     const legacy = await request(app, "/");
     const radar = await request(app, "/amistosos/status");
+    const radarIdentity = await request(app, "/me/time/radar");
     const ready = await request(app, "/health/ready");
 
     assert.equal(legacy.status, 200);
     assert.equal(legacy.body.msg, "omascote-api online");
     assert.equal(radar.status, 404);
+    assert.equal(radarIdentity.status, 404);
     assert.equal(ready.status, 200);
     assert.equal(ready.body.database, "not_required");
   } finally {
@@ -248,7 +250,8 @@ test("versioned migration contains transactional integrity foundations", () => {
   const migrations = listMigrationFiles(directory);
   assert.deepEqual(migrations, [
     "001_radar_amistosos_foundation.sql",
-    "002_result_confirmation_match_integrity.sql"
+    "002_result_confirmation_match_integrity.sql",
+    "003_radar_identity_authorization.sql"
   ]);
   assert.equal(migrations.at(-1), LATEST_REQUIRED_MIGRATION);
 
@@ -271,4 +274,12 @@ test("versioned migration contains transactional integrity foundations", () => {
     "utf8"
   );
   assert.match(integritySql, /submission_id, match_id, submission_version, submission_hash/);
+
+  const identitySql = fs.readFileSync(
+    path.join(directory, "003_radar_identity_authorization.sql"),
+    "utf8"
+  );
+  assert.match(identitySql, /public_id uuid NOT NULL DEFAULT gen_random_uuid\(\)/);
+  assert.match(identitySql, /radar_team_profiles_account_reference_key/);
+  assert.match(identitySql, /radar_profile_mutation_requests_append_only/);
 });

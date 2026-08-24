@@ -29,6 +29,10 @@ const { getBuildInfo } = require("./src/config/build-info");
 const { createPool, checkDatabase } = require("./src/db/pool");
 const { createHealthRouter } = require("./src/health/health.routes");
 const { createFriendliesRouter } = require("./src/friendlies/friendlies.routes");
+const { createRadarIdentityRouter } = require("./src/friendlies/radar-identity.routes");
+const {
+  createLegacyRadarIdentityResolver
+} = require("./src/friendlies/radar-identity.policy");
 
 function criarArquivoZip(options = {}) {
   if (typeof archiverModule === "function") {
@@ -199,7 +203,13 @@ app.use("/auth/browser-handoff", (req, res, next) => {
   });
 });
 
-app.use(express.json({ limit: "50mb" }));
+const generalJsonParser = express.json({ limit: "50mb" });
+app.use((req, res, next) => {
+  if (req.path === "/me/time/radar" || req.path.startsWith("/me/time/radar/")) {
+    return next();
+  }
+  return generalJsonParser(req, res, next);
+});
 app.use(express.urlencoded({ extended: false, limit: "8kb" }));
 app.use(express.static("public"));
 
@@ -7492,7 +7502,21 @@ app.use(createHealthRouter({
   buildInfo,
   checkDatabase: () => checkDatabase(radarPool)
 }));
+const resolveRadarIdentity = createLegacyRadarIdentityResolver({
+  getAccountRecord(authSubject) {
+    return readClientes()[authSubject] || null;
+  },
+  ensureLegacyProfile(authSubject) {
+    return ensurePerfilCliente(readClientes(), authSubject);
+  }
+});
 app.use("/amistosos", createFriendliesRouter({ config: radarConfig }));
+app.use("/me/time/radar", createRadarIdentityRouter({
+  config: radarConfig,
+  auth,
+  pool: radarPool,
+  resolveIdentity: resolveRadarIdentity
+}));
 
 // Health check
 app.get("/", (req, res) => {
