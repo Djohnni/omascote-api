@@ -96,6 +96,7 @@ function createRadarConfig(env = process.env) {
     enabled: parseBoolean(env.RADAR_AMISTOSOS_ENABLED, false),
     searchEnabled: parseBoolean(env.RADAR_SEARCH_ENABLED, false),
     invitationsEnabled: parseBoolean(env.RADAR_INVITATIONS_ENABLED, false),
+    matchCenterEnabled: parseBoolean(env.RADAR_MATCH_CENTER_ENABLED, false),
     profilePrintImportEnabled: parseBoolean(
       env.RADAR_PROFILE_PRINT_IMPORT_ENABLED,
       false
@@ -327,6 +328,19 @@ function createRadarConfig(env = process.env) {
     invitationPageMaximum,
     notificationPageDefault,
     notificationPageMaximum,
+    matchCenterConfigured: Boolean(
+      invitationsSecuritySecret &&
+      Buffer.byteLength(invitationsSecuritySecret, "utf8") >= 32
+    ),
+    matchPageDefault: Math.min(
+      boundedPositiveInteger(env.RADAR_MATCH_PAGE_DEFAULT, 20, 50),
+      boundedPositiveInteger(env.RADAR_MATCH_PAGE_MAXIMUM, 50, 100)
+    ),
+    matchPageMaximum: boundedPositiveInteger(
+      env.RADAR_MATCH_PAGE_MAXIMUM,
+      50,
+      100
+    ),
     invitationRateWindowSeconds: boundedPositiveInteger(
       env.RADAR_INVITATION_RATE_WINDOW_SECONDS,
       60 * 60,

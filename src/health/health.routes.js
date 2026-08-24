@@ -33,7 +33,8 @@ function createHealthRouter({ config, buildInfo, checkDatabase }) {
       config.profilePrintOpenAiConfigured === true;
     const searchConfigured = config.searchEnabled !== true || config.searchConfigured === true;
     const invitationsConfigured = config.invitationsEnabled !== true || config.invitationsConfigured === true;
-    const ready = database.ok && verificationConfigured && profilePrintConfigured && searchConfigured && invitationsConfigured;
+    const matchCenterConfigured = config.matchCenterEnabled !== true || config.matchCenterConfigured === true;
+    const ready = database.ok && verificationConfigured && profilePrintConfigured && searchConfigured && invitationsConfigured && matchCenterConfigured;
     return res.status(ready ? 200 : 503).json({
       ok: ready,
       ...metadata,
@@ -53,6 +54,11 @@ function createHealthRouter({ config, buildInfo, checkDatabase }) {
       friendly_invitations: config.invitationsEnabled !== true
         ? "disabled"
         : invitationsConfigured
+          ? "configured"
+          : "not_configured",
+      friendly_match_center: config.matchCenterEnabled !== true
+        ? "disabled"
+        : matchCenterConfigured
           ? "configured"
           : "not_configured"
     });

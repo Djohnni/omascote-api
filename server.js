@@ -50,7 +50,11 @@ const {
   createInvitationRouters
 } = require("./src/friendlies/invitation.routes");
 const {
-  createLegacyRadarIdentityResolver
+  createMatchCenterRouter
+} = require("./src/friendlies/match-center.routes");
+const {
+  createLegacyRadarIdentityResolver,
+  accountReference
 } = require("./src/friendlies/radar-identity.policy");
 
 function criarArquivoZip(options = {}) {
@@ -232,6 +236,8 @@ app.use((req, res, next) => {
     req.path === "/me/time/perfil/importar-print" ||
     req.path === "/admin/radar/verificacoes" ||
     req.path.startsWith("/admin/radar/verificacoes/")
+    || req.path === "/me/time/amistosos"
+    || req.path.startsWith("/me/time/amistosos/")
   ) {
     return next();
   }
@@ -7537,6 +7543,29 @@ const resolveRadarIdentity = createLegacyRadarIdentityResolver({
     return ensurePerfilCliente(readClientes(), authSubject);
   }
 });
+
+function resolveRadarMatchContact(reference) {
+  const expected = String(reference || "").trim();
+  if (!expected) return null;
+  const clientes = readClientes();
+  for (const [authSubject, account] of Object.entries(clientes)) {
+    if (accountReference(account, authSubject) !== expected) continue;
+    const raw = String(
+      account?.whatsapp || account?.telefone || account?.celular || authSubject || ""
+    ).trim();
+    const digits = raw.replace(/\D/g, "");
+    if (digits.length >= 10 && digits.length <= 15) {
+      const international = digits.length <= 11 ? `55${digits}` : digits;
+      return Object.freeze({ type: "whatsapp", value: `+${international}` });
+    }
+    const email = String(account?.email || "").trim().toLowerCase();
+    if (email.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return Object.freeze({ type: "email", value: email });
+    }
+    return null;
+  }
+  return null;
+}
 app.use("/amistosos", createFriendliesRouter({ config: radarConfig }));
 app.use("/amistosos", createFriendlySearchRouter({
   config: radarConfig,
@@ -7552,6 +7581,13 @@ const radarInvitationRouters = createInvitationRouters({
   resolveIdentity: resolveRadarIdentity
 });
 app.use("/amistosos", radarInvitationRouters.invitationRouter);
+app.use("/me/time/amistosos", createMatchCenterRouter({
+  config: radarConfig,
+  auth,
+  pool: radarPool,
+  resolveIdentity: resolveRadarIdentity,
+  resolveContact: resolveRadarMatchContact
+}));
 app.use("/me/time/amistosos", radarInvitationRouters.teamRouter);
 app.use("/me/notificacoes", radarInvitationRouters.notificationRouter);
 app.use("/me/time/radar", createRadarIdentityRouter({
