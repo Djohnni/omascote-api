@@ -1,6 +1,7 @@
 "use strict";
 
 const { Pool } = require("pg");
+const { LATEST_REQUIRED_MIGRATION } = require("./schema");
 
 function createPool(config) {
   if (!config?.databaseUrl) return null;
@@ -15,20 +16,35 @@ function createPool(config) {
   });
 }
 
-async function checkDatabase(pool) {
+async function checkDatabase(
+  pool,
+  { requiredMigration = LATEST_REQUIRED_MIGRATION } = {}
+) {
   if (!pool) {
     return { ok: false, reason: "database_not_configured" };
   }
 
   try {
     await pool.query("SELECT 1 AS ready");
+
+    const migrationTable = await pool.query(
+      "SELECT to_regclass('public.schema_migrations') AS relation"
+    );
+    if (!migrationTable.rows?.[0]?.relation) {
+      return { ok: false, reason: "database_schema_missing" };
+    }
+
+    const migration = await pool.query(
+      "SELECT 1 FROM public.schema_migrations WHERE name = $1",
+      [requiredMigration]
+    );
+    if (migration.rowCount !== 1) {
+      return { ok: false, reason: "database_schema_outdated" };
+    }
+
     return { ok: true };
-  } catch (error) {
-    return {
-      ok: false,
-      reason: "database_unavailable",
-      code: String(error?.code || "unknown")
-    };
+  } catch {
+    return { ok: false, reason: "database_unavailable" };
   }
 }
 

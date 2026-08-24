@@ -27,6 +27,11 @@ as rotas legadas nem migra os arquivos JSON existentes.
 4. Habilitar `RADAR_AMISTOSOS_ENABLED=true` somente em staging.
 5. Manter rollback por flag; migrações não devem ser revertidas destrutivamente.
 
+Com o Radar ligado, o readiness exige conexão com PostgreSQL e o registro da
+migration obrigatória mais recente em `schema_migrations`. Banco acessível com
+schema ausente ou desatualizado permanece fora de serviço; liveness continua
+independente para distinguir processo vivo de dependência pronta.
+
 Comandos locais:
 
 ```text

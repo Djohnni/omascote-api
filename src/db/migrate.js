@@ -22,7 +22,7 @@ async function migrate({ pool, directory = path.join(__dirname, "migrations") })
   try {
     await client.query("SELECT pg_advisory_lock($1)", [MIGRATION_LOCK_ID]);
     await client.query(`
-      CREATE TABLE IF NOT EXISTS schema_migrations (
+      CREATE TABLE IF NOT EXISTS public.schema_migrations (
         name text PRIMARY KEY,
         applied_at timestamptz NOT NULL DEFAULT now()
       )
@@ -30,7 +30,7 @@ async function migrate({ pool, directory = path.join(__dirname, "migrations") })
 
     for (const name of listMigrationFiles(directory)) {
       const found = await client.query(
-        "SELECT 1 FROM schema_migrations WHERE name = $1",
+        "SELECT 1 FROM public.schema_migrations WHERE name = $1",
         [name]
       );
       if (found.rowCount > 0) continue;
@@ -39,7 +39,7 @@ async function migrate({ pool, directory = path.join(__dirname, "migrations") })
       await client.query("BEGIN");
       try {
         await client.query(sql);
-        await client.query("INSERT INTO schema_migrations(name) VALUES ($1)", [name]);
+        await client.query("INSERT INTO public.schema_migrations(name) VALUES ($1)", [name]);
         await client.query("COMMIT");
         applied.push(name);
       } catch (error) {

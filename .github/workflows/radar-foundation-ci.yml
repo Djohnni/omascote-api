@@ -4,6 +4,7 @@ on:
   pull_request:
   push:
     branches:
+      - main
       - codex/radar-amistosos-api-foundation-20260824
 
 permissions:

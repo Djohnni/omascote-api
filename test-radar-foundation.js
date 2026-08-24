@@ -8,6 +8,8 @@ const test = require("node:test");
 const express = require("express");
 const { createRadarConfig } = require("./src/config/radar");
 const { getBuildInfo } = require("./src/config/build-info");
+const { checkDatabase } = require("./src/db/pool");
+const { LATEST_REQUIRED_MIGRATION } = require("./src/db/schema");
 const { listMigrationFiles } = require("./src/db/migrate");
 const { createHealthRouter } = require("./src/health/health.routes");
 const { createFriendliesRouter } = require("./src/friendlies/friendlies.routes");
@@ -158,10 +160,75 @@ test("readiness fails closed when enabled Radar cannot reach PostgreSQL", async 
     checkDatabase: async () => ({ ok: false, reason: "database_unavailable" })
   }));
 
+  const live = await request(app, "/health/live");
   const response = await request(app, "/health/ready");
+  assert.equal(live.status, 200);
+  assert.equal(live.body.ok, true);
   assert.equal(response.status, 503);
   assert.equal(response.body.ok, false);
   assert.equal(response.body.database, "database_unavailable");
+  assert.equal(Object.hasOwn(response.body, "code"), false);
+  assert.equal(Object.hasOwn(response.body, "details"), false);
+});
+
+for (const reason of ["database_schema_missing", "database_schema_outdated"]) {
+  test(`readiness returns a non-sensitive 503 for ${reason}`, async () => {
+    const app = express();
+    app.use(createHealthRouter({
+      config: createRadarConfig({ RADAR_AMISTOSOS_ENABLED: "true" }),
+      buildInfo: { commit: null, build: null },
+      checkDatabase: async () => ({ ok: false, reason })
+    }));
+
+    const response = await request(app, "/health/ready");
+    assert.equal(response.status, 503);
+    assert.deepEqual(response.body, {
+      ok: false,
+      service: "omascote-api",
+      commit: null,
+      build: null,
+      radar_amistosos: "enabled",
+      database: reason
+    });
+  });
+}
+
+test("database readiness requires the latest mandatory migration", async () => {
+  const missingSchemaPool = {
+    query: async sql => sql.startsWith("SELECT 1 AS ready")
+      ? { rows: [{ ready: 1 }], rowCount: 1 }
+      : { rows: [{ relation: null }], rowCount: 1 }
+  };
+  assert.deepEqual(await checkDatabase(missingSchemaPool), {
+    ok: false,
+    reason: "database_schema_missing"
+  });
+
+  const outdatedSchemaPool = {
+    query: async (sql, params) => {
+      if (sql.startsWith("SELECT 1 AS ready")) return { rows: [{ ready: 1 }], rowCount: 1 };
+      if (sql.includes("to_regclass")) {
+        return { rows: [{ relation: "schema_migrations" }], rowCount: 1 };
+      }
+      assert.deepEqual(params, [LATEST_REQUIRED_MIGRATION]);
+      return { rows: [], rowCount: 0 };
+    }
+  };
+  assert.deepEqual(await checkDatabase(outdatedSchemaPool), {
+    ok: false,
+    reason: "database_schema_outdated"
+  });
+
+  const currentSchemaPool = {
+    query: async sql => {
+      if (sql.startsWith("SELECT 1 AS ready")) return { rows: [{ ready: 1 }], rowCount: 1 };
+      if (sql.includes("to_regclass")) {
+        return { rows: [{ relation: "schema_migrations" }], rowCount: 1 };
+      }
+      return { rows: [{ "?column?": 1 }], rowCount: 1 };
+    }
+  };
+  assert.deepEqual(await checkDatabase(currentSchemaPool), { ok: true });
 });
 
 test("domain state machines allow documented transitions and reject unsafe jumps", () => {
@@ -178,7 +245,12 @@ test("domain state machines allow documented transitions and reject unsafe jumps
 
 test("versioned migration contains transactional integrity foundations", () => {
   const directory = path.join(__dirname, "src", "db", "migrations");
-  assert.deepEqual(listMigrationFiles(directory), ["001_radar_amistosos_foundation.sql"]);
+  const migrations = listMigrationFiles(directory);
+  assert.deepEqual(migrations, [
+    "001_radar_amistosos_foundation.sql",
+    "002_result_confirmation_match_integrity.sql"
+  ]);
+  assert.equal(migrations.at(-1), LATEST_REQUIRED_MIGRATION);
 
   const sql = fs.readFileSync(path.join(directory, "001_radar_amistosos_foundation.sql"), "utf8");
   for (const required of [
@@ -193,4 +265,10 @@ test("versioned migration contains transactional integrity foundations", () => {
   ]) {
     assert.match(sql, new RegExp(required));
   }
+
+  const integritySql = fs.readFileSync(
+    path.join(directory, "002_result_confirmation_match_integrity.sql"),
+    "utf8"
+  );
+  assert.match(integritySql, /submission_id, match_id, submission_version, submission_hash/);
 });
