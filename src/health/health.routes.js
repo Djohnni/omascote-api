@@ -31,7 +31,8 @@ function createHealthRouter({ config, buildInfo, checkDatabase }) {
     const verificationConfigured = config.instagramVerificationConfigured === true;
     const profilePrintConfigured = config.profilePrintImportEnabled !== true ||
       config.profilePrintOpenAiConfigured === true;
-    const ready = database.ok && verificationConfigured && profilePrintConfigured;
+    const searchConfigured = config.searchEnabled !== true || config.searchConfigured === true;
+    const ready = database.ok && verificationConfigured && profilePrintConfigured && searchConfigured;
     return res.status(ready ? 200 : 503).json({
       ok: ready,
       ...metadata,
@@ -41,6 +42,11 @@ function createHealthRouter({ config, buildInfo, checkDatabase }) {
       profile_print_import: config.profilePrintImportEnabled !== true
         ? "disabled"
         : profilePrintConfigured
+          ? "configured"
+          : "not_configured",
+      friendly_search: config.searchEnabled !== true
+        ? "disabled"
+        : searchConfigured
           ? "configured"
           : "not_configured"
     });

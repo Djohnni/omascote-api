@@ -21,8 +21,24 @@ const MUTABLE_COLUMNS = Object.freeze({
   travelRadiusKm: "travel_radius_km",
   venuePreference: "venue_preference",
   availabilityActive: "availability_active",
-  termsAcceptedAt: "radar_terms_accepted_at"
+  termsAcceptedAt: "radar_terms_accepted_at",
+  publicName: "public_name",
+  publicProfileEnabled: "public_profile_enabled",
+  publicCrestAvailable: "public_crest_available"
 });
+
+function publicSnapshot(legacyProfile) {
+  const name = String(legacyProfile?.nome_time || "").replace(/\s+/g, " ").trim();
+  const hasCrest = Boolean(
+    String(legacyProfile?.escudo_url || "").trim() ||
+    String(legacyProfile?.escudo_path || "").trim()
+  );
+  return Object.freeze({
+    publicName: name.length >= 2 && name.length <= 80 ? name : null,
+    publicProfileEnabled: legacyProfile?.publico === true,
+    publicCrestAvailable: hasCrest
+  });
+}
 
 function rowToTeam(row) {
   if (!row) return null;
@@ -49,6 +65,9 @@ function rowToTeam(row) {
     venuePreference: row.venue_preference,
     availabilityActive: row.availability_active === true,
     termsAcceptedAt: row.radar_terms_accepted_at,
+    publicName: row.public_name,
+    publicProfileEnabled: row.public_profile_enabled === true,
+    publicCrestAvailable: row.public_crest_available === true,
     suspendedAt: row.suspended_at,
     version: Number(row.version || 1),
     createdAt: row.created_at,
@@ -117,17 +136,22 @@ function createRadarIdentityRepository({ pool }) {
     try {
       await client.query("BEGIN");
       transactionOpen = true;
+      const snapshot = publicSnapshot(identity.legacyProfile);
 
       const inserted = await client.query(`
         INSERT INTO radar_team_profiles(
-          legacy_profile_id, account_reference, public_slug
-        ) VALUES ($1, $2, $3)
+          legacy_profile_id, account_reference, public_slug,
+          public_name, public_profile_enabled, public_crest_available
+        ) VALUES ($1, $2, $3, $4, $5, $6)
         ON CONFLICT (legacy_profile_id) DO NOTHING
         RETURNING *
       `, [
         identity.profileId,
         identity.accountId,
-        String(identity.legacyProfile?.slug || "").trim() || null
+        String(identity.legacyProfile?.slug || "").trim() || null,
+        snapshot.publicName,
+        snapshot.publicProfileEnabled,
+        snapshot.publicCrestAvailable
       ]);
 
       const created = inserted.rowCount === 1;
@@ -194,7 +218,8 @@ function createRadarIdentityRepository({ pool }) {
       const values = changedValues(team, {
         ...proposed,
         accountReference: identity.accountId,
-        publicSlug: team.publicSlug || String(identity.legacyProfile?.slug || "").trim() || null
+        publicSlug: team.publicSlug || String(identity.legacyProfile?.slug || "").trim() || null,
+        ...snapshot
       });
       const changedFields = Object.keys(values);
 
@@ -293,4 +318,4 @@ function createRadarIdentityRepository({ pool }) {
   return Object.freeze({ findOwnedByIdentity, mutateOwnedProfile });
 }
 
-module.exports = { createRadarIdentityRepository, rowToTeam };
+module.exports = { createRadarIdentityRepository, rowToTeam, publicSnapshot };

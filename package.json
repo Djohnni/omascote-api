@@ -8,8 +8,8 @@
   },
   "scripts": {
     "start": "node server.js",
-    "test": "node --test test-download-ticket.js test-download-routes.js test-browser-handoff-store.js test-browser-handoff-routes.js test-radar-foundation.js test-radar-database.js test-radar-identity.js test-instagram-verification.js test-instagram-verification-database.js test-profile-print-import.js test-profile-print-import-database.js test-availability.js test-availability-database.js",
-    "test:radar": "node --test test-radar-foundation.js test-radar-database.js test-radar-identity.js test-instagram-verification.js test-instagram-verification-database.js test-profile-print-import.js test-profile-print-import-database.js test-availability.js test-availability-database.js",
+    "test": "node --test test-download-ticket.js test-download-routes.js test-browser-handoff-store.js test-browser-handoff-routes.js test-radar-foundation.js test-radar-database.js test-radar-identity.js test-instagram-verification.js test-instagram-verification-database.js test-profile-print-import.js test-profile-print-import-database.js test-availability.js test-availability-database.js test-friendly-search.js test-friendly-search-database.js",
+    "test:radar": "node --test test-radar-foundation.js test-radar-database.js test-radar-identity.js test-instagram-verification.js test-instagram-verification-database.js test-profile-print-import.js test-profile-print-import-database.js test-availability.js test-availability-database.js test-friendly-search.js test-friendly-search-database.js",
     "db:migrate": "node src/db/migrate.js",
     "test:payments": "node test-economic-creation.js",
     "test:scenario": "node --test test-result-scenario-pilot.js test-multi-product-scenarios.js",

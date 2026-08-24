@@ -44,6 +44,9 @@ const {
   createAvailabilityRouter
 } = require("./src/friendlies/availability.routes");
 const {
+  createFriendlySearchRouter
+} = require("./src/friendlies/friendly-search.routes");
+const {
   createLegacyRadarIdentityResolver
 } = require("./src/friendlies/radar-identity.policy");
 
@@ -7532,6 +7535,13 @@ const resolveRadarIdentity = createLegacyRadarIdentityResolver({
   }
 });
 app.use("/amistosos", createFriendliesRouter({ config: radarConfig }));
+app.use("/amistosos", createFriendlySearchRouter({
+  config: radarConfig,
+  auth,
+  pool: radarPool,
+  resolveIdentity: resolveRadarIdentity,
+  resolvePublicProfiles: resolveRadarSearchPublicProfiles
+}));
 app.use("/me/time/radar", createRadarIdentityRouter({
   config: radarConfig,
   auth,
@@ -8536,6 +8546,38 @@ function perfilPublicoResponse(perfil) {
     titulo_secao_resultados: perfil.titulo_secao_resultados || "",
     titulo_secao_proximo_jogo: perfil.titulo_secao_proximo_jogo || ""
   };
+}
+
+function resolveRadarSearchPublicProfiles(slugs) {
+  const wanted = new Set(
+    (Array.isArray(slugs) ? slugs : [])
+      .map(normalizarPerfilSlug)
+      .filter(Boolean)
+  );
+  const profiles = new Map();
+  if (wanted.size === 0 || !fs.existsSync(PERFIS_DIR)) return profiles;
+
+  const entries = fs.readdirSync(PERFIS_DIR, { withFileTypes: true });
+  for (const entry of entries) {
+    if (profiles.size === wanted.size) break;
+    if (!entry.isDirectory()) continue;
+    const profileId = normalizarPerfilId(entry.name);
+    if (!profileId) continue;
+    const current = safeReadJson(getPerfilFile(profileId));
+    if (!current) continue;
+    const profile = normalizarPerfilPrivado(current, { nome_time: current.nome_time }, profileId);
+    if (profile.publico !== true || !wanted.has(profile.slug)) continue;
+    profiles.set(profile.slug, Object.freeze({
+      slug: profile.slug,
+      name: profile.nome_time,
+      public: true,
+      hasCrest: Boolean(
+        String(profile.escudo_path || "").trim() ||
+        String(profile.escudo_url || "").trim()
+      )
+    }));
+  }
+  return profiles;
 }
 
 function rankingTimePublicoResponse(item) {

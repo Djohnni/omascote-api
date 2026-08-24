@@ -56,8 +56,24 @@ function createRadarConfig(env = process.env) {
     boundedPositiveInteger(env.RADAR_AVAILABILITY_PAGE_DEFAULT, 20, 50),
     availabilityPageMaximum
   );
+  const searchCursorSecret = String(
+    env.RADAR_SEARCH_CURSOR_SECRET || ""
+  ).trim() || null;
+  const searchRateLimitSecret = String(
+    env.RADAR_SEARCH_RATE_LIMIT_SECRET || ""
+  ).trim() || null;
+  const searchPageMaximum = boundedPositiveInteger(
+    env.RADAR_SEARCH_PAGE_MAXIMUM,
+    24,
+    50
+  );
+  const searchPageDefault = Math.min(
+    boundedPositiveInteger(env.RADAR_SEARCH_PAGE_DEFAULT, 12, 24),
+    searchPageMaximum
+  );
   const config = {
     enabled: parseBoolean(env.RADAR_AMISTOSOS_ENABLED, false),
+    searchEnabled: parseBoolean(env.RADAR_SEARCH_ENABLED, false),
     profilePrintImportEnabled: parseBoolean(
       env.RADAR_PROFILE_PRINT_IMPORT_ENABLED,
       false
@@ -223,6 +239,54 @@ function createRadarConfig(env = process.env) {
     ),
     availabilityPageDefault,
     availabilityPageMaximum,
+    searchConfigured: Boolean(
+      searchCursorSecret &&
+      Buffer.byteLength(searchCursorSecret, "utf8") >= 32 &&
+      searchRateLimitSecret &&
+      Buffer.byteLength(searchRateLimitSecret, "utf8") >= 32
+    ),
+    searchPageDefault,
+    searchPageMaximum,
+    searchRadiusMaximumKm: boundedPositiveInteger(
+      env.RADAR_SEARCH_RADIUS_MAXIMUM_KM,
+      100,
+      500
+    ),
+    searchQueryTimeoutMs: boundedPositiveInteger(
+      env.RADAR_SEARCH_QUERY_TIMEOUT_MS,
+      1_500,
+      10_000
+    ),
+    searchCursorTtlMinutes: boundedPositiveInteger(
+      env.RADAR_SEARCH_CURSOR_TTL_MINUTES,
+      15,
+      120
+    ),
+    searchRateWindowSeconds: boundedPositiveInteger(
+      env.RADAR_SEARCH_RATE_WINDOW_SECONDS,
+      60,
+      60 * 60
+    ),
+    searchAccountLimit: boundedPositiveInteger(
+      env.RADAR_SEARCH_ACCOUNT_LIMIT,
+      30,
+      500
+    ),
+    searchTeamLimit: boundedPositiveInteger(
+      env.RADAR_SEARCH_TEAM_LIMIT,
+      30,
+      500
+    ),
+    searchIpLimit: boundedPositiveInteger(
+      env.RADAR_SEARCH_IP_LIMIT,
+      120,
+      2_000
+    ),
+    searchCandidateMaximum: boundedPositiveInteger(
+      env.RADAR_SEARCH_CANDIDATE_MAXIMUM,
+      500,
+      5_000
+    ),
     databaseUrl: String(env.DATABASE_URL || "").trim() || null,
     databaseSsl: parseBoolean(env.DATABASE_SSL, false),
     databaseSslRejectUnauthorized:
@@ -250,6 +314,18 @@ function createRadarConfig(env = process.env) {
   });
   Object.defineProperty(config, "profilePrintSafetyIdentifierSecret", {
     value: profilePrintSafetyIdentifierSecret,
+    enumerable: false,
+    writable: false,
+    configurable: false
+  });
+  Object.defineProperty(config, "searchCursorSecret", {
+    value: searchCursorSecret,
+    enumerable: false,
+    writable: false,
+    configurable: false
+  });
+  Object.defineProperty(config, "searchRateLimitSecret", {
+    value: searchRateLimitSecret,
     enumerable: false,
     writable: false,
     configurable: false

@@ -217,7 +217,8 @@ for (const reason of ["database_schema_missing", "database_schema_outdated"]) {
       radar_amistosos: "enabled",
       database: reason,
       instagram_verification: "configured",
-      profile_print_import: "disabled"
+      profile_print_import: "disabled",
+      friendly_search: "disabled"
     });
   });
 }
@@ -234,6 +235,22 @@ test("readiness fails closed when Instagram verification secret is absent", asyn
   assert.equal(response.body.ok, false);
   assert.equal(response.body.database, "ready");
   assert.equal(response.body.instagram_verification, "not_configured");
+});
+
+test("readiness fails closed when friendly search is enabled without independent secrets", async () => {
+  const app = express();
+  app.use(createHealthRouter({
+    config: createRadarConfig({
+      RADAR_AMISTOSOS_ENABLED: "true",
+      RADAR_SEARCH_ENABLED: "true",
+      RADAR_INSTAGRAM_VERIFICATION_SECRET: "x".repeat(32)
+    }),
+    buildInfo: { commit: null, build: null },
+    checkDatabase: async () => ({ ok: true })
+  }));
+  const response = await request(app, "/health/ready");
+  assert.equal(response.status, 503);
+  assert.equal(response.body.friendly_search, "not_configured");
 });
 
 test("database readiness requires the latest mandatory migration", async () => {
@@ -295,7 +312,8 @@ test("versioned migration contains transactional integrity foundations", () => {
     "003_radar_identity_authorization.sql",
     "004_instagram_verification_review.sql",
     "005_profile_print_import.sql",
-    "006_friendly_availability_management.sql"
+    "006_friendly_availability_management.sql",
+    "007_friendly_team_discovery.sql"
   ]);
   assert.equal(migrations.at(-1), LATEST_REQUIRED_MIGRATION);
 
