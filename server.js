@@ -41,6 +41,9 @@ const {
   createProfilePrintImportRepository
 } = require("./src/friendlies/profile-print-import.repository");
 const {
+  createAvailabilityRouter
+} = require("./src/friendlies/availability.routes");
+const {
   createLegacyRadarIdentityResolver
 } = require("./src/friendlies/radar-identity.policy");
 
@@ -7536,6 +7539,12 @@ app.use("/me/time/radar", createRadarIdentityRouter({
   resolveIdentity: resolveRadarIdentity
 }));
 app.use("/me/time/perfil", createProfilePrintImportRouter({
+  config: radarConfig,
+  auth,
+  pool: radarPool,
+  resolveIdentity: resolveRadarIdentity
+}));
+app.use("/me/time/amistosos", createAvailabilityRouter({
   config: radarConfig,
   auth,
   pool: radarPool,

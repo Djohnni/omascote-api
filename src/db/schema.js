@@ -1,5 +1,5 @@
 "use strict";
 
-const LATEST_REQUIRED_MIGRATION = "005_profile_print_import.sql";
+const LATEST_REQUIRED_MIGRATION = "006_friendly_availability_management.sql";
 
 module.exports = { LATEST_REQUIRED_MIGRATION };

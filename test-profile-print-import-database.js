@@ -23,6 +23,7 @@ const {
 } = require("./src/friendlies/radar-identity.service");
 
 const SECURITY_SECRET = "database-profile-print-security-secret-2026";
+const SAFETY_SECRET = "database-profile-print-safety-secret-2026";
 
 function normalizeResult(result) {
   const lastResult = Array.isArray(result) ? result[result.length - 1] : result;
@@ -68,8 +69,8 @@ function config(overrides = {}) {
     RADAR_INSTAGRAM_VERIFICATION_SECRET: "database-instagram-secret-2026-xx",
     RADAR_PROFILE_PRINT_IMPORT_ENABLED: "true",
     RADAR_PROFILE_PRINT_SECURITY_SECRET: SECURITY_SECRET,
+    RADAR_PROFILE_PRINT_SAFETY_IDENTIFIER_SECRET: SAFETY_SECRET,
     RADAR_PROFILE_PRINT_OPENAI_MODEL: "gpt-5.6-sol",
-    RADAR_PROFILE_PRINT_REASONING_EFFORT: "xhigh",
     OPENAI_API_KEY: "sk-database-test-not-real-2026",
     RADAR_PROFILE_PRINT_ACCOUNT_LIMIT: "100",
     RADAR_PROFILE_PRINT_TEAM_LIMIT: "100",
@@ -142,9 +143,11 @@ test("profile print import is owned, draft-only, idempotent, deduplicated and mi
   const pool = createPoolAdapter(database);
   const owner = identity();
   let providerCalls = 0;
+  let lastSafetyIdentifier = null;
   const provider = {
-    async analyze() {
+    async analyze({ safetyIdentifier }) {
       providerCalls += 1;
+      lastSafetyIdentifier = safetyIdentifier;
       return sampleDraft();
     }
   };
@@ -154,7 +157,8 @@ test("profile print import is owned, draft-only, idempotent, deduplicated and mi
       "002_result_confirmation_match_integrity.sql",
       "003_radar_identity_authorization.sql",
       "004_instagram_verification_review.sql",
-      "005_profile_print_import.sql"
+      "005_profile_print_import.sql",
+      "006_friendly_availability_management.sql"
     ]);
     assert.deepEqual(await migrate({ pool }), []);
     await insertTeam(database, owner);
@@ -174,6 +178,10 @@ test("profile print import is owned, draft-only, idempotent, deduplicated and mi
     assert.equal(first.replayed, false);
     assert.equal(first.deduplicated, false);
     assert.equal(providerCalls, 1);
+    assert.match(lastSafetyIdentifier, /^rpp_[A-Za-z0-9_-]{43}$/);
+    assert.equal(lastSafetyIdentifier.includes(owner.accountId), false);
+    assert.equal(lastSafetyIdentifier.includes(owner.authSubject), false);
+    assert.equal(JSON.stringify(first).includes(lastSafetyIdentifier), false);
 
     const after = (await database.query(
       "SELECT * FROM radar_team_profiles WHERE legacy_profile_id = $1",
@@ -243,6 +251,7 @@ test("profile print import is owned, draft-only, idempotent, deduplicated and mi
     assert.equal(storedText.includes("private-image-content"), false);
     assert.equal(storedText.includes(Buffer.from("private-image-content").toString("base64")), false);
     assert.equal(storedText.includes("sk-database-test-not-real-2026"), false);
+    assert.equal(storedText.includes(lastSafetyIdentifier), false);
     assert.equal(storedText.includes("resp_"), false);
     assert.equal(storedText.includes("C:\\"), false);
 

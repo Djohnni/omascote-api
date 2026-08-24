@@ -35,15 +35,27 @@ function createRadarConfig(env = process.env) {
   const profilePrintSecuritySecret = String(
     env.RADAR_PROFILE_PRINT_SECURITY_SECRET || ""
   ).trim() || null;
+  const profilePrintSafetyIdentifierSecret = String(
+    env.RADAR_PROFILE_PRINT_SAFETY_IDENTIFIER_SECRET || ""
+  ).trim() || null;
   const profilePrintOpenAiModel = String(
     env.RADAR_PROFILE_PRINT_OPENAI_MODEL || ""
   ).trim() || null;
   const requestedReasoningEffort = String(
-    env.RADAR_PROFILE_PRINT_REASONING_EFFORT || "xhigh"
+    env.RADAR_PROFILE_PRINT_REASONING_EFFORT || "medium"
   ).trim().toLowerCase();
   const profilePrintReasoningEffort = PROFILE_PRINT_REASONING_EFFORTS.has(
     requestedReasoningEffort
   ) ? requestedReasoningEffort : null;
+  const availabilityPageMaximum = boundedPositiveInteger(
+    env.RADAR_AVAILABILITY_PAGE_MAXIMUM,
+    50,
+    100
+  );
+  const availabilityPageDefault = Math.min(
+    boundedPositiveInteger(env.RADAR_AVAILABILITY_PAGE_DEFAULT, 20, 50),
+    availabilityPageMaximum
+  );
   const config = {
     enabled: parseBoolean(env.RADAR_AMISTOSOS_ENABLED, false),
     profilePrintImportEnabled: parseBoolean(
@@ -116,7 +128,9 @@ function createRadarConfig(env = process.env) {
       profilePrintOpenAiModel &&
       profilePrintReasoningEffort &&
       profilePrintSecuritySecret &&
-      Buffer.byteLength(profilePrintSecuritySecret, "utf8") >= 32
+      Buffer.byteLength(profilePrintSecuritySecret, "utf8") >= 32 &&
+      profilePrintSafetyIdentifierSecret &&
+      Buffer.byteLength(profilePrintSafetyIdentifierSecret, "utf8") >= 32
     ),
     profilePrintMaxFileBytes: boundedPositiveInteger(
       env.RADAR_PROFILE_PRINT_MAX_FILE_BYTES,
@@ -181,6 +195,34 @@ function createRadarConfig(env = process.env) {
       20,
       500
     ),
+    availabilityTimeZone: "America/Sao_Paulo",
+    availabilityDefaultTravelRadiusKm: boundedPositiveInteger(
+      env.RADAR_AVAILABILITY_DEFAULT_TRAVEL_RADIUS_KM,
+      25,
+      500
+    ),
+    availabilityMaxFuturePerTeam: boundedPositiveInteger(
+      env.RADAR_AVAILABILITY_MAX_FUTURE_PER_TEAM,
+      20,
+      100
+    ),
+    availabilityMaxDurationHours: boundedPositiveInteger(
+      env.RADAR_AVAILABILITY_MAX_DURATION_HOURS,
+      12,
+      24
+    ),
+    availabilityMaxHorizonDays: boundedPositiveInteger(
+      env.RADAR_AVAILABILITY_MAX_HORIZON_DAYS,
+      180,
+      365
+    ),
+    availabilityRecurrenceMaxDays: boundedPositiveInteger(
+      env.RADAR_AVAILABILITY_RECURRENCE_MAX_DAYS,
+      90,
+      180
+    ),
+    availabilityPageDefault,
+    availabilityPageMaximum,
     databaseUrl: String(env.DATABASE_URL || "").trim() || null,
     databaseSsl: parseBoolean(env.DATABASE_SSL, false),
     databaseSslRejectUnauthorized:
@@ -202,6 +244,12 @@ function createRadarConfig(env = process.env) {
   });
   Object.defineProperty(config, "profilePrintSecuritySecret", {
     value: profilePrintSecuritySecret,
+    enumerable: false,
+    writable: false,
+    configurable: false
+  });
+  Object.defineProperty(config, "profilePrintSafetyIdentifierSecret", {
+    value: profilePrintSafetyIdentifierSecret,
     enumerable: false,
     writable: false,
     configurable: false

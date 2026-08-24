@@ -25,8 +25,9 @@ as rotas legadas nem migra os arquivos JSON existentes.
 | `RADAR_PROFILE_PRINT_IMPORT_ENABLED` | `false` | Habilita apenas a importação de rascunho por print. Desligada, chave e modelo da OpenAI não afetam o restante do Radar. |
 | `OPENAI_API_KEY` | vazio | Chave da API, lida somente do ambiente e nunca persistida ou registrada. Obrigatória quando a importação por print estiver habilitada. |
 | `RADAR_PROFILE_PRINT_OPENAI_MODEL` | vazio | Modelo multimodal da Responses API. Configurar como `gpt-5.6-sol` para esta fase. |
-| `RADAR_PROFILE_PRINT_REASONING_EFFORT` | `xhigh` | Esforço de raciocínio do modelo; aceita `none`, `low`, `medium`, `high`, `xhigh` ou `max`. |
+| `RADAR_PROFILE_PRINT_REASONING_EFFORT` | `medium` | Esforço de raciocínio do modelo; aceita `none`, `low`, `medium`, `high`, `xhigh` ou `max`. |
 | `RADAR_PROFILE_PRINT_SECURITY_SECRET` | vazio | Segredo independente de pelo menos 32 bytes para proteger os identificadores dos limites e hashes de idempotência. |
+| `RADAR_PROFILE_PRINT_SAFETY_IDENTIFIER_SECRET` | vazio | Segredo independente de pelo menos 32 bytes usado somente para derivar por HMAC o `safety_identifier` opaco e estável de cada conta. Não reutilizar o segredo de segurança da importação. |
 | `RADAR_PROFILE_PRINT_MAX_FILE_BYTES` | `8388608` | Tamanho máximo do upload; limitado internamente a 20 MiB. |
 | `RADAR_PROFILE_PRINT_MAX_WIDTH` / `RADAR_PROFILE_PRINT_MAX_HEIGHT` | `6000` / `6000` | Dimensões máximas antes da análise. |
 | `RADAR_PROFILE_PRINT_MAX_PIXELS` | `20000000` | Limite contra imagens abusivas e bombas de descompressão. |
@@ -36,6 +37,12 @@ as rotas legadas nem migra os arquivos JSON existentes.
 | `RADAR_PROFILE_PRINT_CLEANUP_INTERVAL_MS` | `900000` | Intervalo da limpeza automática; mínimo de um minuto e máximo de 24 horas. |
 | `RADAR_PROFILE_PRINT_RATE_WINDOW_SECONDS` | `3600` | Janela persistente dos limites da importação. |
 | `RADAR_PROFILE_PRINT_ACCOUNT_LIMIT` / `RADAR_PROFILE_PRINT_TEAM_LIMIT` / `RADAR_PROFILE_PRINT_IP_LIMIT` | `5` / `5` / `20` | Limites persistentes por conta, time e IP. |
+| `RADAR_AVAILABILITY_DEFAULT_TRAVEL_RADIUS_KM` | `25` | Raio usado quando o anúncio e o perfil não informarem um valor específico. |
+| `RADAR_AVAILABILITY_MAX_FUTURE_PER_TEAM` | `20` | Limite configurável de disponibilidades futuras abertas por time. |
+| `RADAR_AVAILABILITY_MAX_DURATION_HOURS` | `12` | Duração máxima de um horário; limitada internamente a 24 horas. |
+| `RADAR_AVAILABILITY_MAX_HORIZON_DAYS` | `180` | Distância máxima entre a criação e o início do horário. |
+| `RADAR_AVAILABILITY_RECURRENCE_MAX_DAYS` | `90` | Período máximo de uma recorrência semanal. |
+| `RADAR_AVAILABILITY_PAGE_DEFAULT` / `RADAR_AVAILABILITY_PAGE_MAXIMUM` | `20` / `50` | Tamanho padrão e teto da paginação privada por cursor. |
 | `RADAR_TRUST_PROXY_HOPS` | `0` | Quantidade explícita de proxies confiáveis para obter o IP do limite; manter zero até comprovar a topologia. |
 | `RENDER_GIT_COMMIT` / `GIT_COMMIT` | vazio | Commit exibido nos health checks. |
 | `BUILD_ID` | vazio | Identificador de build exibido nos health checks. |
@@ -89,7 +96,10 @@ dimensões e volume de pixels são validados; depois a imagem é reprocessada pa
 remover metadados antes de seguir para `POST /v1/responses`.
 
 A chamada usa `store: false`, não oferece ferramentas e exige Structured
-Outputs com JSON Schema estrito. O texto da imagem é tratado como conteúdo não
+Outputs com JSON Schema estrito. Também envia `safety_identifier` estável de no
+máximo 64 caracteres, derivado por HMAC da referência opaca da conta com um
+segredo exclusivo. Conta, telefone, Instagram e IDs internos nunca compõem esse
+campo em texto puro. O texto da imagem é tratado como conteúdo não
 confiável. O resultado fica em `team_verifications.ai_draft` por retenção curta
 e é somente uma sugestão com valor, confiança e evidência. A rota não chama a
 atualização do perfil, não verifica o Instagram e não ativa disponibilidade. O
@@ -104,6 +114,28 @@ antes de uma nova importação do time.
 O processamento seguro usa Sharp 0.35 ou superior e, portanto, esta versão da
 API exige Node.js 20.9 ou superior. Confirmar a versão do runtime de staging
 antes de habilitar a flag específica.
+
+## Disponibilidades privadas para amistosos
+
+As rotas da Fase 3A ficam sob `/me/time/amistosos/disponibilidades`: listagem,
+criação, atualização e cancelamento lógico. Todas resolvem conta, perfil e time
+exclusivamente pela sessão, retornam somente `availability_id` opaco e usam
+`Cache-Control: private, no-store`. Não há rota pública de busca, convite,
+partida ou contato nesta fase.
+
+Criação aceita somente `active` ou `paused`. Ativar exige perfil completo,
+Instagram verificado, termos aceitos, time não suspenso e cidade do piloto
+quando configurada; o controle mestre `availability_active` não é requisito para
+cadastrar o primeiro horário. Modalidade e categoria vêm do perfil e o nível,
+cidade e UF são sempre derivados do cadastro canônico.
+
+Recorrência opcional usa `frequency: weekly`, `days_of_week` com nomes em inglês
+de `monday` a `sunday`, horários `HH:MM`, data `until` em `YYYY-MM-DD` e fuso
+fixo `America/Sao_Paulo`. Mutações exigem `Idempotency-Key`; atualização e
+cancelamento também exigem `If-Match`. O banco impede duplicidade equivalente,
+mudança de proprietário, remoção física, regressão de versão e retorno de
+estados terminais. Horários vencidos são marcados como `expired` na próxima
+operação privada e a mudança é auditada.
 
 Comandos locais:
 

@@ -47,14 +47,15 @@ function providerInstructions() {
   ].join(" ");
 }
 
-function requestBody({ config, image, instagramHandle }) {
+function requestBody({ config, image, safetyIdentifier }) {
   const { model } = requireProfilePrintConfiguration(config);
-  const handleHint = instagramHandle
-    ? `O usuario informou como pista o Instagram @${instagramHandle}. Trate-o apenas como pista nao verificada.`
-    : "Nenhum usuario do Instagram foi informado como pista.";
+  if (!/^rpp_[A-Za-z0-9_-]{43}$/.test(String(safetyIdentifier || ""))) {
+    throw new TypeError("A valid safety identifier is required");
+  }
   return {
     model,
     store: false,
+    safety_identifier: safetyIdentifier,
     tools: [],
     tool_choice: "none",
     reasoning: { effort: config.profilePrintReasoningEffort },
@@ -65,7 +66,7 @@ function requestBody({ config, image, instagramHandle }) {
       content: [
         {
           type: "input_text",
-          text: `${handleHint} Analise a imagem e devolva somente o objeto estruturado solicitado.`
+          text: "Analise a imagem e devolva somente o objeto estruturado solicitado. Nao use identificadores pessoais externos como pista."
         },
         {
           type: "input_image",
@@ -88,7 +89,7 @@ function requestBody({ config, image, instagramHandle }) {
 function createProfilePrintOpenAiClient({ config, fetchImpl = globalThis.fetch }) {
   if (typeof fetchImpl !== "function") throw new TypeError("fetch implementation is required");
 
-  async function analyze({ image, instagramHandle = null, signal = null }) {
+  async function analyze({ image, safetyIdentifier, signal = null }) {
     const { apiKey } = requireProfilePrintConfiguration(config);
     const controller = new AbortController();
     let timedOut = false;
@@ -109,7 +110,11 @@ function createProfilePrintOpenAiClient({ config, fetchImpl = globalThis.fetch }
             Authorization: `Bearer ${apiKey}`,
             "Content-Type": "application/json"
           },
-          body: JSON.stringify(requestBody({ config, image, instagramHandle })),
+          body: JSON.stringify(requestBody({
+            config,
+            image,
+            safetyIdentifier
+          })),
           signal: controller.signal
         });
       } catch {

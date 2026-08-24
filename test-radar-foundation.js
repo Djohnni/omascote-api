@@ -294,7 +294,8 @@ test("versioned migration contains transactional integrity foundations", () => {
     "002_result_confirmation_match_integrity.sql",
     "003_radar_identity_authorization.sql",
     "004_instagram_verification_review.sql",
-    "005_profile_print_import.sql"
+    "005_profile_print_import.sql",
+    "006_friendly_availability_management.sql"
   ]);
   assert.equal(migrations.at(-1), LATEST_REQUIRED_MIGRATION);
 
@@ -341,4 +342,12 @@ test("versioned migration contains transactional integrity foundations", () => {
   assert.match(profilePrintSql, /team_verifications_one_processing_profile_print_idx/);
   assert.match(profilePrintSql, /radar_profile_print_import_requests/);
   assert.match(profilePrintSql, /radar_profile_print_rate_limits/);
+
+  const availabilitySql = fs.readFileSync(
+    path.join(directory, "006_friendly_availability_management.sql"),
+    "utf8"
+  );
+  assert.match(availabilitySql, /friendly_availabilities_open_schedule_key/);
+  assert.match(availabilitySql, /radar_availability_mutation_requests_append_only/);
+  assert.match(availabilitySql, /friendly availabilities use logical cancellation/);
 });

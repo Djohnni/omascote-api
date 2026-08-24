@@ -10,7 +10,8 @@ const {
 const {
   requireProfilePrintConfiguration,
   importPayloadHash,
-  importScopeHash
+  importScopeHash,
+  profilePrintSafetyIdentifier
 } = require("./profile-print-import.crypto");
 const { ProfilePrintProviderError } = require("./profile-print-import.openai");
 
@@ -116,7 +117,7 @@ function createProfilePrintImportService({ repository, provider, config, now = (
     requestContext,
     signal
   }) {
-    const { model, securitySecret } = ensureAvailable();
+    const { model, securitySecret, safetyIdentifierSecret } = ensureAvailable();
     const input = validateProfilePrintForm(fields);
     const normalizedIdempotencyKey = validateIdempotencyKey(idempotencyKey, { required: true });
     if (!image || !/^[0-9a-f]{64}$/.test(String(image.byteHash || "")) || !Buffer.isBuffer(image.buffer)) {
@@ -161,7 +162,10 @@ function createProfilePrintImportService({ repository, provider, config, now = (
     try {
       const providerDraft = await provider.analyze({
         image,
-        instagramHandle: input.instagramHandle,
+        safetyIdentifier: profilePrintSafetyIdentifier(
+          safetyIdentifierSecret,
+          identity.accountId
+        ),
         signal
       });
       const draft = normalizeProfilePrintDraft(providerDraft);

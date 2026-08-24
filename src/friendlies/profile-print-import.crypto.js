@@ -17,7 +17,8 @@ function requireProfilePrintConfiguration(config) {
     config?.profilePrintOpenAiConfigured !== true ||
     !config.openAiApiKey ||
     !config.profilePrintOpenAiModel ||
-    !config.profilePrintSecuritySecret
+    !config.profilePrintSecuritySecret ||
+    !config.profilePrintSafetyIdentifierSecret
   ) {
     throw new RadarIdentityError(
       "PROFILE_PRINT_IMPORT_NOT_CONFIGURED",
@@ -28,7 +29,8 @@ function requireProfilePrintConfiguration(config) {
   return Object.freeze({
     apiKey: config.openAiApiKey,
     model: config.profilePrintOpenAiModel,
-    securitySecret: config.profilePrintSecuritySecret
+    securitySecret: config.profilePrintSecuritySecret,
+    safetyIdentifierSecret: config.profilePrintSafetyIdentifierSecret
   });
 }
 
@@ -51,8 +53,25 @@ function importScopeHash(secret, scope, value) {
   return hmac(secret, `profile-print-rate-${scope}-v1`, String(value || ""));
 }
 
+function profilePrintSafetyIdentifier(secret, accountReference) {
+  const reference = String(accountReference || "").trim();
+  if (!secret || !reference) {
+    throw new RadarIdentityError(
+      "PROFILE_PRINT_IMPORT_NOT_CONFIGURED",
+      503,
+      "Importacao por print temporariamente indisponivel."
+    );
+  }
+  const digest = crypto
+    .createHmac("sha256", secret)
+    .update(`profile-print-safety-identifier-v1:${reference}`)
+    .digest("base64url");
+  return `rpp_${digest}`;
+}
+
 module.exports = {
   requireProfilePrintConfiguration,
   importPayloadHash,
-  importScopeHash
+  importScopeHash,
+  profilePrintSafetyIdentifier
 };
