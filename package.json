@@ -5,7 +5,9 @@
   "type": "commonjs",
   "scripts": {
     "start": "node server.js",
-    "test": "node --test test-download-ticket.js test-download-routes.js test-browser-handoff-store.js test-browser-handoff-routes.js",
+    "test": "node --test test-download-ticket.js test-download-routes.js test-browser-handoff-store.js test-browser-handoff-routes.js test-radar-foundation.js",
+    "test:radar": "node --test test-radar-foundation.js",
+    "db:migrate": "node src/db/migrate.js",
     "test:payments": "node test-economic-creation.js",
     "test:scenario": "node --test test-result-scenario-pilot.js test-multi-product-scenarios.js",
     "test:hashing": "node --test test-upload-content-hash.js"
@@ -16,6 +18,7 @@
     "cors": "^2.8.5",
     "express": "^4.19.2",
     "jsonwebtoken": "^9.0.2",
-    "multer": "^1.4.5-lts.1"
+    "multer": "^1.4.5-lts.1",
+    "pg": "^8.16.3"
   }
 }

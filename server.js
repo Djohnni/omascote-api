@@ -24,6 +24,11 @@ const {
   BrowserHandoffStore,
   BrowserHandoffStoreError
 } = require("./src/auth/browser-handoff-store");
+const { createRadarConfig } = require("./src/config/radar");
+const { getBuildInfo } = require("./src/config/build-info");
+const { createPool, checkDatabase } = require("./src/db/pool");
+const { createHealthRouter } = require("./src/health/health.routes");
+const { createFriendliesRouter } = require("./src/friendlies/friendlies.routes");
 
 function criarArquivoZip(options = {}) {
   if (typeof archiverModule === "function") {
@@ -42,6 +47,9 @@ const app = express();
 // ===== CONFIG BÁSICA =====
 const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || "TROQUE_ISSO_AGORA";
+const radarConfig = createRadarConfig();
+const radarPool = createPool(radarConfig);
+const buildInfo = getBuildInfo();
 const DOWNLOAD_TICKET_TTL_MS = Math.min(
   Math.max(Number(process.env.DOWNLOAD_TICKET_TTL_MS || 90_000), 30_000),
   5 * 60 * 1000
@@ -7478,6 +7486,13 @@ function registrarAuditoriaProdutoPedido({ categoria, fields, files, pedidoId, r
 }
 
 // ===== ROTAS =====
+
+app.use(createHealthRouter({
+  config: radarConfig,
+  buildInfo,
+  checkDatabase: () => checkDatabase(radarPool)
+}));
+app.use("/amistosos", createFriendliesRouter({ config: radarConfig }));
 
 // Health check
 app.get("/", (req, res) => {
