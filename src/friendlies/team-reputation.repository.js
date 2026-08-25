@@ -116,6 +116,10 @@ function createTeamReputationRepository({ pool }) {
           AND match.occurrence_state = 'played'
           AND match.result_state = 'verified'
           AND NOT EXISTS (
+            SELECT 1 FROM radar_match_statistic_compensations compensation
+            WHERE compensation.match_id = match.id
+          )
+          AND NOT EXISTS (
             SELECT 1 FROM team_reviews review
             WHERE review.match_id = match.id AND review.reviewer_team_id = $1
           )
@@ -184,7 +188,11 @@ function createTeamReputationRepository({ pool }) {
         throw reputationError("MATCH_NOT_FOUND", 404, "Partida nao encontrada.");
       }
       const match = matchResult.rows[0];
-      if (match.occurrence_state !== "played" || match.result_state !== "verified") {
+      const invalidated = await client.query(
+        "SELECT 1 FROM radar_match_statistic_compensations WHERE match_id = $1",
+        [match.id]
+      );
+      if (match.occurrence_state !== "played" || match.result_state !== "verified" || invalidated.rowCount) {
         throw reputationError("TEAM_REVIEW_NOT_ELIGIBLE", 409, "A avaliacao abre depois do resultado oficial.");
       }
       const reviewedTeamId = match.team_a_id === team.id ? match.team_b_id : match.team_a_id;

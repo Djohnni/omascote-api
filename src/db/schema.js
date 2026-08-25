@@ -1,5 +1,5 @@
 "use strict";
 
-const LATEST_REQUIRED_MIGRATION = "012_team_reviews_reputation.sql";
+const LATEST_REQUIRED_MIGRATION = "013_radar_safety_privacy_moderation.sql";
 
 module.exports = { LATEST_REQUIRED_MIGRATION };

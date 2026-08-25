@@ -69,6 +69,7 @@ function rowToTeam(row) {
     publicProfileEnabled: row.public_profile_enabled === true,
     publicCrestAvailable: row.public_crest_available === true,
     suspendedAt: row.suspended_at,
+    departedAt: row.radar_departed_at,
     version: Number(row.version || 1),
     createdAt: row.created_at,
     updatedAt: row.updated_at

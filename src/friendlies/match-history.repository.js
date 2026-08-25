@@ -46,9 +46,11 @@ function opponentSnapshot(row) {
 }
 
 function rowToHistoryItem(row) {
-  const official = row.result_state === "verified" && row.occurrence_state === "played";
+  const official = row.result_state === "verified" && row.occurrence_state === "played" && row.result_invalidated !== true;
   const cancelled = row.occurrence_state === "cancelled";
-  const status = cancelled
+  const status = row.result_invalidated === true
+    ? "invalidated"
+    : cancelled
     ? "cancelled"
     : row.result_state === "divergent"
       ? "divergent"
@@ -84,7 +86,8 @@ function rowToHistoryItem(row) {
 function situationSql(parameter) {
   return `(
     ${parameter}::text = 'all'
-    OR (${parameter}::text = 'official' AND match.occurrence_state = 'played' AND match.result_state = 'verified')
+    OR (${parameter}::text = 'official' AND match.occurrence_state = 'played' AND match.result_state = 'verified'
+      AND NOT EXISTS (SELECT 1 FROM radar_match_statistic_compensations compensation WHERE compensation.match_id = match.id))
     OR (${parameter}::text = 'divergent' AND match.occurrence_state = 'played' AND match.result_state = 'divergent')
     OR (${parameter}::text = 'cancelled' AND match.occurrence_state = 'cancelled')
     OR (${parameter}::text = 'pending' AND match.occurrence_state = 'played' AND match.result_state NOT IN ('verified', 'divergent'))
@@ -99,6 +102,10 @@ const HISTORY_SELECT = `
     match.result_state,
     match.cancellation_reason,
     match.cancelled_at,
+    EXISTS (
+      SELECT 1 FROM radar_match_statistic_compensations compensation
+      WHERE compensation.match_id = match.id
+    ) AS result_invalidated,
     invitation.proposal,
     opponent.public_id AS opponent_public_id,
     opponent.public_slug AS opponent_public_slug,
@@ -206,27 +213,33 @@ async function readSummary(client, { teamId, filters, opponentId }) {
       count(*)::integer AS records,
       count(*) FILTER (
         WHERE match.occurrence_state = 'played' AND match.result_state = 'verified'
+          AND NOT EXISTS (SELECT 1 FROM radar_match_statistic_compensations compensation WHERE compensation.match_id = match.id)
       )::integer AS official_matches,
       count(*) FILTER (
         WHERE match.occurrence_state = 'played' AND match.result_state = 'verified'
+          AND NOT EXISTS (SELECT 1 FROM radar_match_statistic_compensations compensation WHERE compensation.match_id = match.id)
           AND (CASE WHEN match.team_a_id = $1 THEN match.verified_team_a_goals ELSE match.verified_team_b_goals END)
             > (CASE WHEN match.team_a_id = $1 THEN match.verified_team_b_goals ELSE match.verified_team_a_goals END)
       )::integer AS wins,
       count(*) FILTER (
         WHERE match.occurrence_state = 'played' AND match.result_state = 'verified'
+          AND NOT EXISTS (SELECT 1 FROM radar_match_statistic_compensations compensation WHERE compensation.match_id = match.id)
           AND match.verified_team_a_goals = match.verified_team_b_goals
       )::integer AS draws,
       count(*) FILTER (
         WHERE match.occurrence_state = 'played' AND match.result_state = 'verified'
+          AND NOT EXISTS (SELECT 1 FROM radar_match_statistic_compensations compensation WHERE compensation.match_id = match.id)
           AND (CASE WHEN match.team_a_id = $1 THEN match.verified_team_a_goals ELSE match.verified_team_b_goals END)
             < (CASE WHEN match.team_a_id = $1 THEN match.verified_team_b_goals ELSE match.verified_team_a_goals END)
       )::integer AS losses,
       COALESCE(sum(CASE
         WHEN match.occurrence_state = 'played' AND match.result_state = 'verified'
+          AND NOT EXISTS (SELECT 1 FROM radar_match_statistic_compensations compensation WHERE compensation.match_id = match.id)
           THEN CASE WHEN match.team_a_id = $1 THEN match.verified_team_a_goals ELSE match.verified_team_b_goals END
         ELSE 0 END), 0)::integer AS goals_for,
       COALESCE(sum(CASE
         WHEN match.occurrence_state = 'played' AND match.result_state = 'verified'
+          AND NOT EXISTS (SELECT 1 FROM radar_match_statistic_compensations compensation WHERE compensation.match_id = match.id)
           THEN CASE WHEN match.team_a_id = $1 THEN match.verified_team_b_goals ELSE match.verified_team_a_goals END
         ELSE 0 END), 0)::integer AS goals_against
     FROM friendly_matches match
@@ -244,6 +257,7 @@ async function readSummary(client, { teamId, filters, opponentId }) {
     ${baseWhere()}
       AND match.occurrence_state = 'played'
       AND match.result_state = 'verified'
+      AND NOT EXISTS (SELECT 1 FROM radar_match_statistic_compensations compensation WHERE compensation.match_id = match.id)
     ORDER BY match.scheduled_at DESC, match.public_id DESC
     LIMIT 5
   `, params);

@@ -62,6 +62,9 @@ const {
   createTeamReputationRouters
 } = require("./src/friendlies/team-reputation.routes");
 const {
+  createRadarModerationRouters
+} = require("./src/friendlies/radar-moderation.routes");
+const {
   createLegacyRadarIdentityResolver,
   accountReference
 } = require("./src/friendlies/radar-identity.policy");
@@ -244,7 +247,9 @@ app.use((req, res, next) => {
     req.path.startsWith("/me/time/verificacoes/") ||
     req.path === "/me/time/perfil/importar-print" ||
     req.path === "/admin/radar/verificacoes" ||
-    req.path.startsWith("/admin/radar/verificacoes/")
+    req.path.startsWith("/admin/radar/verificacoes/") ||
+    req.path === "/admin/radar/moderacao" ||
+    req.path.startsWith("/admin/radar/moderacao/")
     || req.path === "/me/time/amistosos"
     || req.path.startsWith("/me/time/amistosos/")
   ) {
@@ -7595,9 +7600,16 @@ const radarReputationRouters = createTeamReputationRouters({
   pool: radarPool,
   resolveIdentity: resolveRadarIdentity
 });
+const radarModerationRouters = createRadarModerationRouters({
+  config: radarConfig,
+  auth,
+  pool: radarPool,
+  resolveIdentity: resolveRadarIdentity
+});
 app.use("/amistosos", radarInvitationRouters.invitationRouter);
 app.use("/radar/times", radarReputationRouters.publicRouter);
 app.use("/me/time", radarReputationRouters.privateRouter);
+app.use("/admin/radar/moderacao", radarModerationRouters.adminRouter);
 app.use("/me/time/amistosos", createMatchHistoryRouter({
   config: radarConfig,
   auth,
@@ -7618,6 +7630,7 @@ app.use("/me/time/amistosos", createMatchCenterRouter({
   resolveContact: resolveRadarMatchContact
 }));
 app.use("/me/time/amistosos", radarInvitationRouters.teamRouter);
+app.use("/me/time/amistosos", radarModerationRouters.matchRouter);
 app.use("/me/notificacoes", radarInvitationRouters.notificationRouter);
 app.use("/me/time/radar", createRadarIdentityRouter({
   config: radarConfig,
@@ -7625,6 +7638,7 @@ app.use("/me/time/radar", createRadarIdentityRouter({
   pool: radarPool,
   resolveIdentity: resolveRadarIdentity
 }));
+app.use("/me/time/radar", radarModerationRouters.ownerRouter);
 app.use("/me/time/perfil", createProfilePrintImportRouter({
   config: radarConfig,
   auth,

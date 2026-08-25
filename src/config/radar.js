@@ -77,6 +77,9 @@ function createRadarConfig(env = process.env) {
   const reputationSecuritySecret = String(
     env.RADAR_REPUTATION_SECURITY_SECRET || ""
   ).trim() || null;
+  const moderationSecuritySecret = String(
+    env.RADAR_MODERATION_SECURITY_SECRET || ""
+  ).trim() || null;
   const searchPageMaximum = boundedPositiveInteger(
     env.RADAR_SEARCH_PAGE_MAXIMUM,
     24,
@@ -112,6 +115,7 @@ function createRadarConfig(env = process.env) {
     matchResultsEnabled: parseBoolean(env.RADAR_MATCH_RESULTS_ENABLED, false),
     matchHistoryEnabled: parseBoolean(env.RADAR_MATCH_HISTORY_ENABLED, false),
     reputationEnabled: parseBoolean(env.RADAR_REPUTATION_ENABLED, false),
+    moderationEnabled: parseBoolean(env.RADAR_MODERATION_ENABLED, false),
     profilePrintImportEnabled: parseBoolean(
       env.RADAR_PROFILE_PRINT_IMPORT_ENABLED,
       false
@@ -361,6 +365,50 @@ function createRadarConfig(env = process.env) {
       reputationSecuritySecret &&
       Buffer.byteLength(reputationSecuritySecret, "utf8") >= 32
     ),
+    moderationConfigured: Boolean(
+      moderationSecuritySecret &&
+      Buffer.byteLength(moderationSecuritySecret, "utf8") >= 32
+    ),
+    moderationRetentionDays: boundedPositiveInteger(
+      env.RADAR_MODERATION_RETENTION_DAYS,
+      365,
+      3650
+    ),
+    moderationDescriptionMaximum: boundedPositiveInteger(
+      env.RADAR_MODERATION_DESCRIPTION_MAXIMUM,
+      500,
+      500
+    ),
+    moderationRateWindowSeconds: boundedPositiveInteger(
+      env.RADAR_MODERATION_RATE_WINDOW_SECONDS,
+      60 * 60,
+      24 * 60 * 60
+    ),
+    moderationAccountLimit: boundedPositiveInteger(
+      env.RADAR_MODERATION_ACCOUNT_LIMIT,
+      30,
+      500
+    ),
+    moderationTeamLimit: boundedPositiveInteger(
+      env.RADAR_MODERATION_TEAM_LIMIT,
+      30,
+      500
+    ),
+    moderationIpLimit: boundedPositiveInteger(
+      env.RADAR_MODERATION_IP_LIMIT,
+      120,
+      2000
+    ),
+    moderationPageDefault: boundedPositiveInteger(
+      env.RADAR_MODERATION_PAGE_DEFAULT,
+      20,
+      50
+    ),
+    moderationPageMaximum: boundedPositiveInteger(
+      env.RADAR_MODERATION_PAGE_MAXIMUM,
+      50,
+      100
+    ),
     reputationMinimumVerifiedReviews: boundedPositiveInteger(
       env.RADAR_REPUTATION_MINIMUM_REVIEWS,
       3,
@@ -498,6 +546,12 @@ function createRadarConfig(env = process.env) {
   });
   Object.defineProperty(config, "reputationSecuritySecret", {
     value: reputationSecuritySecret,
+    enumerable: false,
+    writable: false,
+    configurable: false
+  });
+  Object.defineProperty(config, "moderationSecuritySecret", {
+    value: moderationSecuritySecret,
     enumerable: false,
     writable: false,
     configurable: false

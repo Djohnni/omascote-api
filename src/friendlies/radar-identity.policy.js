@@ -79,6 +79,9 @@ function assertRadarTeamOwnedByIdentity(team, identity, { allowUnclaimed = false
 }
 
 function assertRadarTeamCanMutate(team) {
+  if (team?.departedAt) {
+    throw new RadarIdentityError("RADAR_PROFILE_DEPARTED", 403, "Este time saiu do Radar.");
+  }
   if (
     String(team?.status || "").toLowerCase() === "suspended" ||
     Boolean(team?.suspendedAt)

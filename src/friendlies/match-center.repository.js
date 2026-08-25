@@ -39,7 +39,7 @@ function rowToMatch(row, viewerTeamId) {
   const cancelled = row.occurrence_state === "cancelled";
   const mySubmission = isTeamA ? row.team_a_result_submission : row.team_b_result_submission;
   const opponentSubmission = isTeamA ? row.team_b_result_submission : row.team_a_result_submission;
-  const officialScore = row.result_state === "verified"
+  const officialScore = row.result_state === "verified" && row.result_invalidated !== true
     ? Object.freeze({
         gols_meu_time: Number(isTeamA ? row.verified_team_a_goals : row.verified_team_b_goals),
         gols_adversario: Number(isTeamA ? row.verified_team_b_goals : row.verified_team_a_goals),
@@ -69,12 +69,12 @@ function rowToMatch(row, viewerTeamId) {
       cancelled_at: row.cancelled_at
     }) : null,
     result: Object.freeze({
-      state: row.result_state || "empty",
+      state: row.result_invalidated === true ? "invalidated" : (row.result_state || "empty"),
       meu_placar: publicScore(mySubmission, isTeamA),
       placar_adversario: publicScore(opponentSubmission, isTeamA),
       placar_oficial: officialScore
     }),
-    contact_unlocked: true,
+    contact_unlocked: row.contact_blocked !== true,
     created_at: row.created_at,
     updated_at: row.updated_at
   });
@@ -101,6 +101,19 @@ const MATCH_SELECT = `
   SELECT match.*, invitation.proposal,
     team_a.account_reference AS team_a_account_reference,
     team_b.account_reference AS team_b_account_reference,
+    (
+      team_a.radar_departed_at IS NOT NULL OR team_b.radar_departed_at IS NOT NULL
+      OR team_a.status = 'suspended' OR team_b.status = 'suspended'
+      OR EXISTS (
+        SELECT 1 FROM team_blocks block
+        WHERE (block.blocker_team_id = match.team_a_id AND block.blocked_team_id = match.team_b_id)
+           OR (block.blocker_team_id = match.team_b_id AND block.blocked_team_id = match.team_a_id)
+      )
+    ) AS contact_blocked,
+    EXISTS (
+      SELECT 1 FROM radar_match_statistic_compensations compensation
+      WHERE compensation.match_id = match.id
+    ) AS result_invalidated,
     EXISTS(
       SELECT 1 FROM match_occurrence_confirmations confirmation
       WHERE confirmation.match_id = match.id
@@ -276,7 +289,10 @@ function createMatchCenterRepository({ pool }) {
       const reference = row.team_a_id === team.id
         ? row.team_b_account_reference
         : row.team_a_account_reference;
-      return Object.freeze({ match: rowToMatch(row, team.id), opponentAccountReference: reference });
+      return Object.freeze({
+        match: rowToMatch(row, team.id),
+        opponentAccountReference: row.contact_blocked === true ? null : reference
+      });
     });
   }
 

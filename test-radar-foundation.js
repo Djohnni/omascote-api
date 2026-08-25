@@ -223,7 +223,8 @@ for (const reason of ["database_schema_missing", "database_schema_outdated"]) {
       friendly_match_center: "disabled",
       friendly_match_results: "disabled",
       friendly_match_history: "disabled",
-      friendly_reputation: "disabled"
+      friendly_reputation: "disabled",
+      radar_moderation: "disabled"
     });
   });
 }
@@ -256,6 +257,22 @@ test("readiness fails closed when friendly search is enabled without independent
   const response = await request(app, "/health/ready");
   assert.equal(response.status, 503);
   assert.equal(response.body.friendly_search, "not_configured");
+});
+
+test("readiness fails closed when moderation is enabled without its independent secret", async () => {
+  const app = express();
+  app.use(createHealthRouter({
+    config: createRadarConfig({
+      RADAR_AMISTOSOS_ENABLED: "true",
+      RADAR_MODERATION_ENABLED: "true",
+      RADAR_INSTAGRAM_VERIFICATION_SECRET: "x".repeat(32)
+    }),
+    buildInfo: { commit: null, build: null },
+    checkDatabase: async () => ({ ok: true })
+  }));
+  const response = await request(app, "/health/ready");
+  assert.equal(response.status, 503);
+  assert.equal(response.body.radar_moderation, "not_configured");
 });
 
 test("database readiness requires the latest mandatory migration", async () => {
@@ -323,7 +340,8 @@ test("versioned migration contains transactional integrity foundations", () => {
     "009_match_center.sql",
     "010_confirmed_match_results.sql",
     "011_match_history.sql",
-    "012_team_reviews_reputation.sql"
+    "012_team_reviews_reputation.sql",
+    "013_radar_safety_privacy_moderation.sql"
   ]);
   assert.equal(migrations.at(-1), LATEST_REQUIRED_MIGRATION);
 
