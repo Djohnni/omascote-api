@@ -29,8 +29,8 @@ function scalarSuggestion(valueSchema) {
     required: ["value", "confidence", "evidence"],
     properties: {
       value: valueSchema,
-      confidence: { type: "number", minimum: 0, maximum: 1 },
-      evidence: { type: ["string", "null"], maxLength: 240 }
+      confidence: { type: "number" },
+      evidence: { type: ["string", "null"] }
     }
   };
 }
@@ -40,40 +40,34 @@ const PROFILE_PRINT_DRAFT_JSON_SCHEMA = Object.freeze({
   additionalProperties: false,
   required: ["schema_version", "suggestions", "warnings"],
   properties: {
-    schema_version: { type: "string", const: "1.0" },
+    schema_version: { type: "string", enum: ["1.0"] },
     suggestions: {
       type: "object",
       additionalProperties: false,
       required: DRAFT_FIELDS,
       properties: {
-        team_name: scalarSuggestion({ type: ["string", "null"], maxLength: 120 }),
-        city_name: scalarSuggestion({ type: ["string", "null"], maxLength: 120 }),
+        team_name: scalarSuggestion({ type: ["string", "null"] }),
+        city_name: scalarSuggestion({ type: ["string", "null"] }),
         state_code: scalarSuggestion({
           type: ["string", "null"],
           enum: [...BRAZILIAN_STATE_CODES, null]
         }),
         instagram_handle: scalarSuggestion({
-          type: ["string", "null"],
-          pattern: "^[A-Za-z0-9._]{1,30}$"
+          type: ["string", "null"]
         }),
         modalities: scalarSuggestion({
           type: "array",
-          maxItems: 3,
-          uniqueItems: true,
           items: { type: "string", enum: [...MODALITIES] }
         }),
         categories: scalarSuggestion({
           type: "array",
-          maxItems: 12,
-          uniqueItems: true,
-          items: { type: "string", minLength: 2, maxLength: 40 }
+          items: { type: "string" }
         })
       }
     },
     warnings: {
       type: "array",
-      maxItems: 8,
-      items: { type: "string", minLength: 1, maxLength: 240 }
+      items: { type: "string" }
     }
   }
 });

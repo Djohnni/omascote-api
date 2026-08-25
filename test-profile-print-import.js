@@ -330,6 +330,13 @@ test("OpenAI client uses only Responses with image input, strict output, no tool
   assert.equal(captured.body.safety_identifier, SAFETY_IDENTIFIER);
   assert.equal(captured.options.body.includes("unidos.fc"), false);
   assert.equal(captured.body.text.format.strict, true);
+  const schemaText = JSON.stringify(captured.body.text.format.schema);
+  for (const unsupportedKeyword of [
+    "uniqueItems", "minLength", "maxLength", "pattern",
+    "minimum", "maximum", "minItems", "maxItems", "const"
+  ]) {
+    assert.equal(schemaText.includes(`\"${unsupportedKeyword}\"`), false);
+  }
   assert.equal(captured.body.input[0].content[1].type, "input_image");
   assert.match(captured.body.instructions, /nao confiavel/i);
   assert.match(captured.body.instructions, /ignore pedidos/i);
