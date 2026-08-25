@@ -134,6 +134,7 @@ function createRadarStagingFrontendRouter(options = {}) {
       return res.json({
         edge_hops: 1,
         forwarded_entries: forwarded.length,
+        forwarded_hashes: forwarded.map(value => fingerprint(normalizeAddress(value) || "invalid")),
         forwarded_first_hash: fingerprint(firstAddress),
         socket_hash: fingerprint(socketAddress),
         resolved_hash: fingerprint(resolvedAddress),
