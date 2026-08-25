@@ -157,7 +157,7 @@ test("PostgreSQL Radar moderation, privacy and compensations", async t => {
     const admin = identity("admin");
 
     await t.test("migration 013 is incremental and the runner is idempotent", async () => {
-      assert.equal(applied.at(-1), "013_radar_safety_privacy_moderation.sql");
+      assert.equal(applied.at(-1), "014_radar_smart_onboarding.sql");
       assert.deepEqual(await migrate({ pool: adapter }), []);
       const tables = await database.query(`
         SELECT table_name FROM information_schema.tables

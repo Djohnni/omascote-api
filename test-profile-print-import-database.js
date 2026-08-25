@@ -88,8 +88,7 @@ function sampleDraft() {
       state_code: { value: "SC", confidence: 0.9, evidence: "UF ao lado da cidade" },
       instagram_handle: { value: "owner.fc", confidence: 0.98, evidence: "Usuario no topo" },
       modalities: { value: ["society"], confidence: 0.8, evidence: "Modalidade informada" },
-      categories: { value: ["Livre"], confidence: 0.75, evidence: "Categoria informada" },
-      declared_level: { value: "intermediario", confidence: 0.6, evidence: "Nivel sugerido" }
+      categories: { value: ["Livre"], confidence: 0.75, evidence: "Categoria informada" }
     },
     warnings: ["Revise todas as sugestoes antes de salvar"]
   };
@@ -165,7 +164,8 @@ test("profile print import is owned, draft-only, idempotent, deduplicated and mi
       "010_confirmed_match_results.sql",
       "011_match_history.sql",
       "012_team_reviews_reputation.sql",
-      "013_radar_safety_privacy_moderation.sql"
+      "013_radar_safety_privacy_moderation.sql",
+      "014_radar_smart_onboarding.sql"
     ]);
     assert.deepEqual(await migrate({ pool }), []);
     await insertTeam(database, owner);
@@ -265,7 +265,7 @@ test("profile print import is owned, draft-only, idempotent, deduplicated and mi
     const scopes = (await database.query(`
       SELECT DISTINCT scope_type FROM radar_profile_print_rate_limits ORDER BY scope_type
     `)).rows.map(row => row.scope_type);
-    assert.deepEqual(scopes, ["account", "ip", "team"]);
+    assert.deepEqual(scopes, ["account", "global", "ip", "team"]);
     await assert.rejects(
       database.query("UPDATE match_audit_events SET payload = '{}'"),
       error => /append-only/.test(error.message)
@@ -371,8 +371,7 @@ test("provider failures are persisted safely and persistent limits stop repeated
       repository,
       provider,
       config: config({
-        RADAR_PROFILE_PRINT_ACCOUNT_LIMIT: "1",
-        RADAR_PROFILE_PRINT_TEAM_LIMIT: "10",
+        RADAR_PROFILE_PRINT_DAILY_TEAM_LIMIT: "1",
         RADAR_PROFILE_PRINT_IP_LIMIT: "10"
       })
     });

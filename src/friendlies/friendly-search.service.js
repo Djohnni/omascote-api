@@ -35,7 +35,7 @@ function livePublicProfileSafe(profile, expectedSlug) {
     name.length >= 2 && name.length <= 80;
 }
 
-function publicCandidate(item, liveProfile, minimumRatingMatches) {
+function publicCandidate(item, liveProfile, minimumRatingMatches, pilotAccountAllowlist = []) {
   const location = item.location.kind === "same_city"
     ? Object.freeze({ kind: "same_city", label: "mesma cidade" })
     : Object.freeze({
@@ -52,7 +52,7 @@ function publicCandidate(item, liveProfile, minimumRatingMatches) {
     state: item.stateCode,
     modality: item.modality,
     category: item.category,
-    level: item.availabilityLevel || item.declaredLevel,
+    whatsapp_disponivel: item.whatsappAvailable === true && pilotAccountAllowlist.includes(item.accountReference),
     location,
     compatibility: Object.freeze({
       score: item.compatibility.score,
@@ -223,7 +223,8 @@ function createFriendlySearchService({
       const items = Object.freeze(page.map(item => publicCandidate(
         item,
         item.liveProfile,
-        config.publicRatingMinimumMatches
+        config.publicRatingMinimumMatches,
+        config.pilotAccountAllowlist || []
       )));
       await recordMetricQuietly(items.length > 0 ? "success" : "empty", items.length, now);
       return Object.freeze({

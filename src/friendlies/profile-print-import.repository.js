@@ -51,6 +51,24 @@ async function loadOwnedTeam(client, identity, { lock = false } = {}) {
   return team;
 }
 
+async function loadImportSubject(client, identity, { lock = false } = {}) {
+  const result = await client.query(
+    `SELECT * FROM radar_team_profiles WHERE legacy_profile_id = $1${lock ? " FOR UPDATE" : ""}`,
+    [identity.profileId]
+  );
+  if (result.rowCount === 0) {
+    return Object.freeze({
+      id: null,
+      scopeReference: `legacy:${identity.profileId}`,
+      existingProfile: false
+    });
+  }
+  const team = rowToTeam(result.rows[0]);
+  assertRadarTeamOwnedByIdentity(team, identity);
+  assertRadarTeamCanMutate(team);
+  return Object.freeze({ ...team, scopeReference: team.id, existingProfile: true });
+}
+
 async function recordAudit(client, {
   actorTeamId,
   actorReference,
@@ -100,11 +118,19 @@ async function requestOutcome(client, {
 }) {
   const result = await client.query(`
     SELECT r.payload_hash, r.state, r.failure_code,
-           v.id, v.public_id, v.status,
-           v.ai_draft, v.ai_model, v.ai_completed_at,
-           v.evidence_delete_after, v.operation_metadata,
-           v.version, v.created_at, v.team_id, v.evidence_hash,
-           v.processing_expires_at
+           COALESCE(v.id, r.verification_id) AS id,
+           COALESCE(v.public_id, r.public_id) AS public_id,
+           CASE WHEN v.id IS NULL AND r.state = 'completed' THEN 'pending' ELSE v.status END AS status,
+           COALESCE(v.ai_draft, r.ai_draft) AS ai_draft,
+           COALESCE(v.ai_model, r.ai_model) AS ai_model,
+           COALESCE(v.ai_completed_at, r.ai_completed_at) AS ai_completed_at,
+           COALESCE(v.evidence_delete_after, r.evidence_delete_after) AS evidence_delete_after,
+           COALESCE(v.operation_metadata, r.operation_metadata) AS operation_metadata,
+           COALESCE(v.version, 1) AS version,
+           COALESCE(v.created_at, r.created_at) AS created_at,
+           COALESCE(v.team_id, r.radar_team_id) AS team_id,
+           COALESCE(v.evidence_hash, r.evidence_hash) AS evidence_hash,
+           COALESCE(v.processing_expires_at, r.processing_expires_at) AS processing_expires_at
     FROM radar_profile_print_import_requests r
     LEFT JOIN team_verifications v ON v.id = r.verification_id
     WHERE r.account_reference = $1 AND r.idempotency_key = $2
@@ -211,16 +237,16 @@ function createProfilePrintImportRepository({ pool }) {
     throw new TypeError("Profile print import repository requires a PostgreSQL pool");
   }
 
-  async function getOwnedTeam(identity) {
+  async function getImportSubject(identity) {
     const client = await pool.connect();
     try {
-      return await loadOwnedTeam(client, identity);
+      return await loadImportSubject(client, identity);
     } finally {
       client.release();
     }
   }
 
-  async function consumeRateLimits({ windowStartedAt, scopes }) {
+  async function consumeRateLimits({ scopes }) {
     const client = await pool.connect();
     let open = false;
     try {
@@ -237,7 +263,7 @@ function createProfilePrintImportRepository({ pool }) {
             request_count = radar_profile_print_rate_limits.request_count + 1,
             updated_at = now()
           RETURNING request_count
-        `, [scope.type, scope.hash, windowStartedAt]);
+        `, [scope.type, scope.hash, scope.windowStartedAt]);
         if (Number(result.rows[0].request_count) > scope.limit) exceeded.push(scope.type);
       }
       await client.query("COMMIT");
@@ -308,8 +334,10 @@ function createProfilePrintImportRepository({ pool }) {
     try {
       await client.query("BEGIN");
       open = true;
-      const team = await loadOwnedTeam(client, identity, { lock: true });
-      await expireStaleImports(client, team, now, identity.accountId);
+      const team = await loadImportSubject(client, identity, { lock: true });
+      if (team.existingProfile) {
+        await expireStaleImports(client, team, now, identity.accountId);
+      }
 
       const replay = await requestOutcome(client, {
         accountReference: identity.accountId,
@@ -330,7 +358,7 @@ function createProfilePrintImportRepository({ pool }) {
         return replay;
       }
 
-      const duplicate = await client.query(`
+      const duplicate = team.existingProfile ? await client.query(`
         SELECT * FROM team_verifications
         WHERE team_id = $1
           AND method = 'profile_print_import'
@@ -340,21 +368,39 @@ function createProfilePrintImportRepository({ pool }) {
           AND evidence_delete_after > $3
         ORDER BY created_at DESC
         LIMIT 1
-      `, [team.id, evidenceHash, now]);
+      `, [team.id, evidenceHash, now]) : await client.query(`
+        SELECT public_id, radar_team_id AS team_id, state AS status,
+               evidence_hash, ai_draft, ai_model, ai_completed_at,
+               processing_expires_at, evidence_delete_after,
+               operation_metadata, 1 AS version, created_at
+        FROM radar_profile_print_import_requests
+        WHERE account_reference = $1 AND state = 'completed'
+          AND ai_draft IS NOT NULL AND evidence_hash = $2
+          AND evidence_delete_after > $3
+        ORDER BY created_at DESC LIMIT 1
+      `, [identity.accountId, evidenceHash, now]);
       if (duplicate.rowCount === 1) {
         const verification = rowToImport(duplicate.rows[0]);
         await client.query(`
           INSERT INTO radar_profile_print_import_requests(
             account_reference, radar_team_id, idempotency_key, payload_hash,
-            evidence_hash, verification_id, state, result_snapshot
-          ) VALUES ($1, $2, $3, $4, $5, $6, 'completed', '{"outcome":"draft_ready","deduplicated":true}'::jsonb)
+            evidence_hash, verification_id, state, result_snapshot, ai_draft,
+            ai_model, ai_completed_at, evidence_delete_after, operation_metadata
+          ) VALUES ($1, $2, $3, $4, $5, $6, 'completed', $7::jsonb, $8::jsonb,
+                    $9, $10, $11, $12::jsonb)
         `, [
           identity.accountId,
           team.id,
           idempotencyKey,
           payloadHash,
           evidenceHash,
-          verification.id
+          team.existingProfile ? verification.id : null,
+          JSON.stringify(publicDraft(verification, { deduplicated: true })),
+          JSON.stringify(verification.aiDraft),
+          verification.aiModel,
+          verification.aiCompletedAt,
+          verification.evidenceDeleteAfter,
+          JSON.stringify(verification.operationMetadata || {})
         ]);
         await recordAudit(client, {
           actorTeamId: team.id,
@@ -372,18 +418,51 @@ function createProfilePrintImportRepository({ pool }) {
         });
       }
 
-      const processing = await client.query(`
+      const processing = team.existingProfile ? await client.query(`
         SELECT 1 FROM team_verifications
         WHERE team_id = $1 AND method = 'profile_print_import'
           AND status = 'pending' AND ai_draft IS NULL
         LIMIT 1
-      `, [team.id]);
+      `, [team.id]) : await client.query(`
+        SELECT 1 FROM radar_profile_print_import_requests
+        WHERE account_reference = $1 AND state = 'processing'
+        LIMIT 1
+      `, [identity.accountId]);
       if (processing.rowCount > 0) {
         throw requestError(
           "PROFILE_PRINT_IMPORT_IN_PROGRESS",
           409,
           "Uma importacao por print ja esta em processamento."
         );
+      }
+
+      if (!team.existingProfile) {
+        const request = await client.query(`
+          INSERT INTO radar_profile_print_import_requests(
+            account_reference, radar_team_id, idempotency_key, payload_hash,
+            evidence_hash, state, ai_model, processing_expires_at,
+            evidence_delete_after, operation_metadata
+          ) VALUES ($1, NULL, $2, $3, $4, 'processing', $5, $6, $7, $8::jsonb)
+          RETURNING id, public_id
+        `, [
+          identity.accountId, idempotencyKey, payloadHash, evidenceHash,
+          model, processingExpiresAt, evidenceDeleteAfter, JSON.stringify(metadata)
+        ]);
+        await recordAudit(client, {
+          actorTeamId: null,
+          actorReference: identity.accountId,
+          eventType: "profile_print_import.started",
+          payload: { method: "profile_print_import", onboarding: true, format: metadata.format },
+          requestId
+        });
+        await client.query("COMMIT");
+        open = false;
+        return Object.freeze({
+          kind: "created",
+          requestDbId: request.rows[0].id,
+          verification: Object.freeze({ id: null, publicId: request.rows[0].public_id }),
+          team
+        });
       }
 
       const inserted = await client.query(`
@@ -487,6 +566,37 @@ function createProfilePrintImportRepository({ pool }) {
           "A importacao por print nao esta aberta."
         );
       }
+      if (verificationId === null) {
+        const snapshot = Object.freeze({
+          import: Object.freeze({
+            import_id: request.rows[0].public_id,
+            status: "draft_ready",
+            expires_at: request.rows[0].evidence_delete_after,
+            model: request.rows[0].ai_model
+          }),
+          draft,
+          profile_unchanged: true,
+          replayed: false,
+          deduplicated: false
+        });
+        await client.query(`
+          UPDATE radar_profile_print_import_requests
+          SET state = 'completed', ai_draft = $2::jsonb, ai_completed_at = $3,
+              operation_metadata = $4::jsonb, result_snapshot = $5::jsonb,
+              updated_at = $3
+          WHERE id = $1
+        `, [requestDbId, JSON.stringify(draft), now, JSON.stringify(metadata), JSON.stringify(snapshot)]);
+        await recordAudit(client, {
+          actorTeamId: null,
+          actorReference: identity.accountId,
+          eventType: "profile_print_import.completed",
+          payload: { method: "profile_print_import", onboarding: true, suggestion_fields: Object.keys(draft.suggestions) },
+          requestId
+        });
+        await client.query("COMMIT");
+        open = false;
+        return snapshot;
+      }
       const updated = await client.query(`
         UPDATE team_verifications
         SET ai_draft = $2::jsonb, ai_completed_at = $3,
@@ -549,7 +659,7 @@ function createProfilePrintImportRepository({ pool }) {
         open = false;
         return;
       }
-      const updated = await client.query(`
+      const updated = verificationId === null ? { rowCount: 0, rows: [] } : await client.query(`
         UPDATE team_verifications
         SET status = 'cancelled', decided_at = $2,
             decision_details = $3::jsonb,
@@ -567,6 +677,15 @@ function createProfilePrintImportRepository({ pool }) {
         SET state = 'failed', failure_code = $2, updated_at = $3
         WHERE id = $1
       `, [requestDbId, failureCode, now]);
+      if (verificationId === null) {
+        await recordAudit(client, {
+          actorTeamId: null,
+          actorReference: identity.accountId,
+          eventType: "profile_print_import.failed",
+          payload: { method: "profile_print_import", onboarding: true, failure_code: failureCode },
+          requestId
+        });
+      }
       if (updated.rowCount === 1) {
         await recordAudit(client, {
           actorTeamId: updated.rows[0].team_id,
@@ -588,7 +707,7 @@ function createProfilePrintImportRepository({ pool }) {
   }
 
   return Object.freeze({
-    getOwnedTeam,
+    getImportSubject,
     consumeRateLimits,
     expireStale,
     beginImport,
@@ -600,5 +719,6 @@ function createProfilePrintImportRepository({ pool }) {
 module.exports = {
   createProfilePrintImportRepository,
   rowToImport,
-  publicDraft
+  publicDraft,
+  loadImportSubject
 };

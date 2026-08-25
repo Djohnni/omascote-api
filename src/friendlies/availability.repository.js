@@ -21,7 +21,6 @@ function rowToAvailability(row) {
     teamId: row.team_id,
     modality: row.modality,
     category: row.category,
-    declaredLevel: row.declared_level,
     startsAt: row.starts_at,
     endsAt: row.ends_at,
     recurrence: row.recurrence ? Object.freeze({ ...row.recurrence }) : null,
@@ -290,17 +289,16 @@ function createAvailabilityRepository({ pool }) {
       const value = buildAvailability(team);
       const inserted = await client.query(`
         INSERT INTO friendly_availabilities(
-          team_id, modality, category, declared_level, starts_at, ends_at,
+          team_id, modality, category, starts_at, ends_at,
           recurrence, city_ibge_code, city_name, state_code, travel_radius_km,
           venue_preference, notes, status, schedule_hash
         ) VALUES (
-          $1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $14, $15
+          $1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, $13, $14
         ) RETURNING *
       `, [
         team.id,
         value.modality,
         value.category,
-        value.declaredLevel,
         value.startsAt,
         value.endsAt,
         value.recurrence ? JSON.stringify(value.recurrence) : null,
@@ -395,20 +393,19 @@ function createAvailabilityRepository({ pool }) {
         UPDATE friendly_availabilities
         SET modality = $3,
             category = $4,
-            declared_level = $5,
-            starts_at = $6,
-            ends_at = $7,
-            recurrence = $8::jsonb,
-            city_ibge_code = $9,
-            city_name = $10,
-            state_code = $11,
-            travel_radius_km = $12,
-            venue_preference = $13,
-            notes = $14,
-            status = $15,
-            schedule_hash = $16,
+            starts_at = $5,
+            ends_at = $6,
+            recurrence = $7::jsonb,
+            city_ibge_code = $8,
+            city_name = $9,
+            state_code = $10,
+            travel_radius_km = $11,
+            venue_preference = $12,
+            notes = $13,
+            status = $14,
+            schedule_hash = $15,
             version = version + 1,
-            updated_at = $17
+            updated_at = $16
         WHERE team_id = $1 AND public_id = $2
         RETURNING *
       `, [
@@ -416,7 +413,6 @@ function createAvailabilityRepository({ pool }) {
         publicId,
         value.modality,
         value.category,
-        value.declaredLevel,
         value.startsAt,
         value.endsAt,
         value.recurrence ? JSON.stringify(value.recurrence) : null,

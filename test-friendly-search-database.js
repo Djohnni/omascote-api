@@ -185,7 +185,7 @@ test("migration 007 is idempotent and discovery excludes unsafe candidates in re
   const pool = createPoolAdapter(database);
   try {
     const applied = await migrate({ pool });
-    assert.equal(applied.at(-1), "013_radar_safety_privacy_moderation.sql");
+    assert.equal(applied.at(-1), "014_radar_smart_onboarding.sql");
     assert.deepEqual(await migrate({ pool }), []);
     assert.equal((await database.query(`
       SELECT count(*)::integer AS total
@@ -257,10 +257,11 @@ test("migration 007 is idempotent and discovery excludes unsafe candidates in re
     const serialized = JSON.stringify(result).toLowerCase();
     for (const forbidden of [
       "account-search-owner", owner.id, visible.id, "private database reason",
-      "latitude", "longitude", "whatsapp", "telefone", "email", "notes"
+      "latitude", "longitude", "whatsapp_url", "telefone", "email", "notes"
     ]) {
       assert.equal(serialized.includes(String(forbidden).toLowerCase()), false, forbidden);
     }
+    assert.equal(visibleResult.whatsapp_disponivel, false);
     const storedLimits = await database.query(
       "SELECT scope_type, scope_hash::text FROM radar_search_rate_limits ORDER BY scope_type"
     );

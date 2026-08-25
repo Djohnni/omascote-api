@@ -5,7 +5,6 @@ const {
   normalizeInstagramHandle,
   validateIdempotencyKey,
   MODALITIES,
-  LEVELS,
   BRAZILIAN_STATE_CODES
 } = require("./radar-identity.schemas");
 
@@ -15,8 +14,7 @@ const DRAFT_FIELDS = Object.freeze([
   "state_code",
   "instagram_handle",
   "modalities",
-  "categories",
-  "declared_level"
+  "categories"
 ]);
 
 const IDENTITY_FIELDS = new Set([
@@ -69,10 +67,6 @@ const PROFILE_PRINT_DRAFT_JSON_SCHEMA = Object.freeze({
           maxItems: 12,
           uniqueItems: true,
           items: { type: "string", minLength: 2, maxLength: 40 }
-        }),
-        declared_level: scalarSuggestion({
-          type: ["string", "null"],
-          enum: [...LEVELS, null]
         })
       }
     },
@@ -205,12 +199,7 @@ function normalizeProfilePrintDraft(input) {
       maximumItems: 12,
       normalize: item => cleanText(item, 40, "categories", { nullable: false }),
       valid: item => /^[\p{L}\p{M}\p{N} ._+\/-]{2,40}$/u.test(item)
-    })),
-    declared_level: suggestion(
-      input.suggestions.declared_level,
-      "declared_level",
-      enumOrNull(LEVELS, value => value.toLowerCase())
-    )
+    }))
   });
 
   if (!Array.isArray(input.warnings) || input.warnings.length > 8) {

@@ -78,7 +78,7 @@ function eligible(team) {
     team.publicProfileEnabled && team.publicCrestAvailable && team.publicName &&
     /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(team.publicSlug || "") &&
     /^\d{7}$/.test(team.cityIbgeCode || "") && /^[A-Z]{2}$/.test(team.stateCode || "") &&
-    team.cityName && team.modalities.length && team.categories.length && team.declaredLevel
+    team.cityName && team.modalities.length && team.categories.length
   );
 }
 

@@ -56,10 +56,10 @@ function createRadarConfig(env = process.env) {
     env.RADAR_PROFILE_PRINT_SAFETY_IDENTIFIER_SECRET || ""
   ).trim() || null;
   const profilePrintOpenAiModel = String(
-    env.RADAR_PROFILE_PRINT_OPENAI_MODEL || ""
-  ).trim() || null;
+    env.RADAR_PROFILE_PRINT_OPENAI_MODEL || "gpt-5-mini"
+  ).trim() || "gpt-5-mini";
   const requestedReasoningEffort = String(
-    env.RADAR_PROFILE_PRINT_REASONING_EFFORT || "medium"
+    env.RADAR_PROFILE_PRINT_REASONING_EFFORT || "low"
   ).trim().toLowerCase();
   const profilePrintReasoningEffort = PROFILE_PRINT_REASONING_EFFORTS.has(
     requestedReasoningEffort
@@ -99,6 +99,15 @@ function createRadarConfig(env = process.env) {
   ).trim() || null;
   const metricsToken = String(
     env.RADAR_METRICS_TOKEN || ""
+  ).trim() || null;
+  const whatsappEncryptionKeyRing = String(
+    env.RADAR_WHATSAPP_ENCRYPTION_KEYS || ""
+  ).trim() || null;
+  const whatsappEncryptionActiveVersion = String(
+    env.RADAR_WHATSAPP_ACTIVE_KEY_VERSION || ""
+  ).trim() || null;
+  const whatsappRateLimitSecret = String(
+    env.RADAR_WHATSAPP_RATE_LIMIT_SECRET || ""
   ).trim() || null;
   const searchPageMaximum = boundedPositiveInteger(
     env.RADAR_SEARCH_PAGE_MAXIMUM,
@@ -282,6 +291,41 @@ function createRadarConfig(env = process.env) {
     profilePrintIpLimit: boundedPositiveInteger(
       env.RADAR_PROFILE_PRINT_IP_LIMIT,
       20,
+      500
+    ),
+    profilePrintDailyTeamLimit: Math.min(
+      boundedPositiveInteger(env.RADAR_PROFILE_PRINT_DAILY_TEAM_LIMIT, 3, 3),
+      3
+    ),
+    profilePrintMonthlyGlobalLimit: boundedPositiveInteger(
+      env.RADAR_PROFILE_PRINT_MONTHLY_GLOBAL_LIMIT,
+      50,
+      10_000
+    ),
+    whatsappConfigured: Boolean(
+      whatsappEncryptionKeyRing &&
+      whatsappEncryptionActiveVersion &&
+      whatsappRateLimitSecret &&
+      Buffer.byteLength(whatsappRateLimitSecret, "utf8") >= 32
+    ),
+    whatsappRateWindowSeconds: boundedPositiveInteger(
+      env.RADAR_WHATSAPP_RATE_WINDOW_SECONDS,
+      60 * 60,
+      24 * 60 * 60
+    ),
+    whatsappAccountLimit: boundedPositiveInteger(
+      env.RADAR_WHATSAPP_ACCOUNT_LIMIT,
+      20,
+      200
+    ),
+    whatsappTeamLimit: boundedPositiveInteger(
+      env.RADAR_WHATSAPP_TEAM_LIMIT,
+      20,
+      200
+    ),
+    whatsappIpLimit: boundedPositiveInteger(
+      env.RADAR_WHATSAPP_IP_LIMIT,
+      40,
       500
     ),
     availabilityTimeZone: "America/Sao_Paulo",
@@ -627,6 +671,24 @@ function createRadarConfig(env = process.env) {
   });
   Object.defineProperty(config, "metricsToken", {
     value: metricsToken,
+    enumerable: false,
+    writable: false,
+    configurable: false
+  });
+  Object.defineProperty(config, "whatsappEncryptionKeyRing", {
+    value: whatsappEncryptionKeyRing,
+    enumerable: false,
+    writable: false,
+    configurable: false
+  });
+  Object.defineProperty(config, "whatsappEncryptionActiveVersion", {
+    value: whatsappEncryptionActiveVersion,
+    enumerable: false,
+    writable: false,
+    configurable: false
+  });
+  Object.defineProperty(config, "whatsappRateLimitSecret", {
+    value: whatsappRateLimitSecret,
     enumerable: false,
     writable: false,
     configurable: false

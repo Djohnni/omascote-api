@@ -243,7 +243,7 @@ test("owner can create active or paused slots with canonical profile data and ma
     idempotencyKey: "availability-create-0001"
   });
   assert.equal(result.availability.status, "active");
-  assert.equal(result.availability.declared_level, "intermediario");
+  assert.equal(Object.hasOwn(result.availability, "declared_level"), false);
   assert.equal(result.availability.city.ibge_code, "4209102");
   assert.equal(result.availability.travel_radius_km, 25);
   assert.equal(result.availability.availability_id, PUBLIC_ID);

@@ -8,7 +8,7 @@ Este runbook prepara **staging somente**. Ele não autoriza push, deploy, altera
 2. Crie um PostgreSQL gerenciado vazio, exclusivo do staging, com TLS e validação de certificado.
 3. Cadastre as variáveis da seção seguinte no cofre do provedor, com valores diferentes por finalidade.
 4. Mantenha todas as flags `false` e execute `npm run radar:staging:preflight`.
-5. Faça backup do banco vazio, execute `npm run db:migrate` duas vezes e confirme 13 migrações na prontidão.
+5. Faça backup do banco vazio, execute `npm run db:migrate` duas vezes e confirme 14 migrações na prontidão.
 6. Inicie API e frontend de staging; valide CORS, proxy, health, métricas e retenção antes de autorizar o piloto.
 7. Só depois de autorização separada, ligue a flag mestre e as flags funcionais para as referências opacas da allowlist.
 
@@ -26,11 +26,13 @@ Segredos exclusivos: `RADAR_INSTAGRAM_VERIFICATION_SECRET`, `RADAR_SEARCH_CURSOR
 
 Observabilidade e retenção: `RADAR_METRICS_ENABLED`, `RADAR_TECHNICAL_RETENTION_DAYS`, `RADAR_RETENTION_BATCH_MAXIMUM`.
 
-IA permanece ausente/desligada: `OPENAI_API_KEY`, `RADAR_PROFILE_PRINT_OPENAI_MODEL`, `RADAR_PROFILE_PRINT_SECURITY_SECRET`, `RADAR_PROFILE_PRINT_SAFETY_IDENTIFIER_SECRET`. Não configure chave real neste marco.
+IA optativa e desligada por padrão: `OPENAI_API_KEY`, `RADAR_PROFILE_PRINT_OPENAI_MODEL`, `RADAR_PROFILE_PRINT_REASONING_EFFORT`, `RADAR_PROFILE_PRINT_SECURITY_SECRET`, `RADAR_PROFILE_PRINT_SAFETY_IDENTIFIER_SECRET`, `RADAR_PROFILE_PRINT_DAILY_TEAM_LIMIT`, `RADAR_PROFILE_PRINT_MONTHLY_GLOBAL_LIMIT`.
+
+WhatsApp optativo: `RADAR_WHATSAPP_ENCRYPTION_KEYS`, `RADAR_WHATSAPP_ACTIVE_KEY_VERSION`, `RADAR_WHATSAPP_RATE_LIMIT_SECRET`. Configure valores exclusivos no cofre e deixe a visibilidade desligada por padrão.
 
 ## Banco e migrações
 
-As migrações 001–013 são incrementais e a 013 é o requisito atual. A segunda execução deve aplicar zero arquivos. O readiness precisa informar `applied: 13`, `latest: 013_radar_safety_privacy_moderation` e `required: 013_radar_safety_privacy_moderation` antes da ativação.
+As migrações 001–014 são incrementais e a 014 é o requisito atual. A segunda execução deve aplicar zero arquivos. O readiness precisa informar `applied: 14`, `latest: 014_radar_smart_onboarding` e `required: 014_radar_smart_onboarding` antes da ativação.
 
 Não faça downgrade destrutivo. Para rollback operacional, desligue `RADAR_AMISTOSOS_ENABLED`, preserve o schema e a auditoria, volte para um commit compatível e corrija schema apenas por migração compensatória 014 ou posterior.
 
@@ -56,7 +58,7 @@ Registre estado de saída e duração do job no agendador. Repetir a execução 
 
 Antes de migração ou ativação, gere backup lógico do PostgreSQL gerenciado com `pg_dump` em formato custom, TLS e credencial temporária somente de leitura quando suportada. Registre horário, commit, versão das migrações, tamanho, checksum e duração sem registrar URI ou senha.
 
-Restaure com `pg_restore` em outro banco vazio e isolado. Confirme contagens, relação de um convite aceito para uma partida, resultados oficiais, auditoria, migração 013 e `/health/ready`. Execute login, elegibilidade, busca e leitura de partida no banco restaurado. Destrua o banco de ensaio conforme a política do staging somente depois de guardar o relatório.
+Restaure com `pg_restore` em outro banco vazio e isolado. Confirme contagens, relação de um convite aceito para uma partida, resultados oficiais, auditoria, migração 014 e `/health/ready`. Execute login, elegibilidade, busca e leitura de partida no banco restaurado. Destrua o banco de ensaio conforme a política do staging somente depois de guardar o relatório.
 
 O comando `npm run radar:backup:verify` é a prova local com PGlite e recusa `NODE_ENV=production`, `DATABASE_URL` externa e caminhos fora de `dados`.
 

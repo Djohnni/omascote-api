@@ -14,6 +14,7 @@ function searchError(code, status, message) {
 function rowToCandidate(row) {
   return Object.freeze({
     teamId: row.team_id,
+    accountReference: row.account_reference,
     publicId: row.public_id,
     publicSlug: row.public_slug,
     publicName: row.public_name,
@@ -22,12 +23,11 @@ function rowToCandidate(row) {
     stateCode: row.state_code,
     approximateLatitude: row.approximate_latitude,
     approximateLongitude: row.approximate_longitude,
-    declaredLevel: row.declared_level,
     modalities: Array.isArray(row.modalities) ? [...row.modalities] : [],
     categories: Array.isArray(row.categories) ? [...row.categories] : [],
     modality: row.modality,
     category: row.category,
-    availabilityLevel: row.availability_level,
+    whatsappAvailable: row.whatsapp_available === true,
     startsAt: row.starts_at,
     endsAt: row.ends_at,
     venuePreference: row.venue_preference,
@@ -133,6 +133,7 @@ function createFriendlySearchRepository({ pool, config }) {
       const result = await client.query(`
         SELECT
           candidate.id AS team_id,
+          candidate.account_reference,
           candidate.public_id,
           candidate.public_slug,
           candidate.public_name,
@@ -141,12 +142,11 @@ function createFriendlySearchRepository({ pool, config }) {
           candidate.state_code,
           candidate.approximate_latitude,
           candidate.approximate_longitude,
-          candidate.declared_level,
           candidate.modalities,
           candidate.categories,
+          (candidate.whatsapp_visible = true AND candidate.whatsapp_ciphertext IS NOT NULL) AS whatsapp_available,
           availability.modality,
           availability.category,
-          availability.declared_level AS availability_level,
           availability.starts_at,
           availability.ends_at,
           availability.venue_preference,
@@ -171,7 +171,7 @@ function createFriendlySearchRepository({ pool, config }) {
           ) AS verified_match_count
         FROM radar_team_profiles candidate
         JOIN LATERAL (
-          SELECT item.modality, item.category, item.declared_level,
+          SELECT item.modality, item.category,
                  item.starts_at, item.ends_at, item.venue_preference
           FROM friendly_availabilities item
           WHERE item.team_id = candidate.id
@@ -184,24 +184,26 @@ function createFriendlySearchRepository({ pool, config }) {
               WHERE lower(profile_modality.value) = lower(item.modality)
             )
             AND EXISTS (
+              SELECT 1 FROM unnest($10::text[]) AS owner_modality(value)
+              WHERE lower(owner_modality.value) = lower(item.modality)
+            )
+            AND EXISTS (
               SELECT 1 FROM unnest(candidate.categories) AS profile_category(value)
               WHERE lower(profile_category.value) = lower(item.category)
             )
-            AND lower(item.declared_level) = lower(candidate.declared_level)
             AND ($4::text IS NULL OR lower(item.modality) = lower($4))
             AND ($5::text IS NULL OR lower(item.category) = lower($5))
-            AND ($6::text IS NULL OR lower(item.declared_level) = lower($6))
-            AND ($7::integer IS NULL OR EXTRACT(ISODOW FROM item.starts_at AT TIME ZONE 'America/Sao_Paulo') = $7)
+            AND ($6::integer IS NULL OR EXTRACT(ISODOW FROM item.starts_at AT TIME ZONE 'America/Sao_Paulo') = $6)
             AND (
-              $8::text IS NULL
-              OR ($8 = 'morning' AND EXTRACT(HOUR FROM item.starts_at AT TIME ZONE 'America/Sao_Paulo') BETWEEN 5 AND 11)
-              OR ($8 = 'afternoon' AND EXTRACT(HOUR FROM item.starts_at AT TIME ZONE 'America/Sao_Paulo') BETWEEN 12 AND 17)
-              OR ($8 = 'evening' AND (
+              $7::text IS NULL
+              OR ($7 = 'morning' AND EXTRACT(HOUR FROM item.starts_at AT TIME ZONE 'America/Sao_Paulo') BETWEEN 5 AND 11)
+              OR ($7 = 'afternoon' AND EXTRACT(HOUR FROM item.starts_at AT TIME ZONE 'America/Sao_Paulo') BETWEEN 12 AND 17)
+              OR ($7 = 'evening' AND (
                 EXTRACT(HOUR FROM item.starts_at AT TIME ZONE 'America/Sao_Paulo') >= 18
                 OR EXTRACT(HOUR FROM item.starts_at AT TIME ZONE 'America/Sao_Paulo') < 5
               ))
             )
-            AND ($9::text IS NULL OR item.venue_preference = $9)
+            AND ($8::text IS NULL OR item.venue_preference = $8)
           ORDER BY item.starts_at ASC, item.public_id ASC
           LIMIT 1
         ) availability ON true
@@ -217,7 +219,6 @@ function createFriendlySearchRepository({ pool, config }) {
           AND candidate.state_code ~ '^[A-Z]{2}$'
           AND cardinality(candidate.modalities) > 0
           AND cardinality(candidate.categories) > 0
-          AND candidate.declared_level IS NOT NULL
           AND candidate.public_slug ~ '^[a-z0-9]+(?:-[a-z0-9]+)*$'
           AND candidate.updated_at <= $3
           AND NOT EXISTS (
@@ -227,18 +228,18 @@ function createFriendlySearchRepository({ pool, config }) {
                OR (block.blocker_team_id = candidate.id AND block.blocked_team_id = $1)
           )
         ORDER BY candidate.public_slug ASC
-        LIMIT $10
+        LIMIT $9
       `, [
         origin.id,
         now,
         snapshot,
         filters.modality,
         filters.category,
-        filters.level,
         filters.dayNumber,
         filters.period,
         filters.venuePreference,
-        config.searchCandidateMaximum
+        config.searchCandidateMaximum,
+        origin.modalities
       ]);
       await client.query("COMMIT");
       transactionOpen = false;

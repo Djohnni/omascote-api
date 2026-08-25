@@ -135,7 +135,7 @@ test("match migrations run twice and install protected match history", async () 
   try {
     const adapter = pool(database);
     const applied = await migrate({ pool: adapter });
-    assert.equal(applied.at(-1), "013_radar_safety_privacy_moderation.sql");
+    assert.equal(applied.at(-1), "014_radar_smart_onboarding.sql");
     assert.deepEqual(await migrate({ pool: adapter }), []);
     const tables = await database.query(`
       SELECT table_name FROM information_schema.tables

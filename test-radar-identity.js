@@ -142,25 +142,21 @@ test("owner policy rejects another account and suspended teams", () => {
 
 test("profile contract normalizes safe fields and rejects identity or invalid values", () => {
   assert.deepEqual(validateRadarProfileInput({
-    city_ibge_code: "4209102",
     city_name: "  Joinville ",
     state_code: "sc",
     instagram_handle: "https://instagram.com/Time.Teste/?hl=pt-br",
-    modalities: ["society", "SOCIETY"],
+    modalities: ["society", "futsal", "SOCIETY"],
     categories: ["Livre", "Livre"],
-    declared_level: "Intermediario",
     travel_radius_km: 40,
     venue_preference: "either",
     availability_active: false,
     accept_terms: true
   }), {
-    cityIbgeCode: "4209102",
     cityName: "Joinville",
     stateCode: "SC",
     instagramHandle: "time.teste",
-    modalities: ["society"],
+    modalities: ["society", "futsal"],
     categories: ["Livre"],
-    declaredLevel: "intermediario",
     travelRadiusKm: 40,
     venuePreference: "either",
     availabilityActive: false,
@@ -169,7 +165,9 @@ test("profile contract normalizes safe fields and rejects identity or invalid va
 
   for (const body of [
     { team_id: "forged" },
-    { whatsapp: "5511999999999" },
+    { phone: "5511999999999" },
+    { city_ibge_code: "4209102" },
+    { declared_level: "intermediario" },
     { status: "active" },
     { state_code: "XX" },
     { instagram_handle: "https://example.com/time" },

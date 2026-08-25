@@ -29,8 +29,8 @@ as rotas legadas nem migra os arquivos JSON existentes.
 | `RADAR_INSTAGRAM_CONFIRM_ACCOUNT_LIMIT` / `RADAR_INSTAGRAM_CONFIRM_TEAM_LIMIT` / `RADAR_INSTAGRAM_CONFIRM_IP_LIMIT` | `20` / `20` / `60` | Limites para confirmar desafios. |
 | `RADAR_PROFILE_PRINT_IMPORT_ENABLED` | `false` | Habilita apenas a importação de rascunho por print. Desligada, chave e modelo da OpenAI não afetam o restante do Radar. |
 | `OPENAI_API_KEY` | vazio | Chave da API, lida somente do ambiente e nunca persistida ou registrada. Obrigatória quando a importação por print estiver habilitada. |
-| `RADAR_PROFILE_PRINT_OPENAI_MODEL` | vazio | Modelo multimodal da Responses API. Configurar como `gpt-5.6-sol` para esta fase. |
-| `RADAR_PROFILE_PRINT_REASONING_EFFORT` | `medium` | Esforço de raciocínio do modelo; aceita `none`, `low`, `medium`, `high`, `xhigh` ou `max`. |
+| `RADAR_PROFILE_PRINT_OPENAI_MODEL` | `gpt-5-mini` | Modelo multimodal econômico da Responses API. Fixar snapshot em produção quando a operação exigir reprodutibilidade. |
+| `RADAR_PROFILE_PRINT_REASONING_EFFORT` | `low` | Esforço baixo para leitura rápida e barata; a saída continua presa ao schema estrito. |
 | `RADAR_PROFILE_PRINT_SECURITY_SECRET` | vazio | Segredo independente de pelo menos 32 bytes para proteger os identificadores dos limites e hashes de idempotência. |
 | `RADAR_PROFILE_PRINT_SAFETY_IDENTIFIER_SECRET` | vazio | Segredo independente de pelo menos 32 bytes usado somente para derivar por HMAC o `safety_identifier` opaco e estável de cada conta. Não reutilizar o segredo de segurança da importação. |
 | `RADAR_PROFILE_PRINT_MAX_FILE_BYTES` | `8388608` | Tamanho máximo do upload; limitado internamente a 20 MiB. |
@@ -40,8 +40,12 @@ as rotas legadas nem migra os arquivos JSON existentes.
 | `RADAR_PROFILE_PRINT_OPENAI_MAX_OUTPUT_TOKENS` | `1800` | Limite da saída estruturada. |
 | `RADAR_PROFILE_PRINT_DRAFT_TTL_MINUTES` | `120` | Retenção curta do rascunho; limitada internamente a 24 horas. |
 | `RADAR_PROFILE_PRINT_CLEANUP_INTERVAL_MS` | `900000` | Intervalo da limpeza automática; mínimo de um minuto e máximo de 24 horas. |
-| `RADAR_PROFILE_PRINT_RATE_WINDOW_SECONDS` | `3600` | Janela persistente dos limites da importação. |
-| `RADAR_PROFILE_PRINT_ACCOUNT_LIMIT` / `RADAR_PROFILE_PRINT_TEAM_LIMIT` / `RADAR_PROFILE_PRINT_IP_LIMIT` | `5` / `5` / `20` | Limites persistentes por conta, time e IP. |
+| `RADAR_PROFILE_PRINT_DAILY_TEAM_LIMIT` | `3` | Máximo diário por conta e time; limitado internamente a três. |
+| `RADAR_PROFILE_PRINT_MONTHLY_GLOBAL_LIMIT` | `50` | Teto mensal global. Configuração ausente ou inválida mantém a importação desligada. |
+| `RADAR_PROFILE_PRINT_IP_LIMIT` | `20` | Limite diário por IP calculado pela cadeia de proxies confiável. |
+| `RADAR_WHATSAPP_ENCRYPTION_KEYS` | vazio | Chaves AES-256 versionadas no formato `v1:<base64>,v2:<base64>`. Nunca reutilizar segredos da IA, JWT ou Radar. |
+| `RADAR_WHATSAPP_ACTIVE_KEY_VERSION` | vazio | Versão usada para novas gravações; versões anteriores permanecem apenas durante rotação controlada. |
+| `RADAR_WHATSAPP_RATE_LIMIT_SECRET` | vazio | Segredo HMAC independente para limites persistentes do clique protegido. |
 | `RADAR_AVAILABILITY_DEFAULT_TRAVEL_RADIUS_KM` | `25` | Raio usado quando o anúncio e o perfil não informarem um valor específico. |
 | `RADAR_AVAILABILITY_MAX_FUTURE_PER_TEAM` | `20` | Limite configurável de disponibilidades futuras abertas por time. |
 | `RADAR_AVAILABILITY_MAX_DURATION_HOURS` | `12` | Duração máxima de um horário; limitada internamente a 24 horas. |
@@ -64,6 +68,19 @@ Com o Radar ligado, o readiness exige conexão com PostgreSQL e o registro da
 migration obrigatória mais recente em `schema_migrations`. Banco acessível com
 schema ausente ou desatualizado permanece fora de serviço; liveness continua
 independente para distinguir processo vivo de dependência pronta.
+
+O cliente envia somente cidade e UF. A API resolve código canônico e centro
+aproximado no catálogo versionado local, sem chamada externa durante o cadastro.
+O campo legado de nível é ignorado e não participa de elegibilidade, busca,
+compatibilidade, disponibilidade ou convites. A migração 014 mantém a leitura
+dos registros antigos, remove seus índices operacionais e adiciona o cadastro
+inteligente e o contato opcional criptografado.
+
+O WhatsApp começa oculto e exige consentimento separado. A listagem expõe apenas
+`whatsapp_disponivel`; o número é descriptografado somente após um clique
+autenticado, elegível, permitido pela allowlist e sem bloqueio bilateral. A
+resposta usa `private, no-store`, recebe limites persistentes e a auditoria não
+contém o número.
 
 ## Revisão manual do Instagram
 

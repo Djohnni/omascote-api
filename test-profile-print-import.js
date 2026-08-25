@@ -66,7 +66,6 @@ function sampleDraft(overrides = {}) {
       instagram_handle: { value: "unidos.fc", confidence: 0.99, evidence: "Usuario no topo do perfil" },
       modalities: { value: ["society"], confidence: 0.75, evidence: "Descricao menciona society" },
       categories: { value: ["Livre"], confidence: 0.7, evidence: "Categoria livre visivel" },
-      declared_level: { value: "intermediario", confidence: 0.55, evidence: "Nivel sugerido pelo texto" },
       ...overrides
     },
     warnings: []
@@ -125,7 +124,7 @@ test("profile print config is disabled by default and never serializes secrets",
   const configured = createRadarConfig(configuredEnv());
   assert.equal(configured.profilePrintOpenAiConfigured, true);
   assert.equal(configured.profilePrintOpenAiModel, "gpt-5.6-sol");
-  assert.equal(configured.profilePrintReasoningEffort, "medium");
+  assert.equal(configured.profilePrintReasoningEffort, "low");
   assert.equal(
     createRadarConfig(configuredEnv({ RADAR_PROFILE_PRINT_REASONING_EFFORT: "xhigh" }))
       .profilePrintReasoningEffort,
@@ -143,7 +142,8 @@ test("profile print config is disabled by default and never serializes secrets",
   assert.equal(createRadarConfig(withoutKey).profilePrintOpenAiConfigured, false);
   const withoutModel = configuredEnv();
   delete withoutModel.RADAR_PROFILE_PRINT_OPENAI_MODEL;
-  assert.equal(createRadarConfig(withoutModel).profilePrintOpenAiConfigured, false);
+  assert.equal(createRadarConfig(withoutModel).profilePrintOpenAiConfigured, true);
+  assert.equal(createRadarConfig(withoutModel).profilePrintOpenAiModel, "gpt-5-mini");
   const withoutSafetySecret = configuredEnv();
   delete withoutSafetySecret.RADAR_PROFILE_PRINT_SAFETY_IDENTIFIER_SECRET;
   assert.equal(createRadarConfig(withoutSafetySecret).profilePrintOpenAiConfigured, false);
@@ -326,7 +326,7 @@ test("OpenAI client uses only Responses with image input, strict output, no tool
   assert.equal(captured.body.store, false);
   assert.deepEqual(captured.body.tools, []);
   assert.equal(captured.body.tool_choice, "none");
-  assert.equal(captured.body.reasoning.effort, "medium");
+  assert.equal(captured.body.reasoning.effort, "low");
   assert.equal(captured.body.safety_identifier, SAFETY_IDENTIFIER);
   assert.equal(captured.options.body.includes("unidos.fc"), false);
   assert.equal(captured.body.text.format.strict, true);
@@ -343,6 +343,10 @@ test("OpenAI client maps refusal, incomplete, schema, limit, unavailable and tim
     [{ status: "incomplete", incomplete_details: { reason: "max_output_tokens" } }, 200, "incomplete"],
     [{ status: "completed", output_text: "not-json" }, 200, "schema_invalid"],
     [{ error: { message: "secret provider detail" } }, 429, "rate_limited"],
+    [{ error: { code: "insufficient_quota", message: "secret provider detail" } }, 429, "quota_exhausted"],
+    [{ error: { code: "invalid_api_key", message: "secret provider detail" } }, 401, "invalid_credentials"],
+    [{ error: { code: "model_not_found", message: "secret provider detail" } }, 403, "access_denied"],
+    [{ error: { code: "invalid_request_error", message: "secret provider detail" } }, 400, "request_rejected"],
     [{ error: { message: "secret provider detail" } }, 503, "unavailable"]
   ];
   for (const [payload, status, code] of cases) {

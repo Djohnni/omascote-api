@@ -37,6 +37,10 @@ function providerFailure(error) {
     invalid_response: ["PROFILE_PRINT_AI_INVALID_RESPONSE", 502, "A analise retornou dados invalidos."],
     schema_invalid: ["PROFILE_PRINT_AI_INVALID_RESPONSE", 502, "A analise retornou dados invalidos."],
     rate_limited: ["PROFILE_PRINT_AI_LIMITED", 503, "O analisador esta temporariamente ocupado."],
+    quota_exhausted: ["PROFILE_PRINT_AI_NOT_FUNDED", 503, "A analise por print esta temporariamente indisponivel."],
+    invalid_credentials: ["PROFILE_PRINT_AI_NOT_CONFIGURED", 503, "A analise por print esta temporariamente indisponivel."],
+    access_denied: ["PROFILE_PRINT_AI_ACCESS_DENIED", 503, "A analise por print esta temporariamente indisponivel."],
+    request_rejected: ["PROFILE_PRINT_AI_REQUEST_REJECTED", 502, "A imagem nao pode ser analisada agora."],
     unavailable: ["PROFILE_PRINT_AI_UNAVAILABLE", 503, "O analisador esta temporariamente indisponivel."],
     cancelled: ["PROFILE_PRINT_REQUEST_CANCELLED", 499, "A importacao foi cancelada."],
     internal_error: ["PROFILE_PRINT_INTERNAL_ERROR", 500, "Nao foi possivel concluir a importacao."]
@@ -49,7 +53,10 @@ function providerFailure(error) {
 }
 
 function createProfilePrintImportService({ repository, provider, config, now = () => new Date() }) {
-  if (!repository || typeof repository.getOwnedTeam !== "function") {
+  if (!repository || (
+    typeof repository.getImportSubject !== "function" &&
+    typeof repository.getOwnedTeam !== "function"
+  )) {
     throw new TypeError("Profile print import service requires a repository");
   }
   if (!provider || typeof provider.analyze !== "function") {
@@ -73,29 +80,39 @@ function createProfilePrintImportService({ repository, provider, config, now = (
 
   async function authorize(identity) {
     ensureAvailable();
-    return repository.getOwnedTeam(identity);
+    return typeof repository.getImportSubject === "function"
+      ? repository.getImportSubject(identity)
+      : repository.getOwnedTeam(identity);
   }
 
   async function rateLimit({ identity, team, requestContext, at, secret }) {
-    const windowMs = config.profilePrintRateWindowSeconds * 1000;
-    const windowStartedAt = new Date(Math.floor(at.getTime() / windowMs) * windowMs);
+    const dayStartedAt = new Date(`${at.toISOString().slice(0, 10)}T00:00:00.000Z`);
+    const monthStartedAt = new Date(Date.UTC(at.getUTCFullYear(), at.getUTCMonth(), 1));
     const result = await repository.consumeRateLimits({
-      windowStartedAt,
       scopes: [
         {
           type: "account",
           hash: importScopeHash(secret, "account", identity.accountId),
-          limit: config.profilePrintAccountLimit
+          limit: config.profilePrintDailyTeamLimit,
+          windowStartedAt: dayStartedAt
         },
         {
           type: "team",
-          hash: importScopeHash(secret, "team", team.id),
-          limit: config.profilePrintTeamLimit
+          hash: importScopeHash(secret, "team", team.scopeReference),
+          limit: config.profilePrintDailyTeamLimit,
+          windowStartedAt: dayStartedAt
         },
         {
           type: "ip",
           hash: importScopeHash(secret, "ip", requestIp(requestContext)),
-          limit: config.profilePrintIpLimit
+          limit: config.profilePrintIpLimit,
+          windowStartedAt: dayStartedAt
+        },
+        {
+          type: "global",
+          hash: importScopeHash(secret, "global", "radar-profile-print"),
+          limit: config.profilePrintMonthlyGlobalLimit,
+          windowStartedAt: monthStartedAt
         }
       ]
     });
@@ -129,8 +146,9 @@ function createProfilePrintImportService({ repository, provider, config, now = (
     }
 
     const at = clock();
-    const team = await repository.getOwnedTeam(identity);
-    await rateLimit({ identity, team, requestContext, at, secret: securitySecret });
+    const team = typeof repository.getImportSubject === "function"
+      ? await repository.getImportSubject(identity)
+      : Object.freeze({ ...(await repository.getOwnedTeam(identity)), scopeReference: identity.profileId });
     const safeRequestId = sanitizeRequestId(requestId);
     const metadata = Object.freeze({
       format: image.format,
@@ -158,6 +176,20 @@ function createProfilePrintImportService({ repository, provider, config, now = (
       requestId: safeRequestId
     });
     if (begun.kind !== "created") return begun.response;
+
+    try {
+      await rateLimit({ identity, team, requestContext, at, secret: securitySecret });
+    } catch (error) {
+      await repository.failImport({
+        requestDbId: begun.requestDbId,
+        verificationId: begun.verification.id,
+        identity,
+        failureCode: "rate_limited",
+        now: clock(),
+        requestId: safeRequestId
+      });
+      throw error;
+    }
 
     try {
       const providerDraft = await provider.analyze({

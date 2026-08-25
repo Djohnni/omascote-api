@@ -100,6 +100,35 @@ async function expireInstagramChallenges(client, now, limit) {
 }
 
 async function expireProfilePrintDrafts(client, now, limit) {
+  const onboarding = await client.query(`
+    WITH candidates AS (
+      SELECT id FROM radar_profile_print_import_requests
+      WHERE verification_id IS NULL
+        AND (
+          (state = 'processing' AND processing_expires_at <= $1)
+          OR (state = 'completed' AND evidence_delete_after <= $1)
+        )
+      ORDER BY COALESCE(evidence_delete_after, processing_expires_at), id
+      LIMIT $2::integer FOR UPDATE SKIP LOCKED
+    )
+    UPDATE radar_profile_print_import_requests request
+    SET state = CASE WHEN request.state = 'processing' THEN 'failed' ELSE 'expired' END,
+        failure_code = CASE WHEN request.state = 'processing' THEN 'processing_expired' ELSE NULL END,
+        ai_draft = NULL,
+        result_snapshot = CASE WHEN request.state = 'processing' THEN NULL ELSE '{"outcome":"expired"}'::jsonb END,
+        updated_at = $1
+    FROM candidates WHERE request.id = candidates.id
+    RETURNING request.account_reference
+  `, [now, limit]);
+  for (const row of onboarding.rows) {
+    await client.query(`
+      INSERT INTO match_audit_events(
+        actor_reference, event_type, payload, request_id, created_at
+      ) VALUES ($1, 'profile_print_import.expired',
+        '{"method":"profile_print_import","status":"expired","onboarding":true}'::jsonb,
+        'system:radar-retention', $2)
+    `, [row.account_reference, now]);
+  }
   const stale = await client.query(`
     SELECT id, team_id, version
     FROM team_verifications
@@ -132,7 +161,7 @@ async function expireProfilePrintDrafts(client, now, limit) {
         'system:radar-retention', $3)
     `, [row.team_id, Number(row.version) + 1, now]);
   }
-  return stale.rowCount;
+  return stale.rowCount + onboarding.rowCount;
 }
 
 async function eraseModerationDescriptions(client, now, limit) {

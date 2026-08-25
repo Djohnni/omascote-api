@@ -3,17 +3,17 @@
 const { RadarIdentityError } = require("./radar-identity.errors");
 
 const ALLOWED_FIELDS = new Set([
-  "city_ibge_code",
   "city_name",
   "state_code",
   "instagram_handle",
   "modalities",
   "categories",
-  "declared_level",
   "travel_radius_km",
   "venue_preference",
   "availability_active",
-  "accept_terms"
+  "accept_terms",
+  "whatsapp",
+  "whatsapp_visible"
 ]);
 
 const IDENTITY_FIELDS = new Set([
@@ -24,7 +24,6 @@ const IDENTITY_FIELDS = new Set([
   "legacy_profile_id",
   "account_id",
   "account_reference",
-  "whatsapp",
   "telefone",
   "phone",
   "status",
@@ -32,7 +31,6 @@ const IDENTITY_FIELDS = new Set([
 ]);
 
 const MODALITIES = new Set(["futebol_campo", "futsal", "society"]);
-const LEVELS = new Set(["iniciante", "intermediario", "competitivo", "avancado"]);
 const VENUE_PREFERENCES = new Set(["home", "away", "either"]);
 const BRAZILIAN_STATE_CODES = new Set([
   "AC", "AL", "AP", "AM", "BA", "CE", "DF", "ES", "GO", "MA", "MT", "MS",
@@ -89,11 +87,6 @@ function validateRadarProfileInput(input) {
   if (Object.keys(input).length === 0) invalid("body", "informe ao menos um campo");
 
   const output = {};
-  if (Object.hasOwn(input, "city_ibge_code")) {
-    const value = text("city_ibge_code", input.city_ibge_code, 7);
-    if (value && !/^\d{7}$/.test(value)) invalid("city_ibge_code", "use sete digitos");
-    output.cityIbgeCode = value || null;
-  }
   if (Object.hasOwn(input, "city_name")) {
     const value = text("city_name", input.city_name, 120);
     if (!/^[\p{L}\p{M} .'-]{2,120}$/u.test(value)) invalid("city_name", "cidade invalida");
@@ -110,8 +103,8 @@ function validateRadarProfileInput(input) {
     output.instagramHandle = value.toLowerCase();
   }
   if (Object.hasOwn(input, "modalities")) {
-    if (!Array.isArray(input.modalities) || input.modalities.length > 3) {
-      invalid("modalities", "lista invalida");
+    if (!Array.isArray(input.modalities) || input.modalities.length < 1 || input.modalities.length > 3) {
+      invalid("modalities", "selecione de uma a tres modalidades");
     }
     const values = uniqueStrings(
       input.modalities,
@@ -133,11 +126,6 @@ function validateRadarProfileInput(input) {
     }
     output.categories = values;
   }
-  if (Object.hasOwn(input, "declared_level")) {
-    const value = text("declared_level", input.declared_level, 30).toLowerCase();
-    if (value && !LEVELS.has(value)) invalid("declared_level", "nivel invalido");
-    output.declaredLevel = value || null;
-  }
   if (Object.hasOwn(input, "travel_radius_km")) {
     const value = Number(input.travel_radius_km);
     if (!Number.isInteger(value) || value < 1 || value > 500) {
@@ -157,6 +145,14 @@ function validateRadarProfileInput(input) {
   if (Object.hasOwn(input, "accept_terms")) {
     if (input.accept_terms !== true) invalid("accept_terms", "o aceite deve ser explicito");
     output.acceptTerms = true;
+  }
+  if (Object.hasOwn(input, "whatsapp")) {
+    const value = text("whatsapp", input.whatsapp, 32);
+    output.whatsapp = value || null;
+  }
+  if (Object.hasOwn(input, "whatsapp_visible")) {
+    if (typeof input.whatsapp_visible !== "boolean") invalid("whatsapp_visible", "use booleano");
+    output.whatsappVisible = input.whatsapp_visible;
   }
 
   return Object.freeze(output);
@@ -196,7 +192,6 @@ module.exports = {
   validateExpectedVersion,
   normalizeInstagramHandle: instagramHandle,
   MODALITIES,
-  LEVELS,
   VENUE_PREFERENCES,
   BRAZILIAN_STATE_CODES
 };

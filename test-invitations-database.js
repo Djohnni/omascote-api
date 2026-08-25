@@ -128,7 +128,7 @@ test("migration 008 runs twice and protects invitation, notification and idempot
   try {
     const adapter = pool(database);
     const applied = await migrate({ pool: adapter });
-    assert.equal(applied.at(-1), "013_radar_safety_privacy_moderation.sql");
+    assert.equal(applied.at(-1), "014_radar_smart_onboarding.sql");
     assert.deepEqual(await migrate({ pool: adapter }), []);
     const tables = await database.query(`
       SELECT table_name FROM information_schema.tables

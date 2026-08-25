@@ -51,7 +51,8 @@ test("clean PostgreSQL schema migrates idempotently and rejects cross-match conf
       "010_confirmed_match_results.sql",
       "011_match_history.sql",
       "012_team_reviews_reputation.sql",
-      "013_radar_safety_privacy_moderation.sql"
+      "013_radar_safety_privacy_moderation.sql",
+      "014_radar_smart_onboarding.sql"
     ]);
     assert.deepEqual(await migrate({ pool }), []);
     assert.deepEqual(await checkDatabase(pool), { ok: true });
@@ -158,13 +159,11 @@ test("identity profile mutation is owned, versioned, idempotent and audited", as
       now: () => new Date("2026-08-24T12:00:00.000Z")
     });
     const body = {
-      city_ibge_code: "4209102",
       city_name: "Joinville",
       state_code: "SC",
       instagram_handle: "database.fc",
       modalities: ["society"],
       categories: ["Livre"],
-      declared_level: "intermediario",
       travel_radius_km: 35,
       venue_preference: "either",
       accept_terms: true

@@ -133,7 +133,7 @@ test("PostgreSQL reputation migration and verified anonymous aggregates", async 
     const applied = await migrate({ pool: adapter });
 
     await t.test("migration 013 is incremental and idempotent", async () => {
-      assert.equal(applied.at(-1), "013_radar_safety_privacy_moderation.sql");
+      assert.equal(applied.at(-1), "014_radar_smart_onboarding.sql");
       assert.deepEqual(await migrate({ pool: adapter }), []);
       const columns = await database.query(`
         SELECT column_name FROM information_schema.columns

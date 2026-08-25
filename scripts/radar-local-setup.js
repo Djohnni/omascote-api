@@ -52,6 +52,21 @@ const accounts = Object.freeze([
     moderator: true
   },
   {
+    login: "radar_onboarding",
+    accountReference: "account-radar-onboarding-local",
+    profileId: "pf_radar_onboarding_local",
+    name: "Aurora FC",
+    slug: "aurora-radar-local",
+    instagram: "auroraradarlocal",
+    city: "Joinville",
+    state: "SC",
+    cityCode: "4209102",
+    latitude: -26.300000,
+    longitude: -48.850000,
+    email: "onboarding@radar.local.invalid",
+    seed: false
+  },
+  {
     login: "radar_fora",
     accountReference: "account-radar-outside-local",
     profileId: "pf_radar_outside_local",
@@ -127,7 +142,7 @@ function writeLocalAccounts(dataDirectory, password, accountList = accounts) {
 }
 
 async function seedRadar(pool, accountList = accounts) {
-  for (const account of accountList.filter(item => item.pilot !== false)) {
+  for (const account of accountList.filter(item => item.pilot !== false && item.seed !== false)) {
     await pool.query(`
       INSERT INTO radar_team_profiles(
         legacy_profile_id, account_reference, public_slug, status,

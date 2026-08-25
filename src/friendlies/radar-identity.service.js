@@ -7,6 +7,8 @@ const {
   validateIdempotencyKey,
   validateExpectedVersion
 } = require("./radar-identity.schemas");
+const { resolveBrazilianCity } = require("./brazil-city-catalog");
+const { normalizeWhatsapp, encryptWhatsapp } = require("./radar-whatsapp.crypto");
 
 const CORE_REQUIREMENTS = Object.freeze([
   "radar_profile_not_created",
@@ -17,8 +19,7 @@ const CORE_REQUIREMENTS = Object.freeze([
   "state_missing",
   "instagram_missing",
   "modality_missing",
-  "category_missing",
-  "level_missing"
+  "category_missing"
 ]);
 
 function stableValue(value) {
@@ -62,7 +63,6 @@ function buildRadarEligibility({ team, legacyProfile, config }) {
   if (!Array.isArray(team?.categories) || team.categories.length === 0) {
     missing.push("category_missing");
   }
-  if (!hasText(team?.declaredLevel)) missing.push("level_missing");
 
   const coreMissing = missing.filter(item => CORE_REQUIREMENTS.includes(item));
   const profileComplete = coreMissing.length === 0;
@@ -106,17 +106,18 @@ function ownerProfile(team) {
     public_id: team.publicId,
     status: team.status,
     instagram_verification_status: team.instagramVerificationStatus,
-    city_ibge_code: team.cityIbgeCode,
     city_name: team.cityName,
     state_code: team.stateCode,
     instagram_handle: team.instagramHandle,
     modalities: Object.freeze([...(team.modalities || [])]),
     categories: Object.freeze([...(team.categories || [])]),
-    declared_level: team.declaredLevel,
     travel_radius_km: team.travelRadiusKm,
     venue_preference: team.venuePreference,
     availability_active: team.availabilityActive === true,
     terms_accepted: Boolean(team.termsAcceptedAt),
+    whatsapp_configured: Boolean(team.whatsappCiphertext),
+    whatsapp_visible: team.whatsappVisible === true,
+    public_name: team.publicName,
     version: team.version,
     updated_at: team.updatedAt
   });
@@ -154,14 +155,35 @@ function sanitizeRequestId(value) {
   return /^[A-Za-z0-9._:-]{1,120}$/.test(requestId) ? requestId : null;
 }
 
-function applyInput(team, input, now) {
+function applyInput(team, input, now, config) {
   const instagramChanged = Object.hasOwn(input, "instagramHandle") &&
     input.instagramHandle !== team.instagramHandle;
+  let city = null;
+  if (Object.hasOwn(input, "cityName") || Object.hasOwn(input, "stateCode")) {
+    city = resolveBrazilianCity(
+      Object.hasOwn(input, "cityName") ? input.cityName : team.cityName,
+      Object.hasOwn(input, "stateCode") ? input.stateCode : team.stateCode
+    );
+  }
+  let whatsapp = null;
+  if (Object.hasOwn(input, "whatsapp")) {
+    const normalized = normalizeWhatsapp(input.whatsapp);
+    whatsapp = normalized ? encryptWhatsapp(normalized, config) : { ciphertext: null, keyVersion: null };
+  }
+  const requestedWhatsappVisible = Object.hasOwn(input, "whatsappVisible")
+    ? input.whatsappVisible
+    : team.whatsappVisible === true;
+  const resultingCiphertext = whatsapp ? whatsapp.ciphertext : team.whatsappCiphertext;
+  if (requestedWhatsappVisible && !resultingCiphertext) {
+    throw new RadarIdentityError("VALIDATION_ERROR", 400, "whatsapp_visible: informe um WhatsApp valido");
+  }
   const prospective = {
     ...team,
-    cityIbgeCode: Object.hasOwn(input, "cityIbgeCode") ? input.cityIbgeCode : team.cityIbgeCode,
-    cityName: Object.hasOwn(input, "cityName") ? input.cityName : team.cityName,
-    stateCode: Object.hasOwn(input, "stateCode") ? input.stateCode : team.stateCode,
+    cityIbgeCode: city ? city.ibgeCode : team.cityIbgeCode,
+    cityName: city ? city.name : team.cityName,
+    stateCode: city ? city.stateCode : team.stateCode,
+    approximateLatitude: city ? city.latitude : team.approximateLatitude,
+    approximateLongitude: city ? city.longitude : team.approximateLongitude,
     instagramHandle: Object.hasOwn(input, "instagramHandle")
       ? input.instagramHandle
       : team.instagramHandle,
@@ -170,9 +192,6 @@ function applyInput(team, input, now) {
       : team.instagramVerificationStatus,
     modalities: Object.hasOwn(input, "modalities") ? input.modalities : team.modalities,
     categories: Object.hasOwn(input, "categories") ? input.categories : team.categories,
-    declaredLevel: Object.hasOwn(input, "declaredLevel")
-      ? input.declaredLevel
-      : team.declaredLevel,
     travelRadiusKm: Object.hasOwn(input, "travelRadiusKm")
       ? input.travelRadiusKm
       : team.travelRadiusKm,
@@ -184,7 +203,10 @@ function applyInput(team, input, now) {
       : team.availabilityActive,
     termsAcceptedAt: input.acceptTerms === true && !team.termsAcceptedAt
       ? now.toISOString()
-      : team.termsAcceptedAt
+      : team.termsAcceptedAt,
+    whatsappCiphertext: whatsapp ? whatsapp.ciphertext : team.whatsappCiphertext,
+    whatsappKeyVersion: whatsapp ? whatsapp.keyVersion : team.whatsappKeyVersion,
+    whatsappVisible: Boolean(resultingCiphertext) && requestedWhatsappVisible
   };
   return prospective;
 }
@@ -222,7 +244,7 @@ function createRadarIdentityService({ repository, config, now = () => new Date()
       expectedVersion: normalizedExpectedVersion,
       requestId: sanitizeRequestId(requestId),
       buildMutation(currentTeam) {
-        const prospective = applyInput(currentTeam, input, mutationTime);
+        const prospective = applyInput(currentTeam, input, mutationTime, config);
         const eligibility = buildRadarEligibility({
           team: prospective,
           legacyProfile: identity.legacyProfile,

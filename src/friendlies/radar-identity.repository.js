@@ -14,17 +14,21 @@ const MUTABLE_COLUMNS = Object.freeze({
   cityIbgeCode: "city_ibge_code",
   cityName: "city_name",
   stateCode: "state_code",
+  approximateLatitude: "approximate_latitude",
+  approximateLongitude: "approximate_longitude",
   instagramHandle: "instagram_handle",
   modalities: "modalities",
   categories: "categories",
-  declaredLevel: "declared_level",
   travelRadiusKm: "travel_radius_km",
   venuePreference: "venue_preference",
   availabilityActive: "availability_active",
   termsAcceptedAt: "radar_terms_accepted_at",
   publicName: "public_name",
   publicProfileEnabled: "public_profile_enabled",
-  publicCrestAvailable: "public_crest_available"
+  publicCrestAvailable: "public_crest_available",
+  whatsappCiphertext: "whatsapp_ciphertext",
+  whatsappKeyVersion: "whatsapp_key_version",
+  whatsappVisible: "whatsapp_visible"
 });
 
 function publicSnapshot(legacyProfile) {
@@ -60,7 +64,6 @@ function rowToTeam(row) {
     approximateLongitude: row.approximate_longitude,
     modalities: Array.isArray(row.modalities) ? [...row.modalities] : [],
     categories: Array.isArray(row.categories) ? [...row.categories] : [],
-    declaredLevel: row.declared_level,
     travelRadiusKm: Number(row.travel_radius_km || 25),
     venuePreference: row.venue_preference,
     availabilityActive: row.availability_active === true,
@@ -68,6 +71,9 @@ function rowToTeam(row) {
     publicName: row.public_name,
     publicProfileEnabled: row.public_profile_enabled === true,
     publicCrestAvailable: row.public_crest_available === true,
+    whatsappCiphertext: row.whatsapp_ciphertext,
+    whatsappKeyVersion: row.whatsapp_key_version,
+    whatsappVisible: row.whatsapp_visible === true,
     suspendedAt: row.suspended_at,
     departedAt: row.radar_departed_at,
     version: Number(row.version || 1),

@@ -1,7 +1,7 @@
 "use strict";
 
 const { RadarIdentityError } = require("./radar-identity.errors");
-const { MODALITIES, LEVELS, VENUE_PREFERENCES } = require("./radar-identity.schemas");
+const { MODALITIES, VENUE_PREFERENCES } = require("./radar-identity.schemas");
 
 const DAYS = Object.freeze({
   monday: 1,
@@ -14,7 +14,7 @@ const DAYS = Object.freeze({
 });
 const PERIODS = new Set(["morning", "afternoon", "evening"]);
 const ALLOWED_FIELDS = new Set([
-  "modality", "category", "level", "day", "period",
+  "modality", "category", "day", "period",
   "radius_km", "venue_preference", "cursor", "limit"
 ]);
 
@@ -42,9 +42,6 @@ function validateFriendlySearchQuery(query, config) {
   if (category && !/^[\p{L}\p{M}\p{N} ._+\/-]{2,40}$/u.test(category)) {
     invalid("category", "categoria invalida");
   }
-
-  const level = scalar("level", input.level).toLowerCase() || null;
-  if (level && !LEVELS.has(level)) invalid("level", "nivel invalido");
 
   const day = scalar("day", input.day).toLowerCase() || null;
   if (day && !Object.hasOwn(DAYS, day)) invalid("day", "dia da semana invalido");
@@ -77,7 +74,6 @@ function validateFriendlySearchQuery(query, config) {
   return Object.freeze({
     modality,
     category,
-    level,
     day,
     dayNumber: day ? DAYS[day] : null,
     period,
@@ -92,7 +88,6 @@ function cursorBoundFilters(filters, appliedRadiusKm) {
   return Object.freeze({
     modality: filters.modality,
     category: filters.category ? filters.category.toLocaleLowerCase("pt-BR") : null,
-    level: filters.level,
     day: filters.day,
     period: filters.period,
     radius_km: appliedRadiusKm,

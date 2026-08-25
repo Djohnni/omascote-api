@@ -178,7 +178,6 @@ test("strict filters reject ownership, source location, repeated fields and unkn
   const parsed = validateFriendlySearchQuery({
     modality: "society",
     category: "Livre",
-    level: "intermediario",
     day: "saturday",
     period: "evening",
     radius_km: "20",
@@ -226,8 +225,8 @@ test("compatibility is deterministic and exposes objective reasons", () => {
     "perto do seu time",
     "mesma modalidade",
     "categoria compativel",
-    "nivel compativel",
-    "disponivel quarta"
+    "disponivel quarta",
+    "aceita jogar fora"
   ]);
 });
 
@@ -255,10 +254,11 @@ test("service resolves origin server-side, excludes itself and unsafe public pro
   const serialized = JSON.stringify(result);
   for (const forbidden of [
     "teamId", "team_id", "account", "profile_id", "latitude", "longitude",
-    "coordinate", "whatsapp", "telefone", "phone", "email", "notes"
+    "coordinate", "telefone", "phone", "email", "notes"
   ]) {
     assert.equal(serialized.toLowerCase().includes(forbidden.toLowerCase()), false, forbidden);
   }
+  assert.equal(result.items[0].whatsapp_disponivel, false);
   assert.equal(result.items[0].reputation.state, "new_on_radar");
   assert.equal(result.items[0].verified_match_count, 2);
 });

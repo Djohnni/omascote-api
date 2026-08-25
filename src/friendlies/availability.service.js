@@ -49,14 +49,13 @@ function assertCanonicalTeamData(team) {
   const complete = (
     /^\d{7}$/.test(String(team?.cityIbgeCode || "")) &&
     Boolean(String(team?.cityName || "").trim()) &&
-    /^[A-Z]{2}$/.test(String(team?.stateCode || "")) &&
-    Boolean(String(team?.declaredLevel || "").trim())
+    /^[A-Z]{2}$/.test(String(team?.stateCode || ""))
   );
   if (!complete) {
     throw new RadarIdentityError(
       "AVAILABILITY_PROFILE_INCOMPLETE",
       409,
-      "Complete cidade, UF e nivel no perfil antes de cadastrar uma disponibilidade."
+      "Complete cidade e UF no perfil antes de cadastrar uma disponibilidade."
     );
   }
 }
@@ -92,7 +91,6 @@ function buildAvailabilityValue({ team, identity, input, current = null, config,
   const value = {
     modality,
     category,
-    declaredLevel: String(team.declaredLevel).trim(),
     startsAt: Object.hasOwn(input, "startsAt") ? input.startsAt : current?.startsAt,
     endsAt: Object.hasOwn(input, "endsAt") ? input.endsAt : current?.endsAt,
     recurrence: Object.hasOwn(input, "recurrence") ? input.recurrence : current?.recurrence || null,
@@ -130,7 +128,6 @@ function publicAvailability(value) {
     availability_id: value.publicId,
     modality: value.modality,
     category: value.category,
-    declared_level: value.declaredLevel,
     starts_at: value.startsAt,
     ends_at: value.endsAt,
     recurrence: value.recurrence,

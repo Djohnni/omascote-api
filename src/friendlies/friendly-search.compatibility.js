@@ -1,11 +1,5 @@
 "use strict";
 
-const LEVEL_ORDER = Object.freeze({
-  iniciante: 0,
-  intermediario: 1,
-  competitivo: 2,
-  avancado: 3
-});
 const WEEKDAY_PT = Object.freeze({
   Monday: "segunda",
   Tuesday: "terca",
@@ -94,21 +88,8 @@ function buildCompatibility({ origin, candidate, location, radiusKm }) {
     reasons.push("categoria compativel");
   }
 
-  const originLevel = LEVEL_ORDER[String(origin.declaredLevel || "").toLowerCase()];
-  const candidateLevel = LEVEL_ORDER[String(candidate.declaredLevel || "").toLowerCase()];
-  if (Number.isInteger(originLevel) && Number.isInteger(candidateLevel)) {
-    const difference = Math.abs(originLevel - candidateLevel);
-    if (difference === 0) {
-      score += 15;
-      reasons.push("nivel compativel");
-    } else if (difference === 1) {
-      score += 8;
-      reasons.push("nivel proximo");
-    }
-  }
-
   if (candidate.availabilityOverlap === true) {
-    score += 10;
+    score += 25;
     reasons.push(`disponivel ${weekdayLabel(candidate.startsAt)}`);
   } else {
     reasons.push(`tem horario ${weekdayLabel(candidate.startsAt)}`);

@@ -68,6 +68,7 @@ const {
 const {
   createRadarModerationRouters
 } = require("./src/friendlies/radar-moderation.routes");
+const { createRadarWhatsappRouter } = require("./src/friendlies/radar-whatsapp.routes");
 const {
   createLegacyRadarIdentityResolver,
   createPilotGatedRadarIdentityResolver,
@@ -7627,6 +7628,13 @@ const radarModerationRouters = createRadarModerationRouters({
 });
 app.use("/amistosos", radarInvitationRouters.invitationRouter);
 app.use("/radar/times", radarReputationRouters.publicRouter);
+app.use("/radar/times", createRadarWhatsappRouter({
+  config: radarConfig,
+  auth,
+  pool: radarPool,
+  resolveIdentity: resolveRadarIdentity,
+  logger: radarLogger
+}));
 app.use("/me/time", radarReputationRouters.privateRouter);
 app.use("/admin/radar/moderacao", radarModerationRouters.adminRouter);
 app.use("/me/time/amistosos", createMatchHistoryRouter({

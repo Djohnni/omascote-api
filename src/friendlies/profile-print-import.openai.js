@@ -32,6 +32,23 @@ function outputText(response) {
   return parts.join("").trim();
 }
 
+async function classifyErrorResponse(response) {
+  if (response.status === 401) return "invalid_credentials";
+  if (response.status === 403) return "access_denied";
+  if (response.status === 429) {
+    try {
+      const payload = await response.json();
+      const code = String(payload?.error?.code || payload?.error?.type || "").toLowerCase();
+      if (code.includes("quota") || code.includes("billing") || code.includes("credit")) {
+        return "quota_exhausted";
+      }
+    } catch {}
+    return "rate_limited";
+  }
+  if (response.status === 400 || response.status === 404) return "request_rejected";
+  return "unavailable";
+}
+
 function providerInstructions() {
   return [
     "Voce extrai somente sugestoes de perfil de um time de futebol amador a partir de uma captura de tela.",
@@ -42,7 +59,6 @@ function providerInstructions() {
     "Quando algo nao estiver claramente visivel, use null ou lista vazia e reduza a confianca.",
     "As evidencias devem ser curtas, descritivas e nunca conter dados de contato.",
     "Modalidades validas: futebol_campo, futsal, society.",
-    "Niveis validos: iniciante, intermediario, competitivo, avancado.",
     "O resultado e apenas um rascunho para revisao humana; nao declare verificacao ou publicacao."
   ].join(" ");
 }
@@ -123,8 +139,7 @@ function createProfilePrintOpenAiClient({ config, fetchImpl = globalThis.fetch }
         throw new ProfilePrintProviderError("unavailable");
       }
 
-      if (response.status === 429) throw new ProfilePrintProviderError("rate_limited");
-      if (!response.ok) throw new ProfilePrintProviderError("unavailable");
+      if (!response.ok) throw new ProfilePrintProviderError(await classifyErrorResponse(response));
 
       let payload;
       try {
@@ -162,5 +177,6 @@ module.exports = {
   createProfilePrintOpenAiClient,
   providerInstructions,
   requestBody,
-  outputText
+  outputText,
+  classifyErrorResponse
 };

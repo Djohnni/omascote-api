@@ -21,7 +21,7 @@ Todas as flags permanecem desligadas quando ausentes.
 
 Não reutilize valores entre segredos e não registre valores em arquivos, logs ou commits.
 
-## Migrações 001–013
+## Migrações 001–014
 
 1. Fundação do Radar e auditoria.
 2. Integridade da confirmação de resultado.
@@ -36,8 +36,9 @@ Não reutilize valores entre segredos e não registre valores em arquivos, logs 
 11. Histórico e paginação assinada.
 12. Avaliações e reputação anônima.
 13. Bloqueios, denúncias, compensações e saída do Radar.
+14. Cadastro inteligente, remoção operacional do nível e WhatsApp criptografado.
 
-Execute `npm run db:migrate` antes de ligar qualquer flag. A prontidão exige a migração 013 e falha fechada quando uma função ligada não possui a configuração necessária.
+Execute `npm run db:migrate` antes de ligar qualquer flag. A prontidão exige a migração 014 e falha fechada quando uma função ligada não possui a configuração necessária.
 
 ## Ativação
 
@@ -56,7 +57,7 @@ Desligue primeiro `RADAR_AMISTOSOS_ENABLED`. O frontend oculta a entrada e todas
 As migrações são cumulativas e os livros de auditoria são imutáveis. Não reverta apagando ou reescrevendo tabelas. Para rollback operacional:
 
 1. desligue a flag mestre;
-2. mantenha o schema 001–013;
+2. mantenha o schema 001–014;
 3. reverta apenas o código para o commit anterior compatível;
 4. restaure código novo depois da correção;
 5. use uma migração compensatória 014 ou posterior se o schema precisar mudar.
