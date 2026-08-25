@@ -4,6 +4,7 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const express = require("express");
+const { clientIp, firstForwardedAddress, normalizeAddress } = require("../security/client-ip");
 
 const EXPECTED_SOURCE_COMMIT = "89e45c6bc9ba2a9643c690ffffabd3c2449b7f3f";
 const CONTENT_SECURITY_POLICY = [
@@ -102,12 +103,41 @@ function createRadarStagingFrontendRouter(options = {}) {
   const manifestPath = path.resolve(options.manifestPath || path.join(snapshotRoot, "..", "source-manifest.json"));
   const manifest = readVerifiedManifest({ snapshotRoot, manifestPath });
   const router = express.Router();
+  const proxyProbeStartedAt = Date.now();
+  const proxyProbeSalt = crypto.randomBytes(32);
 
   router.use((req, res, next) => {
     setSecurityHeaders(res);
     next();
   });
   router.get("/source-manifest.json", (req, res) => res.json(manifest));
+  if (truthy(env.RADAR_PROXY_PROBE_ENABLED)) {
+    router.get("/_temporary-proxy-proof", (req, res) => {
+      if (Date.now() - proxyProbeStartedAt > 10 * 60 * 1000) {
+        return res.status(404).type("text/plain").send("Not found");
+      }
+      const forwarded = String(req.get("X-Forwarded-For") || "")
+        .split(",").map(value => value.trim()).filter(Boolean).slice(0, 16);
+      const fingerprint = value => value
+        ? crypto.createHmac("sha256", proxyProbeSalt).update(value).digest("hex").slice(0, 20)
+        : null;
+      const socketAddress = normalizeAddress(req.socket?.remoteAddress);
+      const firstAddress = firstForwardedAddress(req);
+      const resolvedAddress = clientIp(req, {
+        trustedProxyProvider: "render",
+        trustedProxyHops: 1
+      });
+      return res.json({
+        edge_hops: 1,
+        forwarded_entries: forwarded.length,
+        forwarded_first_hash: fingerprint(firstAddress),
+        socket_hash: fingerprint(socketAddress),
+        resolved_hash: fingerprint(resolvedAddress),
+        resolved_from_forwarded_first: firstAddress === resolvedAddress,
+        socket_differs_from_client: Boolean(socketAddress && resolvedAddress && socketAddress !== resolvedAddress)
+      });
+    });
+  }
   router.use(express.static(snapshotRoot, {
     dotfiles: "deny",
     fallthrough: true,
