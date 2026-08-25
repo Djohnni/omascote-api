@@ -11,7 +11,9 @@ Todas as flags permanecem desligadas quando ausentes.
 - `DATABASE_URL`: PostgreSQL de staging/produção.
 - `DATABASE_SSL` e `DATABASE_SSL_REJECT_UNAUTHORIZED`: política TLS do banco.
 - `OMASCOTE_CORS_ORIGINS`: origens explícitas, separadas por vírgula. Em staging, use `OMASCOTE_CORS_INCLUDE_PRODUCTION_ORIGINS=false` para não misturar origens.
-- `RADAR_TRUST_PROXY_HOPS`: quantidade exata de proxies confiáveis entre cliente e API. O IP usado por limites vem de `req.ip`, depois do processamento do Express.
+- `RADAR_TRUST_PROXY_HOPS`: quantidade exata de proxies confiáveis entre cliente e API. No Render atual, a borda HTTPS é um único hop comprovado.
+- `RADAR_TRUST_PROXY_PROVIDER`: use `render` somente no serviço comprovado. Os limites usam exclusivamente o primeiro IP escrito pela borda Render e ignoram qualquer valor posterior enviado pelo cliente.
+- `RADAR_STAGING_FRONTEND_ENABLED` e `RADAR_STAGING_SERVICE_ID`: servem o snapshot candidato em `/radar-staging/` somente quando `NODE_ENV=staging`, `RENDER=true` e o ID real do serviço coincide. Deixe desligado em produção.
 - `RADAR_METRICS_ENABLED` e `RADAR_METRICS_TOKEN`: habilitam e protegem `/internal/radar/metrics` com segredo exclusivo.
 - `RADAR_TECHNICAL_RETENTION_DAYS` e `RADAR_RETENTION_BATCH_MAXIMUM`: retenção de limites técnicos e tamanho de cada lote de limpeza.
 - `RADAR_INSTAGRAM_VERIFICATION_SECRET`, `RADAR_SEARCH_CURSOR_SECRET`, `RADAR_SEARCH_RATE_LIMIT_SECRET`, `RADAR_INVITATIONS_SECURITY_SECRET`, `RADAR_MATCH_RESULTS_SECURITY_SECRET`, `RADAR_MATCH_HISTORY_CURSOR_SECRET`, `RADAR_MATCH_HISTORY_RATE_LIMIT_SECRET`, `RADAR_REPUTATION_SECURITY_SECRET`, `RADAR_MODERATION_SECURITY_SECRET`: segredos independentes com pelo menos 32 bytes.

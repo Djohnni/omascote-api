@@ -1,0 +1,9 @@
+User-agent: *
+Allow: /
+
+Disallow: /login
+Disallow: /painel
+Disallow: /admin
+Disallow: /api
+
+Sitemap: https://omascote.com.br/sitemap.xml

@@ -111,15 +111,15 @@ test("challenge is deterministic, segmented and protected by keyed hash", () => 
   assert.notEqual(challengeHash(`${TEST_SECRET}-other`, challenge.code), hash);
 });
 
-test("IP rate limiting trusts forwarded addresses only when proxy hops are configured", () => {
+test("IP rate limiting trusts only the Render-written first address with the proven topology", () => {
   const req = {
-    get: name => name === "X-Forwarded-For" ? "spoofed, 203.0.113.7" : "",
+    get: name => name === "X-Forwarded-For" ? "203.0.113.7, spoofed" : "",
     ip: "10.0.0.4",
     socket: { remoteAddress: "10.0.0.4" }
   };
   assert.equal(rateLimitIp(req, { instagramTrustedProxyHops: 0 }), "10.0.0.4");
-  assert.equal(rateLimitIp(req, { instagramTrustedProxyHops: 1 }), "203.0.113.7");
-  assert.equal(rateLimitIp(req, { instagramTrustedProxyHops: 2 }), "spoofed");
+  assert.equal(rateLimitIp(req, { trustedProxyProvider: "render", trustedProxyHops: 1 }), "203.0.113.7");
+  assert.equal(rateLimitIp(req, { trustedProxyProvider: "render", trustedProxyHops: 2 }), "10.0.0.4");
 });
 
 test("initiation fails closed without an independent verification secret", async () => {

@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Denunciar Conteúdo Gerado por IA | Meu Clube FC</title>
+  <meta name="description" content="Denuncie conteúdo gerado por IA no Meu Clube FC para análise de segurança e moderação.">
+  <meta property="og:title" content="Denunciar Conteúdo Gerado por IA | Meu Clube FC">
+  <meta property="og:description" content="Formulário para denunciar conteúdo ofensivo, enganoso ou inadequado gerado por IA no Meu Clube FC.">
+  <meta name="twitter:title" content="Denunciar Conteúdo Gerado por IA | Meu Clube FC">
+  <meta name="twitter:description" content="Formulário para denunciar conteúdo ofensivo, enganoso ou inadequado gerado por IA no Meu Clube FC.">
+  <style>
+    body{margin:0;font-family:Arial,Helvetica,sans-serif;background:#f8fafc;color:#111827;line-height:1.6}
+    main{max-width:880px;margin:0 auto;padding:40px 20px}
+    h1{font-size:32px;line-height:1.15;margin:0 0 10px}
+    h2{font-size:20px;margin:28px 0 8px}
+    p,li,label{font-size:16px}
+    a{color:#1457d9;font-weight:700}
+    .card{background:#fff;border:1px solid #e5e7eb;border-radius:16px;padding:24px;box-shadow:0 18px 50px rgba(15,23,42,.08)}
+    .muted{color:#64748b}
+    form{display:grid;gap:14px;margin-top:18px}
+    label{display:grid;gap:6px;font-weight:700}
+    input,select,textarea{width:100%;box-sizing:border-box;border:1px solid #d1d5db;border-radius:12px;padding:12px;font:inherit;background:#fff;color:#111827}
+    textarea{min-height:120px;resize:vertical}
+    button{border:0;border-radius:999px;background:#16a34a;color:#fff;font-weight:900;padding:13px 18px;cursor:pointer}
+    button:disabled{opacity:.65;cursor:not-allowed}
+    .msg{min-height:22px;font-weight:700}
+    .ok{color:#047857}
+    .erro{color:#b91c1c}
+    footer{margin-top:28px;color:#64748b;font-size:13px;text-align:center}
+  </style>
+</head>
+<body>
+  <main>
+    <article class="card">
+      <h1>Denunciar Conteúdo Gerado por IA</h1>
+      <p class="muted">Última atualização: 22 de junho de 2026.</p>
+      <p>Use este formulário para denunciar arte, imagem, texto, perfil público ou outro conteúdo gerado por IA que pareça ofensivo, inadequado, enganoso ou que viole direitos de terceiros.</p>
+      <p>As denúncias são encaminhadas para análise. O prazo normal de triagem é de até 5 dias úteis.</p>
+
+      <form id="denunciaForm">
+        <label>
+          Motivo da denúncia
+          <select id="motivo" required>
+            <option value="ofensivo">Conteúdo ofensivo</option>
+            <option value="direitos">Uso indevido de imagem, marca ou direitos</option>
+            <option value="enganoso">Conteúdo enganoso</option>
+            <option value="privacidade">Privacidade ou dados pessoais</option>
+            <option value="outro">Outro motivo</option>
+          </select>
+        </label>
+
+        <label>
+          Link ou ID do conteúdo
+          <input id="referencia" maxlength="500" required placeholder="Link público, ID do pedido ou identificação da arte">
+        </label>
+
+        <label>
+          Contato do denunciante
+          <input id="contato" maxlength="160" required placeholder="WhatsApp ou e-mail para retorno">
+        </label>
+
+        <label>
+          Descrição
+          <textarea id="descricao" maxlength="2000" placeholder="Explique o que precisa ser analisado."></textarea>
+        </label>
+
+        <button id="enviarBtn" type="submit">Enviar denúncia</button>
+        <div class="msg" id="msg"></div>
+      </form>
+    </article>
+    <footer>Meu Clube FC é uma plataforma da O Mascote</footer>
+  </main>
+  <script>
+    const API_BASE = "https://api.omascote.com.br";
+    const form = document.getElementById("denunciaForm");
+    const msg = document.getElementById("msg");
+    const enviarBtn = document.getElementById("enviarBtn");
+
+    function setMsg(texto, tipo = ""){
+      msg.textContent = texto || "";
+      msg.className = `msg${tipo ? " " + tipo : ""}`;
+    }
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+
+      const motivo = document.getElementById("motivo").value;
+      const referencia = document.getElementById("referencia").value.trim();
+      const contato = document.getElementById("contato").value.trim();
+      const descricao = document.getElementById("descricao").value.trim();
+
+      if(!motivo || !referencia || !contato){
+        setMsg("Informe motivo, link ou ID do conteúdo e contato.", "erro");
+        return;
+      }
+
+      enviarBtn.disabled = true;
+      enviarBtn.textContent = "Enviando...";
+      setMsg("");
+
+      try{
+        const r = await fetch(`${API_BASE}/denuncias/conteudo-ia`, {
+          method:"POST",
+          headers:{ "Content-Type":"application/json" },
+          body:JSON.stringify({
+            tipo:"arte",
+            url:referencia,
+            motivo,
+            descricao,
+            contato,
+            origem:"pagina_publica_denuncia"
+          })
+        });
+
+        const data = await r.json().catch(() => ({}));
+        if(!r.ok || !data.ok){
+          setMsg(data.error || "Não foi possível enviar a denúncia agora.", "erro");
+          return;
+        }
+
+        setMsg(data.mensagem || "Denúncia registrada para análise.", "ok");
+        form.reset();
+      }catch(e){
+        setMsg("Erro de rede ao enviar a denúncia.", "erro");
+      }finally{
+        enviarBtn.disabled = false;
+        enviarBtn.textContent = "Enviar denúncia";
+      }
+    });
+  </script>
+</body>
+</html>

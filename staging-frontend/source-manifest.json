@@ -1,0 +1,615 @@
+{
+  "schema_version": 1,
+  "source_repository": "https://github.com/Djohnni/omascote.git",
+  "source_commit": "89e45c6bc9ba2a9643c690ffffabd3c2449b7f3f",
+  "file_count": 121,
+  "total_bytes": 8839954,
+  "tree_sha256": "6bcf69499fede8eb3d9efa02bd2cbe61cdc0162ffe2cfd0b836ea4dda4c67571",
+  "files": [
+    {
+      "path": ".github/workflows/pages.yml",
+      "bytes": 716,
+      "sha256": "f95da90c09db5ef856ca7a456783b0b10fac9af9f1a175f0faca282e17e46e24"
+    },
+    {
+      "path": ".nojekyll",
+      "bytes": 2,
+      "sha256": "7eb70257593da06f682a3ddda54a9d260d4fc514f645237f5ca74b08f8da61a6"
+    },
+    {
+      "path": ".well-known/assetlinks.json",
+      "bytes": 461,
+      "sha256": "e86462d4f6f80bd67e6983543d592d303fad803760c9d6eaf744ae2fef8020c5"
+    },
+    {
+      "path": "app.html",
+      "bytes": 1225619,
+      "sha256": "893fe44cd7f951249583023926869d9fc62383a783e639d4c44deb5aaa82ad81"
+    },
+    {
+      "path": "backend-dividir-times/dividir-times.router.js",
+      "bytes": 16953,
+      "sha256": "f75be359fa8f24e8d9e6d86241db670fda9eb4dba9897f444ffe8fe3faee7104"
+    },
+    {
+      "path": "backend-dividir-times/README.md",
+      "bytes": 2305,
+      "sha256": "adf1ad25a6d7cd7c2e72cd8f880460a4c8df6abb4145e71165e1292b73b68fdc"
+    },
+    {
+      "path": "backend-dividir-times/schema.sql",
+      "bytes": 1488,
+      "sha256": "28d2943c4fe2f7750d6a0894019c757192b59d2e81e3b794e55a90be1f160ec1"
+    },
+    {
+      "path": "banner-home-jogador.jpg",
+      "bytes": 66567,
+      "sha256": "48bb7e0405deb198e6d4f16d4759470c3b6ea9fc8b9824fde261d1cb2e8ea223"
+    },
+    {
+      "path": "CNAME",
+      "bytes": 15,
+      "sha256": "5a257f36047b7d2dd4538b8ce0530cf01952063d953a616945fe7e568c34c7ef"
+    },
+    {
+      "path": "continuar.css",
+      "bytes": 1359,
+      "sha256": "7145264c14783583a19110206ad88809497c0d78432f8b4dfb6e4c391602bcda"
+    },
+    {
+      "path": "continuar.html",
+      "bytes": 1046,
+      "sha256": "c96653a1eac585af73df8a32ec618add4227ebac0cb37b6866627f79cc9fa39b"
+    },
+    {
+      "path": "continuar.js",
+      "bytes": 9238,
+      "sha256": "f05a6ab6f97c1de47adedf3a70298b345dfe5ca6a2ed2e199833c763c5119e60"
+    },
+    {
+      "path": "denunciar-conteudo/index.html",
+      "bytes": 5721,
+      "sha256": "0b6c4a1a7c5540ec6c85540e8b2ebc9998553bebc28fabdc15a4a2ac479a32b2"
+    },
+    {
+      "path": "excluir-conta/index.html",
+      "bytes": 3456,
+      "sha256": "7782020a4abd595c41062a4e2d07b6f3f39297d6d778a5f6109ef8a7556e3595"
+    },
+    {
+      "path": "exemplo2.jpg",
+      "bytes": 105790,
+      "sha256": "fcb37fff7c43364328d1ecc736104291ee3e5ef81a590ad1ca1b264ee6d4d0e1"
+    },
+    {
+      "path": "exemplo3.jpg",
+      "bytes": 122951,
+      "sha256": "a86cdf21eb06ba8da766cef8c22f2c60d346b951bef20e11facb8f4c5cfc1199"
+    },
+    {
+      "path": "exemplo4.jpg",
+      "bytes": 129918,
+      "sha256": "39bdb06f3c287adef1a4180a504f9e2fbf3b02ba4842e2a317c178eff7e4907b"
+    },
+    {
+      "path": "exemplo5.jpg",
+      "bytes": 132817,
+      "sha256": "cda185944314a5f1f35c7e49afe58a507f8de57a57f514a2f9ad4b70ebbbdc7b"
+    },
+    {
+      "path": "favicon.ico",
+      "bytes": 45289,
+      "sha256": "0164e99b2ae3d0f7c7726cedef6b197e934d8b9f2201ab1a08c9d192770406ae"
+    },
+    {
+      "path": "fj.jpeg",
+      "bytes": 29191,
+      "sha256": "e7145a3fee8caaa3345e6d6cdc0810b3636381433f4bdc854aad863e195b37cd"
+    },
+    {
+      "path": "fm.jpeg",
+      "bytes": 28677,
+      "sha256": "f5e936043e5f261dc0ad0f65280f185245e403dcb10d96ad1c9cfa6520b7404a"
+    },
+    {
+      "path": "fs.jpeg",
+      "bytes": 26970,
+      "sha256": "5869fc3713c18f43933d875fe24a297eb39f676f0270d5e59b250554aee2ab8a"
+    },
+    {
+      "path": "ft.jpeg",
+      "bytes": 26457,
+      "sha256": "1bf18c4b3ae064f767411163d2a97c7cbac0f446901fa53d5a3591a615436cbf"
+    },
+    {
+      "path": "google-g.png",
+      "bytes": 8625,
+      "sha256": "177a776ecf94157f260f998b1afbc578c0afb51c65b51da18252b4fb621a0345"
+    },
+    {
+      "path": "google3f283dfaba05f24f.html",
+      "bytes": 55,
+      "sha256": "8c4b26acc688fe3acc73928e7e69c09ff0cbd2f0fe8912666bd2a07d0ac9b070"
+    },
+    {
+      "path": "hero.jpeg",
+      "bytes": 300544,
+      "sha256": "66520cffdbbbc9ffcb5a79119f0db6f9e079cf645cafc772ef94503185923607"
+    },
+    {
+      "path": "iA4TUBE.png",
+      "bytes": 22471,
+      "sha256": "3e3ac83658b7f3ed2635b90ce06cad1ed2c2b32f9a0c8d1c1dfa4802b9eb8fe3"
+    },
+    {
+      "path": "icons/desktop.ini",
+      "bytes": 328,
+      "sha256": "b00e3f06ca02194e528b0c16a3cc53d86e727ba16cdfb4c8bdc0c0cea781cf71"
+    },
+    {
+      "path": "icons/icon-192.png",
+      "bytes": 7548,
+      "sha256": "8a3d3e97f564eab23261d978811c5b3c02db53970abad328b251fe5c8da3db62"
+    },
+    {
+      "path": "icons/icon-512.png",
+      "bytes": 22471,
+      "sha256": "3e3ac83658b7f3ed2635b90ce06cad1ed2c2b32f9a0c8d1c1dfa4802b9eb8fe3"
+    },
+    {
+      "path": "index.html",
+      "bytes": 8338,
+      "sha256": "1fec2e78bebb37658b617ee3d532efb40cff3df0d25853872794327d659b6cce"
+    },
+    {
+      "path": "manifest.json",
+      "bytes": 827,
+      "sha256": "1596d265b8e90d45d76522f5671359634bc38bb5c8ab82e048a42e1ee6acb992"
+    },
+    {
+      "path": "og-image.jpg",
+      "bytes": 85638,
+      "sha256": "bfd57d17f861ae76add197ef22a9708e6ba884c7025f751d73a315e0ec4b4dae"
+    },
+    {
+      "path": "opengraph.jpg",
+      "bytes": 85638,
+      "sha256": "bfd57d17f861ae76add197ef22a9708e6ba884c7025f751d73a315e0ec4b4dae"
+    },
+    {
+      "path": "politica-de-privacidade/index.html",
+      "bytes": 3745,
+      "sha256": "614137360bf1b85d8d5e57283e62ad4e7447f3d3ff8a2bf3c2b5a6583dbc177b"
+    },
+    {
+      "path": "produtos/.gitkeep",
+      "bytes": 2,
+      "sha256": "7eb70257593da06f682a3ddda54a9d260d4fc514f645237f5ca74b08f8da61a6"
+    },
+    {
+      "path": "produtos/cenarios/resultado_atual_v1.png",
+      "bytes": 2037708,
+      "sha256": "b13fb87f3a9075013d2aa26e1d33afdeecc7b15042e1d801e1794d5943d54c50"
+    },
+    {
+      "path": "produtos/cenarios/resultado_chuva_v1.jpg",
+      "bytes": 108457,
+      "sha256": "139dd0b124b4029bc2530539f8a6fca5221e5c831ce97799bae60f324886a3cf"
+    },
+    {
+      "path": "produtos/cenarios/resultado_estadio_grande_dia_v1.jpg",
+      "bytes": 85975,
+      "sha256": "d368c6bfa06c4c0c3fbbcc325473508f370512c2907a756894e7af40467418e5"
+    },
+    {
+      "path": "produtos/cenarios/resultado_estadio_varzea_dia_v1.jpg",
+      "bytes": 76883,
+      "sha256": "9a056d3527322b52e630b57d41247c29ded120bd96869d1381c8f67b01c2d83b"
+    },
+    {
+      "path": "produtos/cenarios/resultado_fumaca_v1.jpg",
+      "bytes": 71501,
+      "sha256": "21690b0330a4a13e1e7b9bd6ba895533b271524a3097c7f74c688859ebde1309"
+    },
+    {
+      "path": "produtos/cenarios/resultado_futsal_v1.jpg",
+      "bytes": 78297,
+      "sha256": "ff9632cdc7f46c82a79dc6a7012a960498a513b2ae02ac29eeb5af918a0a46fd"
+    },
+    {
+      "path": "produtos/cenarios/resultado_noite_v1.jpg",
+      "bytes": 68321,
+      "sha256": "af6994d40839faf3cdb287a002938bc4cb4ccfed363c23f64721020993f63b48"
+    },
+    {
+      "path": "produtos/cenarios/resultado_sol_v1.jpg",
+      "bytes": 79901,
+      "sha256": "9a622372dab6d89435ef6a8b9c1a424a1494b1b7ca7663d2d32884defb7de581"
+    },
+    {
+      "path": "produtos/contratacao.jpg",
+      "bytes": 35113,
+      "sha256": "d8c04899995994441bc3ef1f277618e856e7930fbd320b34f907b896b501603f"
+    },
+    {
+      "path": "produtos/escalacao.jpg",
+      "bytes": 29569,
+      "sha256": "16dd56d0c7aa50f15c88c0c3f5d31cf47feb90db842d95ad2521eed05bb02239"
+    },
+    {
+      "path": "produtos/escudo3d.jpg",
+      "bytes": 17534,
+      "sha256": "70cbbefe9bf9f9d0bdb94680e4ed40c09f5d6c1e69bc045b74c88effc933bd52"
+    },
+    {
+      "path": "produtos/jogador_escudo.jpg",
+      "bytes": 35594,
+      "sha256": "036ef6ca6e5a414bf726ac7dbcf1a330c83adbf6119fbc65d2aa8e26d0929ea8"
+    },
+    {
+      "path": "produtos/mascote_uniforme.jpg",
+      "bytes": 59331,
+      "sha256": "b3602981ea8d03d686d1f2360f23369f743528fd0fd6e87dfef99f0cf54f47ea"
+    },
+    {
+      "path": "produtos/patrocinador.jpg",
+      "bytes": 30280,
+      "sha256": "8fea060b0d56e3b99cd5cdeb9cee22c2ce2a63b9d4d34b5da2586bcbbf1d93e9"
+    },
+    {
+      "path": "produtos/proximo_jogo_jogador.jpg",
+      "bytes": 28300,
+      "sha256": "8a6a65effdc0caa2ae5a0c0165d022bee70a95d55d347a2528059a6c54e64b6f"
+    },
+    {
+      "path": "produtos/proximo_jogo.jpg",
+      "bytes": 38083,
+      "sha256": "72abb413c471534373ad993b6daaab8522aeffc196886d12db73defbc21fe99d"
+    },
+    {
+      "path": "produtos/resultado_jogador.jpg",
+      "bytes": 33979,
+      "sha256": "d29384975eb3a4eb710beda91b917f5e511152155d19db9a2191a8c1b1bffd61"
+    },
+    {
+      "path": "produtos/resultado.jpg",
+      "bytes": 36913,
+      "sha256": "15ddb3f4eb96e977b34c62741f6d2fdac98420af42a0634c21f043d77e4ee23f"
+    },
+    {
+      "path": "produtos/tutorial_instalar_app.jpg",
+      "bytes": 77176,
+      "sha256": "9b751450bb9659d7cfc2ee89e49e9910e4f047df0c1830ee0d5122fa1ee63d73"
+    },
+    {
+      "path": "radar-amistosos/capturas/01-entrada-desktop-1366.png",
+      "bytes": 90062,
+      "sha256": "1f9a36a3cc09b7a78f02cca5d3ed68c92b2b853370ccf7c046d3ca2259f44ad8"
+    },
+    {
+      "path": "radar-amistosos/capturas/02-elegibilidade-mobile-390.png",
+      "bytes": 36489,
+      "sha256": "561cc6a43b8595151d84ee9a67ccb6b528d718123d86f2ab9ef9c9ee249198ba"
+    },
+    {
+      "path": "radar-amistosos/capturas/03-rascunho-ia-desktop-1024.png",
+      "bytes": 76865,
+      "sha256": "41ff4daa7ef3b7bf80cf7c86d353bad065ccda397a86c3811974c9dff6475941"
+    },
+    {
+      "path": "radar-amistosos/capturas/04-disponibilidade-mobile-390.png",
+      "bytes": 35450,
+      "sha256": "bc9620d2a0659cce6e3da5e86b3505d2657339dd5dcbbfe39ef0a0ca7576a857"
+    },
+    {
+      "path": "radar-amistosos/capturas/05-lista-disponibilidades-desktop-1366.png",
+      "bytes": 83572,
+      "sha256": "8ffe6dc68d6105a20b6c9e06a4b1d486d06bb09a4dddb1f1b2ea03ac23e348d2"
+    },
+    {
+      "path": "radar-amistosos/capturas/06-times-proximos-desktop-1366.png",
+      "bytes": 97911,
+      "sha256": "0c8f91188fc1aba87e31e6813e902c80059b8ec94c79c8bbc3375e685a865f40"
+    },
+    {
+      "path": "radar-amistosos/capturas/07-times-proximos-mobile-390.png",
+      "bytes": 35811,
+      "sha256": "eaae0487185884705270fb2712373d5abb448d72e659ab9f83a844a834e99ab6"
+    },
+    {
+      "path": "radar-amistosos/capturas/08-filtros-mobile-390.png",
+      "bytes": 52379,
+      "sha256": "76680c0be9c0bbeb9a986ae328be90c03264a0181b38ee8ab6d9ea9b0890f4bc"
+    },
+    {
+      "path": "radar-amistosos/capturas/09-detalhe-adversario-mobile-390.png",
+      "bytes": 55576,
+      "sha256": "d3293bd63977521820b6a0bc1a598f0646526e91e2ecf7f6a413d07770fc1a95"
+    },
+    {
+      "path": "radar-amistosos/capturas/10-nenhum-time-compativel-mobile-390.png",
+      "bytes": 51226,
+      "sha256": "677162ba7f655bbb8716b794993e46688f2886bb5e43be8e408e55d83c78d6b1"
+    },
+    {
+      "path": "radar-amistosos/capturas/11-busca-simplificada-mobile-390.png",
+      "bytes": 33906,
+      "sha256": "bba1c3cc929578f773f93fa2cc6a930a389e71d4e59a9a00baad213109ae1a55"
+    },
+    {
+      "path": "radar-amistosos/capturas/12-cartao-time-simplificado-mobile-390.png",
+      "bytes": 34679,
+      "sha256": "391371b81dfa61bbe28dce500f916bbb5aea511384bd0dd698c8ca9a6cc3556a"
+    },
+    {
+      "path": "radar-amistosos/capturas/13-montar-convite-mobile-390.png",
+      "bytes": 32542,
+      "sha256": "9b0183bfe2ca206dab1120cee5a150281fca435963a0e8bee15af816fa7bccaa"
+    },
+    {
+      "path": "radar-amistosos/capturas/14-convite-recebido-mobile-390.png",
+      "bytes": 32663,
+      "sha256": "e228ed25b36782aa58d7bc5abe6d662504e5b3422eeea10ff2707ef8507c01ed"
+    },
+    {
+      "path": "radar-amistosos/capturas/15-contraproposta-mobile-390.png",
+      "bytes": 31240,
+      "sha256": "bba1aab7cf866890ae6c87b2514fe482b0a6a2e30699275ec8608677a8ac554a"
+    },
+    {
+      "path": "radar-amistosos/capturas/16-central-convites-mobile-390.png",
+      "bytes": 32032,
+      "sha256": "bb93ab1fe3ec2ad7aa36ac9933c4e03a671485239784e960cc5d61f90819f624"
+    },
+    {
+      "path": "radar-amistosos/capturas/17-amistoso-confirmado-mobile-390.png",
+      "bytes": 33245,
+      "sha256": "61309ea7e10c1d5694527dd1ee5575cbae50e396383fc1b0177417dd61636d46"
+    },
+    {
+      "path": "radar-amistosos/capturas/18-central-partidas-mobile-390.png",
+      "bytes": 35459,
+      "sha256": "a14bc43faeb6c4b796497aa6624a02400ddb48af56a0101ef22e3c0ad51e0639"
+    },
+    {
+      "path": "radar-amistosos/capturas/19-central-partida-contato-mobile-390.png",
+      "bytes": 39529,
+      "sha256": "e63b7f8b7450a0798ba7858de802627b3f23107cae9c827a64750d293e3c3bc2"
+    },
+    {
+      "path": "radar-amistosos/capturas/20-confirmacao-aguardando-mobile-390.png",
+      "bytes": 37409,
+      "sha256": "dc16de2c9dcc9e554d9da9748ff3f5d7d722526ff627b2373ce615cc1fd2ecbb"
+    },
+    {
+      "path": "radar-amistosos/capturas/21-cancelar-partida-mobile-390.png",
+      "bytes": 32566,
+      "sha256": "78a8770d714e1c2f7d7f28192cdea4e4bd124ac8015b983f62867f5fce3a6e13"
+    },
+    {
+      "path": "radar-amistosos/capturas/22-partida-cancelada-mobile-390.png",
+      "bytes": 21050,
+      "sha256": "fd5610972adb45ee272ae04f1f68bc5e461837629005111ecd4dc17b7c6bcc3f"
+    },
+    {
+      "path": "radar-amistosos/capturas/23-informar-placar-mobile-390.png",
+      "bytes": 27579,
+      "sha256": "4a111e466c33f6707da6e5e24b205cfd971e423621c3e94300e910f66ddb5a37"
+    },
+    {
+      "path": "radar-amistosos/capturas/24-confirmar-placar-mobile-390.png",
+      "bytes": 30766,
+      "sha256": "1fb5fb239508828449ffce0c69c5fbc1f90485bed9de867e3837a6c80e792a92"
+    },
+    {
+      "path": "radar-amistosos/capturas/25-placar-divergente-mobile-390.png",
+      "bytes": 31235,
+      "sha256": "97287ddbf154bfe3d59c8497b2eb8320914058b03781803879b695da3069d8c4"
+    },
+    {
+      "path": "radar-amistosos/capturas/26-historico-amistosos-mobile-390.png",
+      "bytes": 32158,
+      "sha256": "3ec6ee8dad53d9c3509b8239ab89338e14740532a06490f649884369ca2fbb01"
+    },
+    {
+      "path": "radar-amistosos/capturas/27-historico-confrontos-mobile-390.png",
+      "bytes": 34016,
+      "sha256": "fd0bf7d690f79cca6f6072c07c06ddab38e9f6e5182c0977ca794ea8e3d68a5a"
+    },
+    {
+      "path": "radar-amistosos/capturas/28-avaliar-adversario-mobile-390.png",
+      "bytes": 38955,
+      "sha256": "134465403d03c7416034721f26cf3c128c32be4676589434da3eaee120eee745"
+    },
+    {
+      "path": "radar-amistosos/capturas/29-reputacao-time-mobile-390.png",
+      "bytes": 31944,
+      "sha256": "7e23587abbb7a44467482338e46f75a228604eb3ed5bf14261768c13b7c33af6"
+    },
+    {
+      "path": "radar-amistosos/capturas/30-seguranca-privacidade-mobile-390.png",
+      "bytes": 37928,
+      "sha256": "3a2ae8ee13549586d19b5b568207c95820657e1b69db6a43f4626653c68cb371"
+    },
+    {
+      "path": "radar-amistosos/capturas/31-denunciar-time-mobile-390.png",
+      "bytes": 32504,
+      "sha256": "2993da8fd2d3c9e55429f00baac252d55beecc8321cdb79f234af1b9be394669"
+    },
+    {
+      "path": "radar-amistosos/capturas/32-fila-moderacao-mobile-390.png",
+      "bytes": 25763,
+      "sha256": "e8f1c556b3e13de943963dae7de32d056604b015ca9053ed107e731dbdb8f122"
+    },
+    {
+      "path": "radar-amistosos/capturas/33-privacidade-saida-radar-mobile-390.png",
+      "bytes": 24525,
+      "sha256": "89320b808af3f4ac91433a354cf7a5e49abb6b66fa65b12d6a8a74eb89319b38"
+    },
+    {
+      "path": "radar-amistosos/capturas/34-radar-no-perfil-mobile-390.png",
+      "bytes": 34187,
+      "sha256": "a0f8a0e403437563c491399ab36302dacf6f8bf97b39ec1cea776fdb1a028a64"
+    },
+    {
+      "path": "radar-amistosos/capturas/35-radar-real-home-mobile-390.png",
+      "bytes": 36336,
+      "sha256": "2aef24820a40a280562d2b10ff302464c2c58f970c84c2048f338bc52d137582"
+    },
+    {
+      "path": "radar-amistosos/capturas/36-partida-real-mobile-390.png",
+      "bytes": 20293,
+      "sha256": "df010ec9310756d8300487038e37608d84ea6c4567ba98369aacb3458ac13836"
+    },
+    {
+      "path": "radar-amistosos/capturas/37-historico-real-mobile-390.png",
+      "bytes": 18532,
+      "sha256": "79535785d328fe3ea5943ce7692c70a465d27fbb385136321f81299c5b3b15d9"
+    },
+    {
+      "path": "radar-amistosos/capturas/38-moderacao-real-desktop-1366.png",
+      "bytes": 29706,
+      "sha256": "4cdaa03cbb0076d22d89697b4045173bec4efd29e4ce2b8f87d706527278c9c6"
+    },
+    {
+      "path": "radar-amistosos/demo.html",
+      "bytes": 1189,
+      "sha256": "2d759cc1a229d932be5e8f23df1d58f9af5a45cb3dc9220c1e03b43be9ada8f2"
+    },
+    {
+      "path": "radar-amistosos/local-preview-server.js",
+      "bytes": 2875,
+      "sha256": "90ebc509eae77dc6b3da494294df74fd056c110d9614bb5001113dfb547024a7"
+    },
+    {
+      "path": "radar-amistosos/radar-api.js",
+      "bytes": 16815,
+      "sha256": "3741ff77c8c21750328209a2d455e0852298cb118c17633f84a1849ff0afbf21"
+    },
+    {
+      "path": "radar-amistosos/radar-core.js",
+      "bytes": 35409,
+      "sha256": "7816a59593e4d77478c07ce7a562a17f6865515ef6e44e307ab4f9bb95cf7e15"
+    },
+    {
+      "path": "radar-amistosos/radar-demo-data.js",
+      "bytes": 19290,
+      "sha256": "81a17c413a01c114dc44e60c375e186577dcb18cd2bdeecd23acecb09cc9fbb8"
+    },
+    {
+      "path": "radar-amistosos/radar-live.css",
+      "bytes": 8449,
+      "sha256": "649dec6b22c40e98bb52da1873dd9d9fb9a93369e05399b8d09be958d29517d4"
+    },
+    {
+      "path": "radar-amistosos/radar-live.js",
+      "bytes": 44057,
+      "sha256": "92c4eda28ecf931fdeddeb742b93675344c9a6ec3edb036580beb38ee217420d"
+    },
+    {
+      "path": "radar-amistosos/radar-routes.js",
+      "bytes": 7058,
+      "sha256": "1643c9e08c095e97a55c6eda40f27297fd8b12bf5fc6495bb2bef2a0faefd62b"
+    },
+    {
+      "path": "radar-amistosos/radar-ui.js",
+      "bytes": 125226,
+      "sha256": "785ea8851eaa1859f3feee1f713571994ba7c4fe4ff232e81c97983c14b1dd48"
+    },
+    {
+      "path": "radar-amistosos/radar.css",
+      "bytes": 99072,
+      "sha256": "21ae9cd547eca5c769796507018e5083b854f795a97ef86d7496f7a51e618ce5"
+    },
+    {
+      "path": "radar-amistosos/REAL_INTEGRATION.md",
+      "bytes": 2380,
+      "sha256": "3049f72cb16995ec5f281f34d5d6b49ab74f1aa4ebbf61ee53e34ee8bfefc74d"
+    },
+    {
+      "path": "radar-amistosos/RELEASE_CANDIDATE_VALIDATION.md",
+      "bytes": 2089,
+      "sha256": "f156d1c010a64dd87ced1fac7db3f40d1230eb9d1d047f63065f77304f7f8bf0"
+    },
+    {
+      "path": "radar-amistosos/test-radar-api.js",
+      "bytes": 3243,
+      "sha256": "c290608d37c5c87c97ce5e929ec8fb2575939dc87877d9f7ee1f8ca8eb69edb4"
+    },
+    {
+      "path": "radar-amistosos/test-release-candidate.js",
+      "bytes": 2339,
+      "sha256": "79a6fbedf531dca44bfda45ca76873c49e2a37ce15e202051543f2f5a4d68442"
+    },
+    {
+      "path": "robots.txt",
+      "bytes": 146,
+      "sha256": "57480b3117cf84f2eeb7b71d86ba186a8b8324a1431867ca76941e27b253162a"
+    },
+    {
+      "path": "script.js",
+      "bytes": 513,
+      "sha256": "56cfc8cb561bc3152ec8d4dc7f57dab100fbc392cbc03ef2bcfca567db6f3b70"
+    },
+    {
+      "path": "sitemap.xml",
+      "bytes": 921,
+      "sha256": "5cf9004a97d0b556693e34fcfce231b008588662c55240f5b1f44e740db16769"
+    },
+    {
+      "path": "stories/1.jpg",
+      "bytes": 193844,
+      "sha256": "b1e178d18358d879b6f5a85a53a92e3ac60952d568e4968be1a70c9ce7600d43"
+    },
+    {
+      "path": "stories/2.jpg",
+      "bytes": 198241,
+      "sha256": "e0bba311bc89208206e754047f54fdb30b6268a89fa20a4a7e970c225c36fe0b"
+    },
+    {
+      "path": "stories/3.jpg",
+      "bytes": 189747,
+      "sha256": "a0b122c786f1f83a13ba2be9862a3a0cc3a401d360cbd047df1cd808484d7106"
+    },
+    {
+      "path": "stories/4.jpg",
+      "bytes": 118440,
+      "sha256": "9537dbaa290bfcde0be4b7a8aea7b62cabc563e82506af3fa512a9bcf5b6b414"
+    },
+    {
+      "path": "story/1.jpg",
+      "bytes": 193844,
+      "sha256": "b1e178d18358d879b6f5a85a53a92e3ac60952d568e4968be1a70c9ce7600d43"
+    },
+    {
+      "path": "story/2.jpg",
+      "bytes": 198241,
+      "sha256": "e0bba311bc89208206e754047f54fdb30b6268a89fa20a4a7e970c225c36fe0b"
+    },
+    {
+      "path": "story/3.jpg",
+      "bytes": 189747,
+      "sha256": "a0b122c786f1f83a13ba2be9862a3a0cc3a401d360cbd047df1cd808484d7106"
+    },
+    {
+      "path": "story/4.jpg",
+      "bytes": 118440,
+      "sha256": "9537dbaa290bfcde0be4b7a8aea7b62cabc563e82506af3fa512a9bcf5b6b414"
+    },
+    {
+      "path": "styles.css",
+      "bytes": 8412,
+      "sha256": "36cee466671f955e52dbcfbfdd08d607d8c9cb799e7edc60c83f248f9093815b"
+    },
+    {
+      "path": "sw.js",
+      "bytes": 392,
+      "sha256": "975f3fc73ded726edbc173d902b980eb44340ba37b7fdefe7e2aa0ead3f38ba7"
+    },
+    {
+      "path": "termos-de-uso/index.html",
+      "bytes": 3296,
+      "sha256": "bbb41b8f3a78d594dd1577ca001cd3504ccc2a15c8708ab0abc62eb352db37e5"
+    }
+  ]
+}

@@ -1,19 +1,10 @@
 "use strict";
 
 const express = require("express");
+const { clientIp } = require("../security/client-ip");
 const { isRadarIdentityError } = require("./radar-identity.errors");
 const { createFriendlySearchRepository } = require("./friendly-search.repository");
 const { createFriendlySearchService } = require("./friendly-search.service");
-
-function clientIp(req, config) {
-  const hops = Number(config?.instagramTrustedProxyHops || 0);
-  const forwarded = String(req.get("X-Forwarded-For") || "")
-    .split(",")
-    .map(value => value.trim())
-    .filter(Boolean);
-  if (hops > 0 && forwarded.length >= hops) return forwarded[forwarded.length - hops];
-  return req.ip || req.socket?.remoteAddress || "unknown";
-}
 
 function createFriendlySearchRouter({
   config,

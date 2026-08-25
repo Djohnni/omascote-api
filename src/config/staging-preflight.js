@@ -60,6 +60,9 @@ function validateStagingEnvironment(env = process.env) {
   if (!Number.isInteger(proxyHops) || proxyHops < 1 || proxyHops > 5) {
     errors.push("RADAR_TRUST_PROXY_HOPS must match the staging proxy chain (1-5)");
   }
+  if (String(env.RADAR_TRUST_PROXY_PROVIDER || "").trim().toLowerCase() !== "render") {
+    errors.push("RADAR_TRUST_PROXY_PROVIDER must match the staging edge provider");
+  }
 
   const allowlist = String(env.RADAR_PILOT_ACCOUNT_ALLOWLIST || "")
     .split(",").map(item => item.trim()).filter(Boolean);

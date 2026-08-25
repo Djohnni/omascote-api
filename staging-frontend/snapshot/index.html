@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Meu Clube FC — Login</title>
+<meta name="description" content="Meu Clube FC é uma plataforma para clubes com perfil do time, elenco, escalação, patrocinadores, ranking, galeria, jogos, resultados e artes automáticas.">
+<meta property="og:title" content="Meu Clube FC — Plataforma para clubes de futebol">
+<meta property="og:description" content="Perfil do time, elenco, escalação, patrocinadores, ranking, galeria, jogos, resultados e artes automáticas.">
+<meta name="twitter:title" content="Meu Clube FC — Plataforma para clubes de futebol">
+<meta name="twitter:description" content="Perfil do time, elenco, escalação, patrocinadores, ranking, galeria, jogos, resultados e artes automáticas.">
+
+<style>
+body{
+  font-family:Arial,Helvetica,sans-serif;
+  background:#0b0f19;
+  color:#fff;
+  margin:0;
+  display:flex;
+  min-height:100vh;
+  align-items:center;
+  justify-content:center;
+  padding:24px
+}
+
+.card{
+  width:100%;
+  max-width:420px;
+  background:#121a2a;
+  border:1px solid #23304d;
+  border-radius:14px;
+  padding:22px
+}
+
+h1{margin:0 0 6px;font-size:22px}
+p{margin:0 0 18px;opacity:.85}
+label{display:block;margin:10px 0 6px;font-size:13px;opacity:.9}
+
+input{
+  width:100%;
+  padding:12px;
+  border-radius:10px;
+  border:1px solid #2b3a5e;
+  background:#0b1222;
+  color:#fff;
+  outline:none
+}
+
+input:focus{border-color:#4f7cff}
+
+button{
+  width:100%;
+  margin-top:14px;
+  padding:12px;
+  border:0;
+  border-radius:10px;
+  background:#4f7cff;
+  color:#fff;
+  font-weight:700;
+  cursor:pointer
+}
+
+button:disabled{opacity:.6;cursor:not-allowed}
+
+.msg{margin-top:12px;font-size:13px;line-height:1.35}
+.err{color:#ff8b8b}
+.ok{color:#86ffb1}
+.row{display:flex;gap:10px}
+.hint{font-size:12px;opacity:.75;margin-top:6px}
+.authVisitanteBody{
+  padding:18px;
+  background:#f8fafc;
+  color:#111827;
+}
+
+.authPromoBox{
+  background:linear-gradient(180deg,#ecfdf3,#ffffff);
+  border:1px solid #bbf7d0;
+  border-radius:18px;
+  padding:16px;
+  text-align:center;
+  margin-bottom:14px;
+}
+
+.authPromoBox h2{
+  margin:0;
+  font-size:24px;
+  font-weight:950;
+  color:#14532d;
+}
+
+.authPromoBox p{
+  margin:8px 0 0;
+  color:#334155;
+  font-weight:800;
+  font-size:14px;
+}
+
+.authPreco{
+  margin-top:10px;
+  font-size:18px;
+  font-weight:950;
+}
+
+.authPreco .old{
+  color:#64748b;
+  text-decoration:line-through;
+  margin-right:8px;
+}
+
+.authPreco .new{
+  color:#16a34a;
+  font-size:28px;
+}
+
+.authVisitanteBody label{
+  color:#334155 !important;
+  font-weight:900;
+  font-size:13px;
+  margin-top:10px;
+}
+
+.authVisitanteBody input{
+  width:100%;
+  margin-top:6px;
+  background:#fff !important;
+  color:#111827 !important;
+  border:1px solid #d1d5db !important;
+  box-shadow:none !important;
+}
+
+.authVisitanteMsg{
+  margin-top:10px;
+  font-size:13px;
+  font-weight:800;
+  color:#64748b;
+  text-align:center;
+}
+
+.authVisitanteMsg.err{
+  color:#dc2626;
+}
+
+.authVisitanteMsg.ok{
+  color:#16a34a;
+}
+
+</style>
+
+</head>
+<body>
+
+<div class="card">
+  <h1 id="titulo">Entrar</h1>
+<button type="button" onclick="toggleMode()" style="margin-bottom:10px;background:#23304d">Criar conta</button>
+  <p>Acesse sua conta pelo WhatsApp e senha.</p>
+
+  <form id="loginForm">
+
+<label for="nome_time" id="label_nome" style="display:none">Nome do time</label>
+<input id="nome_time" placeholder="Nome do seu time" style="display:none" />
+
+    <label for="whatsapp">WhatsApp (somente números)</label>
+    <input id="whatsapp" inputmode="numeric" autocomplete="username" placeholder="15991120599" required />
+
+    <label for="senha">Senha</label>
+    <input id="senha" type="password" autocomplete="current-password" placeholder="••••••••" required />
+
+    <button id="btn" type="submit">Entrar</button>
+
+    <div class="msg" id="msg"></div>
+    <div class="hint">Dica: se der erro, confirme seu número e sua senha.</div>
+
+  </form>
+</div>
+
+<script>
+
+const API_BASE = "https://api.omascote.com.br";
+
+// A raiz sempre abre o app sem perder a atribuicao valida do anuncio.
+(function redirecionarParaApp(){
+  const CHAVES_ENTRADA_PERMITIDAS = new Set([
+    "fbclid",
+    "utm_source",
+    "utm_medium",
+    "utm_campaign",
+    "utm_id",
+    "utm_term",
+    "utm_content",
+    "utm_source_platform",
+    "utm_creative_format",
+    "utm_marketing_tactic",
+    "produto"
+  ]);
+  const CONTROLES_RE = /[\u0000-\u001f\u007f]/;
+
+  try{
+    const entrada = new URL(window.location.href);
+    const destino = new URL("/app.html", entrada.origin);
+
+    for(const [chaveOriginal, valorOriginal] of entrada.searchParams){
+      const chave = String(chaveOriginal || "").toLowerCase();
+      if(!CHAVES_ENTRADA_PERMITIDAS.has(chave)) continue;
+
+      const valorBruto = String(valorOriginal || "");
+      const valor = valorBruto.trim();
+      const limite = chave === "produto" ? 64 : 300;
+      if(!valor || valor.length > limite || CONTROLES_RE.test(valorBruto)) continue;
+      if(chave === "produto" && !/^[a-z0-9_-]+$/i.test(valor)) continue;
+
+      destino.searchParams.set(chave, valor);
+    }
+
+    const ancora = entrada.hash.slice(1);
+    if(ancora && ancora.length <= 200 && !CONTROLES_RE.test(ancora)){
+      destino.hash = ancora;
+    }
+
+    window.location.replace(destino.href);
+  }catch(e){
+    window.location.replace("/app.html");
+  }
+})();
+
+let modoCadastro = false;
+
+function toggleMode(){
+  modoCadastro = !modoCadastro;
+
+  document.getElementById("titulo").textContent = modoCadastro ? "Criar conta" : "Entrar";
+  document.getElementById("label_nome").style.display = modoCadastro ? "block" : "none";
+  document.getElementById("nome_time").style.display = modoCadastro ? "block" : "none";
+  document.getElementById("btn").textContent = modoCadastro ? "Criar conta" : "Entrar";
+}
+
+const form = document.getElementById("loginForm");
+const msgEl = document.getElementById("msg");
+const btn = document.getElementById("btn");
+
+function setMsg(text, type){
+  msgEl.textContent = text || "";
+  msgEl.className = "msg " + (type || "");
+}
+
+function onlyDigits(s){
+  return (s||"").replace(/\D+/g,"");
+}
+
+form.addEventListener("submit", async (e) => {
+
+  e.preventDefault();
+  setMsg("", "");
+
+  const whatsapp = onlyDigits(document.getElementById("whatsapp").value);
+  const senha = document.getElementById("senha").value;
+
+  if (!whatsapp || whatsapp.length < 10) {
+    setMsg("Digite um WhatsApp válido (somente números).", "err");
+    return;
+  }
+
+  if (!senha || senha.length < 3) {
+    setMsg("Digite sua senha.", "err");
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = "Entrando...";
+
+  try {
+
+    const url = modoCadastro ? "/auth/register" : "/auth/login";
+
+const r = await fetch(`${API_BASE}${url}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(modoCadastro
+  ? { nome_time: document.getElementById("nome_time").value, whatsapp, senha }
+  : { whatsapp, senha }
+)
+    });
+
+    const data = await r.json().catch(() => ({}));
+
+    if (!r.ok || !data.ok) {
+      setMsg(
+  data.error ||
+  (modoCadastro
+    ? "Não foi possível criar a conta. Tente outro número."
+    : "Não foi possível entrar. Verifique seus dados."
+  ),
+  "err"
+);
+      btn.disabled = false;
+      btn.textContent = "Entrar";
+      return;
+    }
+
+    // salva token e dados básicos
+    localStorage.setItem("omascote_token", data.token);
+    localStorage.setItem("omascote_nome_time", data.nome_time || "");
+    localStorage.setItem("omascote_plano", String(data.plano ?? ""));
+    localStorage.setItem("omascote_usados", String(data.usados_no_ciclo ?? ""));
+
+    setMsg(modoCadastro ? "Conta criada com sucesso! Entrando no sistema…" : "Login realizado! Indo para o painel…", "ok");
+
+    setTimeout(() => window.location.href = "app.html", 400);
+
+  } catch (err) {
+
+    setMsg("Erro de rede. Tente novamente.", "err");
+    btn.disabled = false;
+    btn.textContent = "Entrar";
+
+  }
+
+});
+
+</script>
+
+</body>
+</html>
+
+

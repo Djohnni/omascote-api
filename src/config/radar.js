@@ -201,6 +201,9 @@ function createRadarConfig(env = process.env) {
         : 0,
       5
     ),
+    trustedProxyProvider: ["render"].includes(
+      String(env.RADAR_TRUST_PROXY_PROVIDER || "").trim().toLowerCase()
+    ) ? String(env.RADAR_TRUST_PROXY_PROVIDER).trim().toLowerCase() : null,
     trustedProxyHops: Math.min(
       Number.isInteger(Number(env.RADAR_TRUST_PROXY_HOPS))
         ? Math.max(Number(env.RADAR_TRUST_PROXY_HOPS), 0)

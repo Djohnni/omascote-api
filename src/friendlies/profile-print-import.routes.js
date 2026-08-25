@@ -6,6 +6,7 @@ const os = require("node:os");
 const path = require("node:path");
 const express = require("express");
 const multer = require("multer");
+const { clientIp } = require("../security/client-ip");
 const { RadarIdentityError, isRadarIdentityError } = require("./radar-identity.errors");
 const { validateIdempotencyKey } = require("./profile-print-import.schemas");
 const { processProfilePrintImage, eraseBuffer, FORMATS } = require("./profile-print-import.image");
@@ -22,16 +23,6 @@ function createService({ pool, config, importService, provider, fetchImpl }) {
     provider: aiProvider,
     config
   });
-}
-
-function clientIp(req, config) {
-  const hops = Number(config?.instagramTrustedProxyHops || 0);
-  const forwarded = String(req.get("X-Forwarded-For") || "")
-    .split(",")
-    .map(value => value.trim())
-    .filter(Boolean);
-  if (hops > 0 && forwarded.length >= hops) return forwarded[forwarded.length - hops];
-  return req.ip || req.socket?.remoteAddress || "unknown";
 }
 
 async function cleanupRequest(req) {
