@@ -523,6 +523,18 @@ function createRadarConfig(env = process.env) {
     databaseSsl: parseBoolean(env.DATABASE_SSL, false),
     databaseSslRejectUnauthorized:
       parseBoolean(env.DATABASE_SSL_REJECT_UNAUTHORIZED, true),
+    databaseSslCa: (() => {
+      const encoded = String(env.DATABASE_SSL_CA_B64 || "").trim();
+      if (!encoded) return null;
+      try {
+        const decoded = Buffer.from(encoded, "base64").toString("utf8").trim();
+        return /^-----BEGIN CERTIFICATE-----[\s\S]+-----END CERTIFICATE-----$/.test(decoded)
+          ? decoded
+          : null;
+      } catch {
+        return null;
+      }
+    })(),
     databaseConnectionTimeoutMs:
       parseOptionalPositiveInteger(env.DATABASE_CONNECTION_TIMEOUT_MS) || 5_000
   };
