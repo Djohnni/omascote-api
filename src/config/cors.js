@@ -19,11 +19,17 @@ function normalizeOrigin(value) {
 }
 
 function createCorsOriginAllowlist(env = process.env) {
+  const includeProduction = !["0", "false", "off", "no"].includes(
+    String(env.OMASCOTE_CORS_INCLUDE_PRODUCTION_ORIGINS || "true").trim().toLowerCase()
+  );
   const configured = String(env.OMASCOTE_CORS_ORIGINS || "")
     .split(",")
     .map(normalizeOrigin)
     .filter(Boolean);
-  return Object.freeze([...new Set([...PRODUCTION_ORIGINS, ...configured])]);
+  return Object.freeze([...new Set([
+    ...(includeProduction ? PRODUCTION_ORIGINS : []),
+    ...configured
+  ])]);
 }
 
 module.exports = { PRODUCTION_ORIGINS, normalizeOrigin, createCorsOriginAllowlist };

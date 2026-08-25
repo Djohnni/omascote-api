@@ -83,12 +83,12 @@ function assertLocalDataPath(value) {
   return resolved;
 }
 
-function writeLocalAccounts(dataDirectory, password) {
+function writeLocalAccounts(dataDirectory, password, accountList = accounts) {
   fs.mkdirSync(dataDirectory, { recursive: true });
   const now = new Date().toISOString();
   const passwordHash = bcrypt.hashSync(password, 8);
   const clients = {};
-  for (const account of accounts) {
+  for (const account of accountList) {
     clients[account.login] = {
       cliente_id: account.accountReference,
       perfil_id: account.profileId,
@@ -126,8 +126,8 @@ function writeLocalAccounts(dataDirectory, password) {
   fs.writeFileSync(path.join(dataDirectory, "clientes.json"), JSON.stringify(clients, null, 2), "utf8");
 }
 
-async function seedRadar(pool) {
-  for (const account of accounts.filter(item => item.pilot !== false)) {
+async function seedRadar(pool, accountList = accounts) {
+  for (const account of accountList.filter(item => item.pilot !== false)) {
     await pool.query(`
       INSERT INTO radar_team_profiles(
         legacy_profile_id, account_reference, public_slug, status,
@@ -165,13 +165,15 @@ async function seedRadar(pool) {
     ]);
   }
 
-  const moderator = accounts.find(item => item.moderator);
-  await pool.query(`
-    INSERT INTO radar_account_roles(account_reference, role, granted_by_account_reference)
-    VALUES ($1, 'radar_moderator', $1)
-    ON CONFLICT (account_reference, role) DO UPDATE SET
-      active = true, revoked_by_account_reference = NULL, revoked_at = NULL
-  `, [moderator.accountReference]);
+  const moderator = accountList.find(item => item.moderator);
+  if (moderator) {
+    await pool.query(`
+      INSERT INTO radar_account_roles(account_reference, role, granted_by_account_reference)
+      VALUES ($1, 'radar_moderator', $1)
+      ON CONFLICT (account_reference, role) DO UPDATE SET
+        active = true, revoked_by_account_reference = NULL, revoked_at = NULL
+    `, [moderator.accountReference]);
+  }
 }
 
 async function main() {

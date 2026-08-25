@@ -97,6 +97,9 @@ function createRadarConfig(env = process.env) {
   const moderationSecuritySecret = String(
     env.RADAR_MODERATION_SECURITY_SECRET || ""
   ).trim() || null;
+  const metricsToken = String(
+    env.RADAR_METRICS_TOKEN || ""
+  ).trim() || null;
   const searchPageMaximum = boundedPositiveInteger(
     env.RADAR_SEARCH_PAGE_MAXIMUM,
     24,
@@ -139,6 +142,7 @@ function createRadarConfig(env = process.env) {
     ),
     pilotFree: parseBoolean(env.RADAR_AMISTOSOS_PILOT_FREE, true),
     pilotAccountAllowlistSize: pilotAccountAllowlist.length,
+    pilotAccountAllowlistConfigured: pilotAccountAllowlist.length > 0,
     publicRatingMinimumMatches:
       parseOptionalPositiveInteger(env.RADAR_PUBLIC_RATING_MIN_MATCHES) || 3,
     pilotCityIbgeCode: String(env.RADAR_PILOT_CITY_IBGE_CODE || "").trim() || null,
@@ -192,6 +196,12 @@ function createRadarConfig(env = process.env) {
       1000
     ),
     instagramTrustedProxyHops: Math.min(
+      Number.isInteger(Number(env.RADAR_TRUST_PROXY_HOPS))
+        ? Math.max(Number(env.RADAR_TRUST_PROXY_HOPS), 0)
+        : 0,
+      5
+    ),
+    trustedProxyHops: Math.min(
       Number.isInteger(Number(env.RADAR_TRUST_PROXY_HOPS))
         ? Math.max(Number(env.RADAR_TRUST_PROXY_HOPS), 0)
         : 0,
@@ -427,6 +437,20 @@ function createRadarConfig(env = process.env) {
       50,
       100
     ),
+    technicalRetentionDays: boundedPositiveInteger(
+      env.RADAR_TECHNICAL_RETENTION_DAYS,
+      14,
+      365
+    ),
+    retentionBatchMaximum: boundedPositiveInteger(
+      env.RADAR_RETENTION_BATCH_MAXIMUM,
+      500,
+      5000
+    ),
+    metricsEnabled: parseBoolean(env.RADAR_METRICS_ENABLED, false),
+    metricsConfigured: Boolean(
+      metricsToken && Buffer.byteLength(metricsToken, "utf8") >= 32
+    ),
     reputationMinimumVerifiedReviews: boundedPositiveInteger(
       env.RADAR_REPUTATION_MINIMUM_REVIEWS,
       3,
@@ -582,6 +606,12 @@ function createRadarConfig(env = process.env) {
   });
   Object.defineProperty(config, "moderationSecuritySecret", {
     value: moderationSecuritySecret,
+    enumerable: false,
+    writable: false,
+    configurable: false
+  });
+  Object.defineProperty(config, "metricsToken", {
+    value: metricsToken,
     enumerable: false,
     writable: false,
     configurable: false

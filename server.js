@@ -26,8 +26,10 @@ const {
 } = require("./src/auth/browser-handoff-store");
 const { createRadarConfig } = require("./src/config/radar");
 const { createCorsOriginAllowlist } = require("./src/config/cors");
+const { readJwtSecret } = require("./src/config/auth");
 const { getBuildInfo } = require("./src/config/build-info");
-const { createPool, checkDatabase } = require("./src/db/pool");
+const { createPool, checkDatabase, getMigrationStatus } = require("./src/db/pool");
+const { createRadarObservability } = require("./src/observability/radar-observability");
 const { createHealthRouter } = require("./src/health/health.routes");
 const { createFriendliesRouter } = require("./src/friendlies/friendlies.routes");
 const { createRadarIdentityRouter } = require("./src/friendlies/radar-identity.routes");
@@ -87,9 +89,11 @@ const app = express();
 
 // ===== CONFIG BÁSICA =====
 const PORT = process.env.PORT || 3000;
-const JWT_SECRET = process.env.JWT_SECRET || "TROQUE_ISSO_AGORA";
+const JWT_SECRET = readJwtSecret();
 const radarConfig = createRadarConfig();
-const radarPool = createPool(radarConfig);
+const radarObservability = createRadarObservability({ service: "omascote-api" });
+const radarLogger = radarObservability.logger;
+const radarPool = createPool(radarConfig, { observer: radarObservability });
 const buildInfo = getBuildInfo();
 const DOWNLOAD_TICKET_TTL_MS = Math.min(
   Math.max(Number(process.env.DOWNLOAD_TICKET_TTL_MS || 90_000), 30_000),
@@ -182,7 +186,11 @@ const CLIENTES_TESTE = [
   "admin"
 ];
 
-// CORS: permite seu site chamar a API
+app.set("trust proxy", radarConfig.trustedProxyHops);
+app.use(radarObservability.requestContext);
+app.use(radarObservability.httpMetrics);
+
+// CORS: permite somente origens explicitamente confiaveis.
 app.use(cors({
   origin: createCorsOriginAllowlist(),
   credentials: false
@@ -2232,8 +2240,7 @@ function findPedidoByClientRequestId(whatsapp, clientRequestId) {
 }
 
 function getPreviewLimiterIp(req) {
-  const forwarded = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
-  return forwarded || req.ip || req.socket?.remoteAddress || "";
+  return req.ip || req.socket?.remoteAddress || "";
 }
 
 function getPreviewLimiterIdentifiers(req, cliente, whatsapp) {
@@ -6536,8 +6543,8 @@ function authBrowserHandoffHasSecureJwtSecret() {
   const configured = String(process.env.JWT_SECRET || "").trim();
   return (
     Boolean(configured) &&
-    configured !== "TROQUE_ISSO_AGORA" &&
-    JWT_SECRET !== "TROQUE_ISSO_AGORA"
+    Buffer.byteLength(configured, "utf8") >= 24 &&
+    configured === JWT_SECRET
   );
 }
 
@@ -7549,7 +7556,12 @@ function registrarAuditoriaProdutoPedido({ categoria, fields, files, pedidoId, r
 app.use(createHealthRouter({
   config: radarConfig,
   buildInfo,
-  checkDatabase: () => checkDatabase(radarPool)
+  checkDatabase: () => checkDatabase(radarPool),
+  getMigrationStatus: () => getMigrationStatus(radarPool)
+}));
+app.use(radarObservability.metricsRouter({
+  enabled: radarConfig.metricsEnabled && radarConfig.metricsConfigured,
+  token: radarConfig.metricsToken
 }));
 const resolveBaseRadarIdentity = createLegacyRadarIdentityResolver({
   getAccountRecord(authSubject) {
@@ -7592,25 +7604,29 @@ app.use("/amistosos", createFriendlySearchRouter({
   auth,
   pool: radarPool,
   resolveIdentity: resolveRadarIdentity,
-  resolvePublicProfiles: resolveRadarSearchPublicProfiles
+  resolvePublicProfiles: resolveRadarSearchPublicProfiles,
+  logger: radarLogger
 }));
 const radarInvitationRouters = createInvitationRouters({
   config: radarConfig,
   auth,
   pool: radarPool,
-  resolveIdentity: resolveRadarIdentity
+  resolveIdentity: resolveRadarIdentity,
+  logger: radarLogger
 });
 const radarReputationRouters = createTeamReputationRouters({
   config: radarConfig,
   auth,
   pool: radarPool,
-  resolveIdentity: resolveRadarIdentity
+  resolveIdentity: resolveRadarIdentity,
+  logger: radarLogger
 });
 const radarModerationRouters = createRadarModerationRouters({
   config: radarConfig,
   auth,
   pool: radarPool,
-  resolveIdentity: resolveRadarIdentity
+  resolveIdentity: resolveRadarIdentity,
+  logger: radarLogger
 });
 app.use("/amistosos", radarInvitationRouters.invitationRouter);
 app.use("/radar/times", radarReputationRouters.publicRouter);
@@ -7620,20 +7636,23 @@ app.use("/me/time/amistosos", createMatchHistoryRouter({
   config: radarConfig,
   auth,
   pool: radarPool,
-  resolveIdentity: resolveRadarIdentity
+  resolveIdentity: resolveRadarIdentity,
+  logger: radarLogger
 }));
 app.use("/me/time/amistosos", createMatchResultRouter({
   config: radarConfig,
   auth,
   pool: radarPool,
-  resolveIdentity: resolveRadarIdentity
+  resolveIdentity: resolveRadarIdentity,
+  logger: radarLogger
 }));
 app.use("/me/time/amistosos", createMatchCenterRouter({
   config: radarConfig,
   auth,
   pool: radarPool,
   resolveIdentity: resolveRadarIdentity,
-  resolveContact: resolveRadarMatchContact
+  resolveContact: resolveRadarMatchContact,
+  logger: radarLogger
 }));
 app.use("/me/time/amistosos", radarInvitationRouters.teamRouter);
 app.use("/me/time/amistosos", radarModerationRouters.matchRouter);
@@ -7642,32 +7661,37 @@ app.use("/me/time/radar", createRadarIdentityRouter({
   config: radarConfig,
   auth,
   pool: radarPool,
-  resolveIdentity: resolveRadarIdentity
+  resolveIdentity: resolveRadarIdentity,
+  logger: radarLogger
 }));
 app.use("/me/time/radar", radarModerationRouters.ownerRouter);
 app.use("/me/time/perfil", createProfilePrintImportRouter({
   config: radarConfig,
   auth,
   pool: radarPool,
-  resolveIdentity: resolveRadarIdentity
+  resolveIdentity: resolveRadarIdentity,
+  logger: radarLogger
 }));
 app.use("/me/time/amistosos", createAvailabilityRouter({
   config: radarConfig,
   auth,
   pool: radarPool,
-  resolveIdentity: resolveRadarIdentity
+  resolveIdentity: resolveRadarIdentity,
+  logger: radarLogger
 }));
 app.use("/me/time", createInstagramVerificationRouter({
   config: radarConfig,
   auth,
   pool: radarPool,
-  resolveIdentity: resolveRadarIdentity
+  resolveIdentity: resolveRadarIdentity,
+  logger: radarLogger
 }));
 app.use("/admin/radar/verificacoes", createInstagramVerificationAdminRouter({
   config: radarConfig,
   auth,
   pool: radarPool,
-  resolveIdentity: resolveRadarIdentity
+  resolveIdentity: resolveRadarIdentity,
+  logger: radarLogger
 }));
 
 // Health check
@@ -14548,6 +14572,13 @@ if (require.main === module) {
 
 module.exports = {
   app,
+  __radarReleaseCandidate: {
+    config: radarConfig,
+    observabilitySnapshot: () => radarObservability.snapshot(),
+    closePool: async () => {
+      if (radarPool) await radarPool.end();
+    }
+  },
   __fotoJogosTest: {
     schema: FOTO_JOGOS_JSON_SCHEMA,
     normalizarRespostaJogosFoto,

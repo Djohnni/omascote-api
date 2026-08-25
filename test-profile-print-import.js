@@ -170,6 +170,7 @@ test("readiness ignores OpenAI while print import is off and fails closed when i
   off.use(createHealthRouter({
     config: createRadarConfig({
       RADAR_AMISTOSOS_ENABLED: "true",
+      RADAR_PILOT_ACCOUNT_ALLOWLIST: "account-test",
       RADAR_INSTAGRAM_VERIFICATION_SECRET: "x".repeat(32)
     }),
     buildInfo,

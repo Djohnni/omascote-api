@@ -14,8 +14,9 @@ function normalizeEmbeddedResult(result) {
 }
 
 class EmbeddedRadarPool {
-  constructor(location) {
+  constructor(location, observer = null) {
     this.location = location;
+    this.observer = observer;
     this.databasePromise = null;
     this.queue = Promise.resolve();
   }
@@ -39,11 +40,26 @@ class EmbeddedRadarPool {
   }
 
   async execute(sql, params) {
+    const started = process.hrtime.bigint();
+    this.observer?.observeDatabaseQuery?.({ activeDelta: 1 });
     const database = await this.database();
-    const result = params
-      ? await database.query(sql, params)
-      : await database.exec(sql);
-    return normalizeEmbeddedResult(result);
+    try {
+      const result = params
+        ? await database.query(sql, params)
+        : await database.exec(sql);
+      this.observer?.observeDatabaseQuery?.({
+        durationMs: Number(process.hrtime.bigint() - started) / 1_000_000
+      });
+      return normalizeEmbeddedResult(result);
+    } catch (error) {
+      this.observer?.observeDatabaseQuery?.({
+        durationMs: Number(process.hrtime.bigint() - started) / 1_000_000,
+        error: true
+      });
+      throw error;
+    } finally {
+      this.observer?.observeDatabaseQuery?.({ activeDelta: -1 });
+    }
   }
 
   async query(sql, params) {
@@ -74,14 +90,54 @@ class EmbeddedRadarPool {
   }
 }
 
-function createPool(config) {
+function instrumentQuery(query, observer) {
+  return async function observedQuery(...args) {
+    const started = process.hrtime.bigint();
+    observer?.observeDatabaseQuery?.({ activeDelta: 1 });
+    try {
+      const result = await query(...args);
+      observer?.observeDatabaseQuery?.({
+        durationMs: Number(process.hrtime.bigint() - started) / 1_000_000
+      });
+      return result;
+    } catch (error) {
+      observer?.observeDatabaseQuery?.({
+        durationMs: Number(process.hrtime.bigint() - started) / 1_000_000,
+        error: true
+      });
+      throw error;
+    } finally {
+      observer?.observeDatabaseQuery?.({ activeDelta: -1 });
+    }
+  };
+}
+
+function instrumentPool(pool, observer) {
+  if (!observer) return pool;
+  return {
+    query: instrumentQuery(pool.query.bind(pool), observer),
+    async connect() {
+      const client = await pool.connect();
+      return {
+        query: instrumentQuery(client.query.bind(client), observer),
+        release: client.release.bind(client)
+      };
+    },
+    end: pool.end.bind(pool),
+    get totalCount() { return pool.totalCount; },
+    get idleCount() { return pool.idleCount; },
+    get waitingCount() { return pool.waitingCount; }
+  };
+}
+
+function createPool(config, { observer = null } = {}) {
   if (!config?.databaseUrl) {
     return config?.databaseEmbeddedPath
-      ? new EmbeddedRadarPool(config.databaseEmbeddedPath)
+      ? new EmbeddedRadarPool(config.databaseEmbeddedPath, observer)
       : null;
   }
 
-  return new Pool({
+  const pool = new Pool({
     connectionString: config.databaseUrl,
     connectionTimeoutMillis: config.databaseConnectionTimeoutMs,
     ssl: config.databaseSsl
@@ -89,6 +145,25 @@ function createPool(config) {
       : undefined,
     application_name: "omascote-api-radar-amistosos"
   });
+  return instrumentPool(pool, observer);
+}
+
+async function getMigrationStatus(pool) {
+  if (!pool) return { ok: false, reason: "database_not_configured" };
+  try {
+    const result = await pool.query(`
+      SELECT COUNT(*)::integer AS count, MAX(name) AS latest
+      FROM public.schema_migrations
+    `);
+    return {
+      ok: true,
+      count: Number(result.rows?.[0]?.count || 0),
+      latest: result.rows?.[0]?.latest || null,
+      required: LATEST_REQUIRED_MIGRATION
+    };
+  } catch {
+    return { ok: false, reason: "database_schema_unavailable", required: LATEST_REQUIRED_MIGRATION };
+  }
 }
 
 async function checkDatabase(
@@ -123,4 +198,11 @@ async function checkDatabase(
   }
 }
 
-module.exports = { createPool, checkDatabase, EmbeddedRadarPool, normalizeEmbeddedResult };
+module.exports = {
+  createPool,
+  checkDatabase,
+  getMigrationStatus,
+  EmbeddedRadarPool,
+  normalizeEmbeddedResult,
+  instrumentPool
+};

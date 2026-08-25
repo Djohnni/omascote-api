@@ -1,3 +1,6 @@
 node_modules/
 npm-debug.log*
 dados/
+.env
+.env.*
+!.env.staging.example

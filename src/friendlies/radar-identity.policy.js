@@ -70,6 +70,13 @@ function createPilotGatedRadarIdentityResolver({ resolveIdentity, config }) {
   const allowed = new Set(config?.pilotAccountAllowlist || []);
   return function resolvePilotRadarIdentity(authUser) {
     const identity = resolveIdentity(authUser);
+    if (config?.enabled === true && allowed.size === 0) {
+      throw new RadarIdentityError(
+        "RADAR_PILOT_CONFIGURATION_UNAVAILABLE",
+        503,
+        "O piloto do Radar esta temporariamente indisponivel."
+      );
+    }
     if (allowed.size > 0 && !allowed.has(String(identity.accountId || ""))) {
       throw new RadarIdentityError(
         "RADAR_PILOT_ACCESS_DENIED",

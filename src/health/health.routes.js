@@ -2,7 +2,7 @@
 
 const express = require("express");
 
-function createHealthRouter({ config, buildInfo, checkDatabase }) {
+function createHealthRouter({ config, buildInfo, checkDatabase, getMigrationStatus }) {
   const router = express.Router();
   const metadata = {
     service: "omascote-api",
@@ -28,6 +28,9 @@ function createHealthRouter({ config, buildInfo, checkDatabase }) {
     }
 
     const database = await checkDatabase();
+    const migrations = database.ok && typeof getMigrationStatus === "function"
+      ? await getMigrationStatus()
+      : null;
     const verificationConfigured = config.instagramVerificationConfigured === true;
     const profilePrintConfigured = config.profilePrintImportEnabled !== true ||
       config.profilePrintOpenAiConfigured === true;
@@ -38,12 +41,27 @@ function createHealthRouter({ config, buildInfo, checkDatabase }) {
     const matchHistoryConfigured = config.matchHistoryEnabled !== true || config.matchHistoryConfigured === true;
     const reputationConfigured = config.reputationEnabled !== true || config.reputationConfigured === true;
     const moderationConfigured = config.moderationEnabled !== true || config.moderationConfigured === true;
-    const ready = database.ok && verificationConfigured && profilePrintConfigured && searchConfigured && invitationsConfigured && matchCenterConfigured && matchResultsConfigured && matchHistoryConfigured && reputationConfigured && moderationConfigured;
+    const allowlistConfigured = config.pilotAccountAllowlistConfigured === true;
+    const metricsConfigured = config.metricsEnabled !== true || config.metricsConfigured === true;
+    const ready = database.ok && allowlistConfigured && metricsConfigured && verificationConfigured && profilePrintConfigured && searchConfigured && invitationsConfigured && matchCenterConfigured && matchResultsConfigured && matchHistoryConfigured && reputationConfigured && moderationConfigured;
     return res.status(ready ? 200 : 503).json({
       ok: ready,
       ...metadata,
       radar_amistosos: "enabled",
       database: database.ok ? "ready" : database.reason,
+      pilot_allowlist: allowlistConfigured ? "configured" : "not_configured",
+      metrics: config.metricsEnabled !== true
+        ? "disabled"
+        : metricsConfigured
+          ? "configured"
+          : "not_configured",
+      ...(migrations ? {
+        migrations: {
+          applied: migrations.count,
+          latest: migrations.latest,
+          required: migrations.required
+        }
+      } : {}),
       instagram_verification: verificationConfigured ? "configured" : "not_configured",
       profile_print_import: config.profilePrintImportEnabled !== true
         ? "disabled"

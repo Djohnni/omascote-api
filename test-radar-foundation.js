@@ -216,6 +216,8 @@ for (const reason of ["database_schema_missing", "database_schema_outdated"]) {
       build: null,
       radar_amistosos: "enabled",
       database: reason,
+      pilot_allowlist: "not_configured",
+      metrics: "disabled",
       instagram_verification: "configured",
       profile_print_import: "disabled",
       friendly_search: "disabled",

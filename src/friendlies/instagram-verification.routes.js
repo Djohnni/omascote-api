@@ -63,7 +63,7 @@ function jsonMutation(parser) {
 }
 
 function rateLimitIp(req, config) {
-  const hops = Number(config?.instagramTrustedProxyHops || 0);
+  const hops = Number(config?.trustedProxyHops ?? config?.instagramTrustedProxyHops ?? 0);
   const forwarded = String(req.get("X-Forwarded-For") || "")
     .split(",")
     .map(value => value.trim())
