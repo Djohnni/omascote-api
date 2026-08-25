@@ -130,6 +130,18 @@ function instrumentPool(pool, observer) {
   };
 }
 
+function connectionStringWithoutSslOverrides(value) {
+  try {
+    const parsed = new URL(value);
+    for (const name of ["sslmode", "sslcert", "sslkey", "sslrootcert"]) {
+      parsed.searchParams.delete(name);
+    }
+    return parsed.toString();
+  } catch {
+    return value;
+  }
+}
+
 function createPool(config, { observer = null } = {}) {
   if (!config?.databaseUrl) {
     return config?.databaseEmbeddedPath
@@ -138,10 +150,15 @@ function createPool(config, { observer = null } = {}) {
   }
 
   const pool = new Pool({
-    connectionString: config.databaseUrl,
+    connectionString: config.databaseSsl
+      ? connectionStringWithoutSslOverrides(config.databaseUrl)
+      : config.databaseUrl,
     connectionTimeoutMillis: config.databaseConnectionTimeoutMs,
     ssl: config.databaseSsl
-      ? { rejectUnauthorized: config.databaseSslRejectUnauthorized }
+      ? {
+          rejectUnauthorized: config.databaseSslRejectUnauthorized,
+          ...(config.databaseSslCa ? { ca: config.databaseSslCa } : {})
+        }
       : undefined,
     application_name: "omascote-api-radar-amistosos"
   });
@@ -204,5 +221,6 @@ module.exports = {
   getMigrationStatus,
   EmbeddedRadarPool,
   normalizeEmbeddedResult,
-  instrumentPool
+  instrumentPool,
+  connectionStringWithoutSslOverrides
 };

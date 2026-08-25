@@ -12,7 +12,7 @@ const { createRadarConfig } = require("./src/config/radar");
 const { createCorsOriginAllowlist } = require("./src/config/cors");
 const { validateStagingEnvironment, PURPOSE_SECRETS } = require("./src/config/staging-preflight");
 const { createRadarObservability, classifyOperation } = require("./src/observability/radar-observability");
-const { createPool } = require("./src/db/pool");
+const { createPool, connectionStringWithoutSslOverrides } = require("./src/db/pool");
 const { migrate } = require("./src/db/migrate");
 const { runRadarRetention } = require("./src/maintenance/radar-retention");
 const { createPilotGatedRadarIdentityResolver } = require("./src/friendlies/radar-identity.policy");
@@ -36,7 +36,8 @@ function goodStagingEnvironment() {
     JWT_SECRET: "jwt-".padEnd(40, "j"),
     OMASCOTE_CORS_INCLUDE_PRODUCTION_ORIGINS: "false",
     OMASCOTE_CORS_ORIGINS: "https://staging.omascote.invalid",
-    RADAR_TRUST_PROXY_HOPS: "1",
+    RADAR_TRUST_PROXY_HOPS: "3",
+    RADAR_TRUST_PROXY_PROVIDER: "render",
     RADAR_PILOT_ACCOUNT_ALLOWLIST: "account-alpha,account-beta",
     RADAR_METRICS_ENABLED: "true",
     COMMIT_SHA: "abc123",
@@ -206,4 +207,21 @@ test("release scripts refuse external databases and production targets", () => {
     assert.match(source, /refuses production or an external DATABASE_URL/);
     assert.match(source, /NODE_ENV === "production"/);
   }
+});
+
+test("managed PostgreSQL TLS keeps explicit verification and a pinned CA", () => {
+  const pem = "-----BEGIN CERTIFICATE-----\nZmFrZQ==\n-----END CERTIFICATE-----";
+  const config = createRadarConfig({
+    DATABASE_SSL: "true",
+    DATABASE_SSL_REJECT_UNAUTHORIZED: "true",
+    DATABASE_SSL_CA_B64: Buffer.from(pem).toString("base64")
+  });
+  assert.equal(config.databaseSsl, true);
+  assert.equal(config.databaseSslRejectUnauthorized, true);
+  assert.equal(config.databaseSslCa, pem);
+  const sanitized = connectionStringWithoutSslOverrides(
+    "postgresql://user:password@db.example/radar?sslmode=require&application_name=radar"
+  );
+  assert.equal(new URL(sanitized).searchParams.has("sslmode"), false);
+  assert.equal(new URL(sanitized).searchParams.get("application_name"), "radar");
 });

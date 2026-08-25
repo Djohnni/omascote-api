@@ -201,6 +201,9 @@ function createRadarConfig(env = process.env) {
         : 0,
       5
     ),
+    trustedProxyProvider: ["render"].includes(
+      String(env.RADAR_TRUST_PROXY_PROVIDER || "").trim().toLowerCase()
+    ) ? String(env.RADAR_TRUST_PROXY_PROVIDER).trim().toLowerCase() : null,
     trustedProxyHops: Math.min(
       Number.isInteger(Number(env.RADAR_TRUST_PROXY_HOPS))
         ? Math.max(Number(env.RADAR_TRUST_PROXY_HOPS), 0)
@@ -523,6 +526,18 @@ function createRadarConfig(env = process.env) {
     databaseSsl: parseBoolean(env.DATABASE_SSL, false),
     databaseSslRejectUnauthorized:
       parseBoolean(env.DATABASE_SSL_REJECT_UNAUTHORIZED, true),
+    databaseSslCa: (() => {
+      const encoded = String(env.DATABASE_SSL_CA_B64 || "").trim();
+      if (!encoded) return null;
+      try {
+        const decoded = Buffer.from(encoded, "base64").toString("utf8").trim();
+        return /^-----BEGIN CERTIFICATE-----[\s\S]+-----END CERTIFICATE-----$/.test(decoded)
+          ? decoded
+          : null;
+      } catch {
+        return null;
+      }
+    })(),
     databaseConnectionTimeoutMs:
       parseOptionalPositiveInteger(env.DATABASE_CONNECTION_TIMEOUT_MS) || 5_000
   };

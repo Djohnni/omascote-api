@@ -14,6 +14,7 @@ const {
 } = require("./src/friendlies/friendly-search.service");
 
 const NOW = new Date("2026-08-25T12:00:00.000Z");
+const FIXTURE_CREATED_AT = "2026-08-25T10:00:00.000Z";
 
 function normalizeResult(result) {
   const lastResult = Array.isArray(result) ? result[result.length - 1] : result;
@@ -97,12 +98,13 @@ async function insertTeam(database, suffix, overrides = {}) {
       approximate_latitude, approximate_longitude,
       modalities, categories, declared_level, travel_radius_km,
       venue_preference, availability_active, radar_terms_accepted_at,
-      suspended_at, public_name, public_profile_enabled, public_crest_available
+      suspended_at, public_name, public_profile_enabled, public_crest_available,
+      created_at, updated_at
     ) VALUES (
       $1, $2, $3, $4, $5, $6,
       $7, $8, $9, $10, $11,
       ARRAY['society'], ARRAY['Livre'], 'intermediario', 25,
-      'either', $12, $13, $14, $15, $16, $17
+      'either', $12, $13, $14, $15, $16, $17, $18, $18
     ) RETURNING id
   `, [
     value.profileId,
@@ -121,7 +123,8 @@ async function insertTeam(database, suffix, overrides = {}) {
     value.suspendedAt,
     value.publicName,
     value.publicProfileEnabled,
-    value.publicCrestAvailable
+    value.publicCrestAvailable,
+    FIXTURE_CREATED_AT
   ]);
   return { id: result.rows[0].id, ...value };
 }
@@ -145,8 +148,8 @@ async function insertAvailability(database, teamId, suffix, overrides = {}) {
     INSERT INTO friendly_availabilities(
       team_id, modality, category, declared_level, starts_at, ends_at,
       city_ibge_code, city_name, state_code, travel_radius_km,
-      venue_preference, status, schedule_hash
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 25, $10, $11, $12)
+      venue_preference, status, schedule_hash, created_at, updated_at
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 25, $10, $11, $12, $13, $13)
   `, [
     teamId,
     value.modality,
@@ -159,7 +162,8 @@ async function insertAvailability(database, teamId, suffix, overrides = {}) {
     value.stateCode,
     value.venuePreference,
     value.status,
-    hash
+    hash,
+    FIXTURE_CREATED_AT
   ]);
 }
 

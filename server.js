@@ -31,6 +31,7 @@ const { getBuildInfo } = require("./src/config/build-info");
 const { createPool, checkDatabase, getMigrationStatus } = require("./src/db/pool");
 const { createRadarObservability } = require("./src/observability/radar-observability");
 const { createHealthRouter } = require("./src/health/health.routes");
+const { clientIp: resolveClientIp } = require("./src/security/client-ip");
 const { createFriendliesRouter } = require("./src/friendlies/friendlies.routes");
 const { createRadarIdentityRouter } = require("./src/friendlies/radar-identity.routes");
 const {
@@ -2240,7 +2241,7 @@ function findPedidoByClientRequestId(whatsapp, clientRequestId) {
 }
 
 function getPreviewLimiterIp(req) {
-  return req.ip || req.socket?.remoteAddress || "";
+  return resolveClientIp(req, radarConfig);
 }
 
 function getPreviewLimiterIdentifiers(req, cliente, whatsapp) {
@@ -3141,10 +3142,6 @@ function getOrderRequestLogContext(req, extra = {}) {
     data_hora: new Date().toISOString(),
     metodo: req.method,
     endpoint: req.originalUrl || req.url || "",
-    user_id: req.user?.cliente_id || req.user?.id || req.user?.whatsapp || "",
-    whatsapp: req.user?.whatsapp || "",
-    ip: getPreviewLimiterIp(req),
-    x_forwarded_for: req.headers["x-forwarded-for"] || "",
     user_agent: req.headers["user-agent"] || "",
     origin: req.headers.origin || "",
     referer: req.headers.referer || "",
