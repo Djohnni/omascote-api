@@ -37,7 +37,7 @@ function goodStagingEnvironment() {
     JWT_SECRET: "jwt-".padEnd(40, "j"),
     OMASCOTE_CORS_INCLUDE_PRODUCTION_ORIGINS: "false",
     OMASCOTE_CORS_ORIGINS: "https://staging.omascote.invalid",
-    RADAR_TRUST_PROXY_HOPS: "1",
+    RADAR_TRUST_PROXY_HOPS: "3",
     RADAR_TRUST_PROXY_PROVIDER: "render",
     RADAR_PILOT_ACCOUNT_ALLOWLIST: "account-alpha,account-beta",
     RADAR_METRICS_ENABLED: "true",

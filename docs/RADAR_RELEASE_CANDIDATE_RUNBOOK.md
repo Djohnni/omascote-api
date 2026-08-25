@@ -36,7 +36,7 @@ Não faça downgrade destrutivo. Para rollback operacional, desligue `RADAR_AMIS
 
 ## CORS, proxy e IP
 
-Staging aceita somente a origem HTTPS exata do frontend de staging. Não use curinga e não inclua automaticamente o domínio de produção. Configure `RADAR_TRUST_PROXY_HOPS=1` e `RADAR_TRUST_PROXY_PROVIDER=render` somente depois de comprovar a borda HTTPS única. No Render, os limites usam o primeiro endereço que a própria borda escreve em `X-Forwarded-For`; sufixos falsificados do cliente são ignorados. Fora dessa topologia, a API usa o endereço do socket/Express e falha fechada no preflight.
+Staging aceita somente a origem HTTPS exata do frontend de staging. Não use curinga e não inclua automaticamente o domínio de produção. No serviço comprovado, configure `RADAR_TRUST_PROXY_HOPS=3` e `RADAR_TRUST_PROXY_PROVIDER=render`. Os limites selecionam a terceira posição a partir da direita de `X-Forwarded-For`; prefixos falsificados do cliente não mudam a identidade. Refaça a sonda temporária se a topologia ou o provedor mudar. Fora da topologia declarada, a API usa o endereço do socket/Express e o preflight falha fechado.
 
 ## Métricas, logs e alertas
 

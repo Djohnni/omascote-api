@@ -18,18 +18,25 @@ function firstForwardedAddress(req) {
   return normalizeAddress(first);
 }
 
+function forwardedAddresses(req) {
+  const raw = String(req.get?.("X-Forwarded-For") || req.headers?.["x-forwarded-for"] || "");
+  if (raw.length > 2_048) return [];
+  return raw.split(",").map(value => value.trim()).filter(Boolean).slice(-16);
+}
+
 function clientIp(req, config = {}) {
   const provider = String(config.trustedProxyProvider || "").trim().toLowerCase();
   const hops = Number(config.trustedProxyHops ?? config.instagramTrustedProxyHops ?? 0);
   const socketAddress = normalizeAddress(req.socket?.remoteAddress);
 
-  // Render guarantees that its edge writes the real client address as the first
-  // X-Forwarded-For item. Values supplied by the client can only follow it and
-  // are deliberately ignored here.
-  if (provider === "render" && hops === 1) {
-    return firstForwardedAddress(req) || socketAddress || "unknown";
+  // Use only the position proved from the right-hand trusted proxy chain.
+  // Client-supplied values are prepended on the left and cannot move this slot.
+  if (provider === "render" && Number.isInteger(hops) && hops >= 1 && hops <= 5) {
+    const forwarded = forwardedAddresses(req);
+    const selected = forwarded.length >= hops ? forwarded[forwarded.length - hops] : null;
+    return normalizeAddress(selected) || socketAddress || "unknown";
   }
   return normalizeAddress(req.ip) || socketAddress || "unknown";
 }
 
-module.exports = { clientIp, firstForwardedAddress, normalizeAddress };
+module.exports = { clientIp, firstForwardedAddress, forwardedAddresses, normalizeAddress };

@@ -16,25 +16,27 @@ function request({ forwarded, remoteAddress = "10.0.0.8", expressIp = "10.0.0.8"
   };
 }
 
-const renderConfig = Object.freeze({ trustedProxyProvider: "render", trustedProxyHops: 1 });
+const renderConfig = Object.freeze({ trustedProxyProvider: "render", trustedProxyHops: 3 });
 
-test("Render client identity uses the edge-written first forwarded address", () => {
-  assert.equal(clientIp(request({ forwarded: "203.0.113.9, 198.51.100.10" }), renderConfig), "203.0.113.9");
+test("Render client identity uses the proved third address from the right", () => {
+  assert.equal(clientIp(request({ forwarded: "203.0.113.9, 198.51.100.10, 192.0.2.20" }), renderConfig), "203.0.113.9");
 });
 
-test("forged forwarded suffixes cannot change the Render rate-limit identity", () => {
+test("forged forwarded prefixes cannot change the Render rate-limit identity", () => {
   const real = "203.0.113.9";
+  const trustedSuffix = `${real}, 198.51.100.10, 192.0.2.20`;
   const attempts = [
-    `${real}, 1.1.1.1`,
-    `${real}, 8.8.8.8`,
-    `${real}, 2001:4860:4860::8888`,
-    `${real}, invalid, 192.0.2.1`
+    trustedSuffix,
+    `1.1.1.1, ${trustedSuffix}`,
+    `8.8.8.8, 192.0.2.99, ${trustedSuffix}`,
+    `invalid, 2001:4860:4860::8888, ${trustedSuffix}`,
+    `${Array.from({ length: 20 }, (_, index) => `198.18.0.${index + 1}`).join(", ")}, ${trustedSuffix}`
   ];
   assert.deepEqual(attempts.map(forwarded => clientIp(request({ forwarded }), renderConfig)), attempts.map(() => real));
 });
 
 test("invalid or oversized forwarded input falls back to the private socket address", () => {
-  assert.equal(clientIp(request({ forwarded: "not-an-ip" }), renderConfig), "10.0.0.8");
+  assert.equal(clientIp(request({ forwarded: "not-an-ip, 198.51.100.10, 192.0.2.20" }), renderConfig), "10.0.0.8");
   assert.equal(clientIp(request({ forwarded: "1".repeat(2_049) }), renderConfig), "10.0.0.8");
 });
 
