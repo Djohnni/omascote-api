@@ -16,6 +16,7 @@ const { createPool } = require("./src/db/pool");
 const { migrate } = require("./src/db/migrate");
 const { runRadarRetention } = require("./src/maintenance/radar-retention");
 const { createPilotGatedRadarIdentityResolver } = require("./src/friendlies/radar-identity.policy");
+const { setupAccounts } = require("./scripts/radar-local-setup");
 
 async function request(app, route, options = {}) {
   const server = app.listen(0, "127.0.0.1");
@@ -206,4 +207,16 @@ test("release scripts refuse external databases and production targets", () => {
     assert.match(source, /refuses production or an external DATABASE_URL/);
     assert.match(source, /NODE_ENV === "production"/);
   }
+});
+
+test("staging setup can seed exactly 30 isolated load-test teams", () => {
+  const configured = setupAccounts({ NODE_ENV: "staging", RADAR_STAGING_TEST_TEAM_COUNT: "30" });
+  const loadTeams = configured.filter(item => item.login.startsWith("load_team_"));
+  assert.equal(loadTeams.length, 30);
+  assert.equal(new Set(loadTeams.map(item => item.accountReference)).size, 30);
+  assert.equal(configured.filter(item => item.moderator).length, 1);
+  assert.throws(
+    () => setupAccounts({ NODE_ENV: "production", RADAR_STAGING_TEST_TEAM_COUNT: "30" }),
+    /allowed only in staging/
+  );
 });

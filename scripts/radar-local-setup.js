@@ -68,6 +68,39 @@ const accounts = Object.freeze([
   }
 ]);
 
+function stagingLoadAccounts(total) {
+  return Array.from({ length: total }, (_, index) => {
+    const number = String(index + 1).padStart(2, "0");
+    const opaqueSuffix = `${String.fromCharCode(97 + Math.floor(index / 26))}${String.fromCharCode(97 + (index % 26))}`;
+    return Object.freeze({
+      login: `load_team_${number}`,
+      accountReference: `account-radar-load-${opaqueSuffix}`,
+      profileId: `pf_radar_load_${number}`,
+      name: `Time Piloto ${number}`,
+      slug: `time-piloto-${number}`,
+      instagram: `timepilotoload${number}`,
+      city: "Joinville",
+      state: "SC",
+      cityCode: "4209102",
+      latitude: -26.3045 + (index % 6) * 0.002,
+      longitude: -48.8487 + Math.floor(index / 6) * 0.002,
+      email: `time${number}@load.local.invalid`
+    });
+  });
+}
+
+function setupAccounts(env = process.env) {
+  const rawCount = String(env.RADAR_STAGING_TEST_TEAM_COUNT || "0").trim();
+  const count = Number(rawCount);
+  if (!Number.isInteger(count) || count < 0 || count > 30) {
+    throw new Error("RADAR_STAGING_TEST_TEAM_COUNT must be an integer between 0 and 30");
+  }
+  if (count > 0 && env.NODE_ENV !== "staging") {
+    throw new Error("RADAR_STAGING_TEST_TEAM_COUNT is allowed only in staging");
+  }
+  return Object.freeze([...accounts, ...stagingLoadAccounts(count)]);
+}
+
 function required(name) {
   const value = String(process.env[name] || "").trim();
   if (!value) throw new Error(`${name} is required for local setup`);
@@ -184,15 +217,16 @@ async function main() {
   if (!config.databaseEmbeddedPath && !config.databaseUrl) {
     throw new Error("Configure RADAR_DATABASE_EMBEDDED_PATH or DATABASE_URL");
   }
-  writeLocalAccounts(dataDirectory, password);
+  const accountList = setupAccounts();
+  writeLocalAccounts(dataDirectory, password, accountList);
   const pool = createPool(config);
   try {
     const applied = await migrate({ pool });
-    await seedRadar(pool);
+    await seedRadar(pool, accountList);
     process.stdout.write(JSON.stringify({
       ok: true,
       migrations_applied: applied.length,
-      accounts: accounts.map(({ login, accountReference, moderator = false, pilot = true }) => ({
+      accounts: accountList.map(({ login, accountReference, moderator = false, pilot = true }) => ({
         login,
         account_reference: accountReference,
         moderator,
@@ -211,4 +245,11 @@ if (require.main === module) {
   });
 }
 
-module.exports = { accounts, assertLocalDataPath, writeLocalAccounts, seedRadar };
+module.exports = {
+  accounts,
+  stagingLoadAccounts,
+  setupAccounts,
+  assertLocalDataPath,
+  writeLocalAccounts,
+  seedRadar
+};

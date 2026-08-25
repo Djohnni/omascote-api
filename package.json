@@ -16,6 +16,7 @@
     "radar:staging:preflight": "node scripts/radar-staging-preflight.js",
     "radar:retention": "node scripts/radar-retention.js",
     "radar:load": "node scripts/radar-pilot-load.js",
+    "radar:staging:load": "node scripts/radar-staging-online-load.js",
     "radar:backup:verify": "node scripts/radar-backup-restore-verify.js",
     "test:payments": "node test-economic-creation.js",
     "test:scenario": "node --test test-result-scenario-pilot.js test-multi-product-scenarios.js",
