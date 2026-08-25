@@ -74,6 +74,9 @@ function createRadarConfig(env = process.env) {
   const matchHistoryRateLimitSecret = String(
     env.RADAR_MATCH_HISTORY_RATE_LIMIT_SECRET || ""
   ).trim() || null;
+  const reputationSecuritySecret = String(
+    env.RADAR_REPUTATION_SECURITY_SECRET || ""
+  ).trim() || null;
   const searchPageMaximum = boundedPositiveInteger(
     env.RADAR_SEARCH_PAGE_MAXIMUM,
     24,
@@ -108,6 +111,7 @@ function createRadarConfig(env = process.env) {
     matchCenterEnabled: parseBoolean(env.RADAR_MATCH_CENTER_ENABLED, false),
     matchResultsEnabled: parseBoolean(env.RADAR_MATCH_RESULTS_ENABLED, false),
     matchHistoryEnabled: parseBoolean(env.RADAR_MATCH_HISTORY_ENABLED, false),
+    reputationEnabled: parseBoolean(env.RADAR_REPUTATION_ENABLED, false),
     profilePrintImportEnabled: parseBoolean(
       env.RADAR_PROFILE_PRINT_IMPORT_ENABLED,
       false
@@ -353,6 +357,15 @@ function createRadarConfig(env = process.env) {
       matchHistoryRateLimitSecret &&
       Buffer.byteLength(matchHistoryRateLimitSecret, "utf8") >= 32
     ),
+    reputationConfigured: Boolean(
+      reputationSecuritySecret &&
+      Buffer.byteLength(reputationSecuritySecret, "utf8") >= 32
+    ),
+    reputationMinimumVerifiedReviews: boundedPositiveInteger(
+      env.RADAR_REPUTATION_MINIMUM_REVIEWS,
+      3,
+      100
+    ),
     matchPageDefault: Math.min(
       boundedPositiveInteger(env.RADAR_MATCH_PAGE_DEFAULT, 20, 50),
       boundedPositiveInteger(env.RADAR_MATCH_PAGE_MAXIMUM, 50, 100)
@@ -479,6 +492,12 @@ function createRadarConfig(env = process.env) {
   });
   Object.defineProperty(config, "matchHistoryRateLimitSecret", {
     value: matchHistoryRateLimitSecret,
+    enumerable: false,
+    writable: false,
+    configurable: false
+  });
+  Object.defineProperty(config, "reputationSecuritySecret", {
+    value: reputationSecuritySecret,
     enumerable: false,
     writable: false,
     configurable: false

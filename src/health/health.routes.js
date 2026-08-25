@@ -36,7 +36,8 @@ function createHealthRouter({ config, buildInfo, checkDatabase }) {
     const matchCenterConfigured = config.matchCenterEnabled !== true || config.matchCenterConfigured === true;
     const matchResultsConfigured = config.matchResultsEnabled !== true || config.matchResultsConfigured === true;
     const matchHistoryConfigured = config.matchHistoryEnabled !== true || config.matchHistoryConfigured === true;
-    const ready = database.ok && verificationConfigured && profilePrintConfigured && searchConfigured && invitationsConfigured && matchCenterConfigured && matchResultsConfigured && matchHistoryConfigured;
+    const reputationConfigured = config.reputationEnabled !== true || config.reputationConfigured === true;
+    const ready = database.ok && verificationConfigured && profilePrintConfigured && searchConfigured && invitationsConfigured && matchCenterConfigured && matchResultsConfigured && matchHistoryConfigured && reputationConfigured;
     return res.status(ready ? 200 : 503).json({
       ok: ready,
       ...metadata,
@@ -71,6 +72,11 @@ function createHealthRouter({ config, buildInfo, checkDatabase }) {
       friendly_match_history: config.matchHistoryEnabled !== true
         ? "disabled"
         : matchHistoryConfigured
+          ? "configured"
+          : "not_configured",
+      friendly_reputation: config.reputationEnabled !== true
+        ? "disabled"
+        : reputationConfigured
           ? "configured"
           : "not_configured"
     });

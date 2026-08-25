@@ -163,7 +163,8 @@ test("profile print import is owned, draft-only, idempotent, deduplicated and mi
       "008_friendly_invitations_notifications.sql",
       "009_match_center.sql",
       "010_confirmed_match_results.sql",
-      "011_match_history.sql"
+      "011_match_history.sql",
+      "012_team_reviews_reputation.sql"
     ]);
     assert.deepEqual(await migrate({ pool }), []);
     await insertTeam(database, owner);

@@ -59,6 +59,9 @@ const {
   createMatchHistoryRouter
 } = require("./src/friendlies/match-history.routes");
 const {
+  createTeamReputationRouters
+} = require("./src/friendlies/team-reputation.routes");
+const {
   createLegacyRadarIdentityResolver,
   accountReference
 } = require("./src/friendlies/radar-identity.policy");
@@ -7586,7 +7589,15 @@ const radarInvitationRouters = createInvitationRouters({
   pool: radarPool,
   resolveIdentity: resolveRadarIdentity
 });
+const radarReputationRouters = createTeamReputationRouters({
+  config: radarConfig,
+  auth,
+  pool: radarPool,
+  resolveIdentity: resolveRadarIdentity
+});
 app.use("/amistosos", radarInvitationRouters.invitationRouter);
+app.use("/radar/times", radarReputationRouters.publicRouter);
+app.use("/me/time", radarReputationRouters.privateRouter);
 app.use("/me/time/amistosos", createMatchHistoryRouter({
   config: radarConfig,
   auth,

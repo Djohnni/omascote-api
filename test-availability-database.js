@@ -117,7 +117,7 @@ test("migrations through 009 run twice safely and preserve immutable availabilit
   const pool = createPoolAdapter(database);
   try {
     const first = await migrate({ pool });
-    assert.equal(first.at(-1), "011_match_history.sql");
+    assert.equal(first.at(-1), "012_team_reviews_reputation.sql");
     assert.deepEqual(await migrate({ pool }), []);
     const applied = await database.query(
       "SELECT name FROM schema_migrations WHERE name = '006_friendly_availability_management.sql'"
