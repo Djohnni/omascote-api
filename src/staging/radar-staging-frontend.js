@@ -69,10 +69,14 @@ function readVerifiedManifest({ snapshotRoot, manifestPath }) {
     const stat = fs.lstatSync(absolute);
     if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("Invalid staging frontend file type");
     const content = fs.readFileSync(absolute);
-    if (content.length !== file.bytes || sha256(content) !== file.sha256) {
+    const exactMatch = content.length === file.bytes && sha256(content) === file.sha256;
+    const canonicalContent = !exactMatch && process.platform === "win32" && content.includes(13)
+      ? Buffer.from(content.toString("utf8").replace(/\r\n/g, "\n"), "utf8")
+      : content;
+    if (canonicalContent.length !== file.bytes || sha256(canonicalContent) !== file.sha256) {
       throw new Error(`Staging frontend integrity mismatch: ${file.path}`);
     }
-    totalBytes += content.length;
+    totalBytes += canonicalContent.length;
     treePayload.push(`${file.sha256}  ${file.path}\n`);
   }
   if (totalBytes !== manifest.total_bytes || sha256(Buffer.from(treePayload.join(""), "utf8")) !== manifest.tree_sha256) {

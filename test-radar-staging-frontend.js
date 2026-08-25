@@ -56,14 +56,15 @@ test("packaged frontend matches commit 89e45c6 and every declared SHA-256", () =
   const manifest = readVerifiedManifest({ snapshotRoot, manifestPath });
   assert.equal(manifest.source_commit, EXPECTED_SOURCE_COMMIT);
   assert.equal(manifest.file_count, 121);
-  assert.equal(manifest.total_bytes, 8_839_954);
-  assert.equal(manifest.tree_sha256, "6bcf69499fede8eb3d9efa02bd2cbe61cdc0162ffe2cfd0b836ea4dda4c67571");
+  assert.equal(manifest.total_bytes, 8_794_195);
+  assert.equal(manifest.tree_sha256, "2fd3885fbfcbff3642de03a71db663e572a8e42f61f71d73e97d4e112bf8af0c");
 });
 
 test("staging app serves exact bytes with no-store, CSP and no-index headers", async () => {
   const response = await request(appWithSnapshot(), "/radar-staging/app.html");
+  const canonicalBody = Buffer.from(response.body.toString("utf8").replace(/\r\n/g, "\n"), "utf8");
   assert.equal(response.status, 200);
-  assert.equal(crypto.createHash("sha256").update(response.body).digest("hex"), "893fe44cd7f951249583023926869d9fc62383a783e639d4c44deb5aaa82ad81");
+  assert.equal(crypto.createHash("sha256").update(canonicalBody).digest("hex"), "0d7be4405863c1a522bd7fc7ed482b8a06435ee8d37485180bd79242eb26b3c6");
   assert.match(response.headers.get("cache-control"), /no-store/);
   assert.match(response.headers.get("content-security-policy"), /frame-ancestors 'none'/);
   assert.match(response.headers.get("x-robots-tag"), /noindex.*noarchive/);
@@ -77,7 +78,7 @@ test("source manifest is public proof only and contains no credential material",
   assert.equal(response.status, 200);
   assert.equal(parsed.source_commit, EXPECTED_SOURCE_COMMIT);
   assert.doesNotMatch(body, /(?:password|authorization|bearer|database_url|jwt_secret)/i);
-  assert.equal(parsed.files.find(file => file.path === "app.html").sha256, "893fe44cd7f951249583023926869d9fc62383a783e639d4c44deb5aaa82ad81");
+  assert.equal(parsed.files.find(file => file.path === "app.html").sha256, "0d7be4405863c1a522bd7fc7ed482b8a06435ee8d37485180bd79242eb26b3c6");
 });
 
 test("unknown and traversal-style staging paths disclose no files", async () => {

@@ -1,2 +1,2 @@
 # The staging snapshot is byte-for-byte from the approved frontend commit.
-staging-frontend/snapshot/** -whitespace
+staging-frontend/snapshot/** text=auto eol=lf -whitespace

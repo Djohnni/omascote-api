@@ -3,6 +3,7 @@
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
+const { spawnSync } = require("node:child_process");
 
 const SOURCE_COMMIT = "89e45c6bc9ba2a9643c690ffffabd3c2449b7f3f";
 
@@ -39,15 +40,43 @@ function buildManifest(root) {
   });
 }
 
+function git(repository, args, options = {}) {
+  const result = spawnSync("git", ["-C", repository, ...args], {
+    encoding: options.encoding === undefined ? null : options.encoding,
+    maxBuffer: 64 * 1024 * 1024
+  });
+  if (result.status !== 0) throw new Error(`Git command failed: ${args[0]}`);
+  return result.stdout;
+}
+
+function buildGitManifest(repository, commit = SOURCE_COMMIT) {
+  const names = git(repository, ["ls-tree", "-r", "-z", "--name-only", commit])
+    .toString("utf8").split("\0").filter(Boolean).sort((left, right) => left.localeCompare(right, "en"));
+  const files = names.map(relativePath => {
+    const content = git(repository, ["show", `${commit}:${relativePath}`]);
+    return Object.freeze({ path: relativePath, bytes: content.length, sha256: sha256(content) });
+  });
+  const treePayload = files.map(file => `${file.sha256}  ${file.path}\n`).join("");
+  return Object.freeze({
+    schema_version: 1,
+    source_repository: "https://github.com/Djohnni/omascote.git",
+    source_commit: commit,
+    file_count: files.length,
+    total_bytes: files.reduce((total, file) => total + file.bytes, 0),
+    tree_sha256: sha256(Buffer.from(treePayload, "utf8")),
+    files
+  });
+}
+
 function main() {
   const repositoryRoot = path.resolve(__dirname, "..");
-  const snapshotRoot = path.join(repositoryRoot, "staging-frontend", "snapshot");
+  const sourceRepository = path.resolve(process.argv[2] || path.join(repositoryRoot, "..", "frontend-release-candidate"));
   const output = path.join(repositoryRoot, "staging-frontend", "source-manifest.json");
-  const manifest = buildManifest(snapshotRoot);
+  const manifest = buildGitManifest(sourceRepository);
   fs.writeFileSync(output, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
   process.stdout.write(`${manifest.source_commit} ${manifest.file_count} ${manifest.tree_sha256}\n`);
 }
 
 if (require.main === module) main();
 
-module.exports = { SOURCE_COMMIT, buildManifest, listFiles, sha256 };
+module.exports = { SOURCE_COMMIT, buildGitManifest, buildManifest, listFiles, sha256 };

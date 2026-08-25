@@ -3,43 +3,43 @@
   "source_repository": "https://github.com/Djohnni/omascote.git",
   "source_commit": "89e45c6bc9ba2a9643c690ffffabd3c2449b7f3f",
   "file_count": 121,
-  "total_bytes": 8839954,
-  "tree_sha256": "6bcf69499fede8eb3d9efa02bd2cbe61cdc0162ffe2cfd0b836ea4dda4c67571",
+  "total_bytes": 8794195,
+  "tree_sha256": "2fd3885fbfcbff3642de03a71db663e572a8e42f61f71d73e97d4e112bf8af0c",
   "files": [
     {
       "path": ".github/workflows/pages.yml",
-      "bytes": 716,
-      "sha256": "f95da90c09db5ef856ca7a456783b0b10fac9af9f1a175f0faca282e17e46e24"
+      "bytes": 678,
+      "sha256": "7dea53e13a333691ea253e2b26c511d5662f4d1029b1a6048019ddcf3b2907e1"
     },
     {
       "path": ".nojekyll",
-      "bytes": 2,
-      "sha256": "7eb70257593da06f682a3ddda54a9d260d4fc514f645237f5ca74b08f8da61a6"
+      "bytes": 1,
+      "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
     },
     {
       "path": ".well-known/assetlinks.json",
-      "bytes": 461,
-      "sha256": "e86462d4f6f80bd67e6983543d592d303fad803760c9d6eaf744ae2fef8020c5"
+      "bytes": 446,
+      "sha256": "37cc9aa8c8bcaec5f27b1bffc0952be7f83599348516525b24d1936f29bbd84c"
     },
     {
       "path": "app.html",
-      "bytes": 1225619,
-      "sha256": "893fe44cd7f951249583023926869d9fc62383a783e639d4c44deb5aaa82ad81"
+      "bytes": 1187865,
+      "sha256": "0d7be4405863c1a522bd7fc7ed482b8a06435ee8d37485180bd79242eb26b3c6"
     },
     {
       "path": "backend-dividir-times/dividir-times.router.js",
-      "bytes": 16953,
-      "sha256": "f75be359fa8f24e8d9e6d86241db670fda9eb4dba9897f444ffe8fe3faee7104"
+      "bytes": 16448,
+      "sha256": "76f16ef2d92fe78bfeebc57cf7eeb7f2dfce104b2da8fed02578ffb2b25a8eb4"
     },
     {
       "path": "backend-dividir-times/README.md",
-      "bytes": 2305,
-      "sha256": "adf1ad25a6d7cd7c2e72cd8f880460a4c8df6abb4145e71165e1292b73b68fdc"
+      "bytes": 2239,
+      "sha256": "b253652ef80173ab8d7d0e3261e4452bab3a85d35d39b20452d135a64198397c"
     },
     {
       "path": "backend-dividir-times/schema.sql",
-      "bytes": 1488,
-      "sha256": "28d2943c4fe2f7750d6a0894019c757192b59d2e81e3b794e55a90be1f160ec1"
+      "bytes": 1449,
+      "sha256": "31560c2d2d8648ba99a000083761b021da67503dae42830805f781d92ddefeaf"
     },
     {
       "path": "banner-home-jogador.jpg",
@@ -53,28 +53,28 @@
     },
     {
       "path": "continuar.css",
-      "bytes": 1359,
-      "sha256": "7145264c14783583a19110206ad88809497c0d78432f8b4dfb6e4c391602bcda"
+      "bytes": 1278,
+      "sha256": "1420b61fdd7c76ed6392f0a306b57a6b8093ee423af0a5a84a68e94b13df84e2"
     },
     {
       "path": "continuar.html",
-      "bytes": 1046,
-      "sha256": "c96653a1eac585af73df8a32ec618add4227ebac0cb37b6866627f79cc9fa39b"
+      "bytes": 1024,
+      "sha256": "5798e8230ba52f5e11c7e8b70f10ac59a82eb09b89e1276104bdc0bf0e6a6243"
     },
     {
       "path": "continuar.js",
-      "bytes": 9238,
-      "sha256": "f05a6ab6f97c1de47adedf3a70298b345dfe5ca6a2ed2e199833c763c5119e60"
+      "bytes": 8971,
+      "sha256": "c8d34d9089a73bfd9e50a8cd6875a7eb300580b626e790056392e85d83bd5a9a"
     },
     {
       "path": "denunciar-conteudo/index.html",
-      "bytes": 5721,
-      "sha256": "0b6c4a1a7c5540ec6c85540e8b2ebc9998553bebc28fabdc15a4a2ac479a32b2"
+      "bytes": 5588,
+      "sha256": "3a61086b9b8c4aee7a063cd34aaf9e8c3ca4e7273d44d9232f1e5fc1d107c53e"
     },
     {
       "path": "excluir-conta/index.html",
-      "bytes": 3456,
-      "sha256": "7782020a4abd595c41062a4e2d07b6f3f39297d6d778a5f6109ef8a7556e3595"
+      "bytes": 3397,
+      "sha256": "63e2e5bcdf11ef59a5a66158556d99c68baf8ae52f43fbfa8ce1a1b8c646d8e2"
     },
     {
       "path": "exemplo2.jpg",
@@ -128,8 +128,8 @@
     },
     {
       "path": "google3f283dfaba05f24f.html",
-      "bytes": 55,
-      "sha256": "8c4b26acc688fe3acc73928e7e69c09ff0cbd2f0fe8912666bd2a07d0ac9b070"
+      "bytes": 54,
+      "sha256": "2eb7c6e2556bc767cd3d8167b75e75025ea33328472d23ad4485eb0d64bcbcf4"
     },
     {
       "path": "hero.jpeg",
@@ -158,13 +158,13 @@
     },
     {
       "path": "index.html",
-      "bytes": 8338,
-      "sha256": "1fec2e78bebb37658b617ee3d532efb40cff3df0d25853872794327d659b6cce"
+      "bytes": 8013,
+      "sha256": "dc66bb9986aa8b440247723685e91641102ae966cad8da9568f6b649303ab0ce"
     },
     {
       "path": "manifest.json",
-      "bytes": 827,
-      "sha256": "1596d265b8e90d45d76522f5671359634bc38bb5c8ab82e048a42e1ee6acb992"
+      "bytes": 796,
+      "sha256": "dfb5faef67dc5e02313ef63283b9c7d9044e826ce474792b8e484a0f9dba92af"
     },
     {
       "path": "og-image.jpg",
@@ -178,13 +178,13 @@
     },
     {
       "path": "politica-de-privacidade/index.html",
-      "bytes": 3745,
-      "sha256": "614137360bf1b85d8d5e57283e62ad4e7447f3d3ff8a2bf3c2b5a6583dbc177b"
+      "bytes": 3687,
+      "sha256": "3803e80c018fabe3c244e358cac573ba294a2a48cfae3a3bd48d252eda20d5c3"
     },
     {
       "path": "produtos/.gitkeep",
-      "bytes": 2,
-      "sha256": "7eb70257593da06f682a3ddda54a9d260d4fc514f645237f5ca74b08f8da61a6"
+      "bytes": 1,
+      "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
     },
     {
       "path": "produtos/cenarios/resultado_atual_v1.png",
@@ -473,73 +473,73 @@
     },
     {
       "path": "radar-amistosos/demo.html",
-      "bytes": 1189,
-      "sha256": "2d759cc1a229d932be5e8f23df1d58f9af5a45cb3dc9220c1e03b43be9ada8f2"
+      "bytes": 1165,
+      "sha256": "3bfc351aa11c90399c99722736d8587b5b14409f9e6cda0fd978f7a3cb6c24f1"
     },
     {
       "path": "radar-amistosos/local-preview-server.js",
-      "bytes": 2875,
-      "sha256": "90ebc509eae77dc6b3da494294df74fd056c110d9614bb5001113dfb547024a7"
+      "bytes": 2792,
+      "sha256": "0ec5b30d17f46dad55d45aef1e9dc70a47dffec67d7664ee4591a17073655e5c"
     },
     {
       "path": "radar-amistosos/radar-api.js",
-      "bytes": 16815,
-      "sha256": "3741ff77c8c21750328209a2d455e0852298cb118c17633f84a1849ff0afbf21"
+      "bytes": 16491,
+      "sha256": "91fa672363dcc502436e2b6d3eb74966544ae4310ff4625c1267eed63b708a85"
     },
     {
       "path": "radar-amistosos/radar-core.js",
-      "bytes": 35409,
-      "sha256": "7816a59593e4d77478c07ce7a562a17f6865515ef6e44e307ab4f9bb95cf7e15"
+      "bytes": 34505,
+      "sha256": "79cb1f8d347e0a541f9a9e228f0093e9a2406bb24faf52e6c51ab36fb6b36865"
     },
     {
       "path": "radar-amistosos/radar-demo-data.js",
-      "bytes": 19290,
-      "sha256": "81a17c413a01c114dc44e60c375e186577dcb18cd2bdeecd23acecb09cc9fbb8"
+      "bytes": 18779,
+      "sha256": "fbeac3ab882daa5ed543934260233c2c51719d23548206b0f14d9d43205cb9cd"
     },
     {
       "path": "radar-amistosos/radar-live.css",
-      "bytes": 8449,
-      "sha256": "649dec6b22c40e98bb52da1873dd9d9fb9a93369e05399b8d09be958d29517d4"
+      "bytes": 8276,
+      "sha256": "6039dbe3dee1c86625235c5ce107ccd8effac2e52d8400d90de0651b61dec55a"
     },
     {
       "path": "radar-amistosos/radar-live.js",
-      "bytes": 44057,
-      "sha256": "92c4eda28ecf931fdeddeb742b93675344c9a6ec3edb036580beb38ee217420d"
+      "bytes": 43459,
+      "sha256": "907bf96d22207bc905b4674fee14eeeb6ed499b60ce6b683824fe688a796fcb0"
     },
     {
       "path": "radar-amistosos/radar-routes.js",
-      "bytes": 7058,
-      "sha256": "1643c9e08c095e97a55c6eda40f27297fd8b12bf5fc6495bb2bef2a0faefd62b"
+      "bytes": 6920,
+      "sha256": "5a4dd4a31324a0a296cd8eaa53a0513b1fef6e332e46a5e8f5660db28221c709"
     },
     {
       "path": "radar-amistosos/radar-ui.js",
-      "bytes": 125226,
-      "sha256": "785ea8851eaa1859f3feee1f713571994ba7c4fe4ff232e81c97983c14b1dd48"
+      "bytes": 123598,
+      "sha256": "ff9c987c52a88e674a98afad94941437d2ed81c6f4e6014a0cccae9f7b6685a2"
     },
     {
       "path": "radar-amistosos/radar.css",
-      "bytes": 99072,
-      "sha256": "21ae9cd547eca5c769796507018e5083b854f795a97ef86d7496f7a51e618ce5"
+      "bytes": 97642,
+      "sha256": "50d7605a7a50930e285e204218ee5b7c654ffc0ad798b169d0322bcd65b312b8"
     },
     {
       "path": "radar-amistosos/REAL_INTEGRATION.md",
-      "bytes": 2380,
-      "sha256": "3049f72cb16995ec5f281f34d5d6b49ab74f1aa4ebbf61ee53e34ee8bfefc74d"
+      "bytes": 2348,
+      "sha256": "c1758f92ce5910617430b1ebb688b4ab8111ae7cd5a7f273fb981d64fea1b182"
     },
     {
       "path": "radar-amistosos/RELEASE_CANDIDATE_VALIDATION.md",
-      "bytes": 2089,
-      "sha256": "f156d1c010a64dd87ced1fac7db3f40d1230eb9d1d047f63065f77304f7f8bf0"
+      "bytes": 2058,
+      "sha256": "c40135b37ba3f7b2083fac602a3e0470e6529db455c3b6fda99fc2c4807e0bf4"
     },
     {
       "path": "radar-amistosos/test-radar-api.js",
-      "bytes": 3243,
-      "sha256": "c290608d37c5c87c97ce5e929ec8fb2575939dc87877d9f7ee1f8ca8eb69edb4"
+      "bytes": 3174,
+      "sha256": "e90ef66b68a81c981c2dc90842c63087129d91d3b71c574ecdf8956237364ed9"
     },
     {
       "path": "radar-amistosos/test-release-candidate.js",
-      "bytes": 2339,
-      "sha256": "79a6fbedf531dca44bfda45ca76873c49e2a37ce15e202051543f2f5a4d68442"
+      "bytes": 2289,
+      "sha256": "7e36bf612985dcf3e98c75eea0d5722860b953e8804ae65500b397a920dca67c"
     },
     {
       "path": "robots.txt",
@@ -548,8 +548,8 @@
     },
     {
       "path": "script.js",
-      "bytes": 513,
-      "sha256": "56cfc8cb561bc3152ec8d4dc7f57dab100fbc392cbc03ef2bcfca567db6f3b70"
+      "bytes": 496,
+      "sha256": "9a6943d02b5c93962bbf6bce5a010e3fea77b8626bc166988f1bcb11aa533c50"
     },
     {
       "path": "sitemap.xml",
@@ -598,18 +598,18 @@
     },
     {
       "path": "styles.css",
-      "bytes": 8412,
-      "sha256": "36cee466671f955e52dbcfbfdd08d607d8c9cb799e7edc60c83f248f9093815b"
+      "bytes": 8129,
+      "sha256": "4f3d1bb6df44faa447f92306922b8f4286d31330da1d19eed0faa744dc40b5d2"
     },
     {
       "path": "sw.js",
-      "bytes": 392,
-      "sha256": "975f3fc73ded726edbc173d902b980eb44340ba37b7fdefe7e2aa0ead3f38ba7"
+      "bytes": 380,
+      "sha256": "820860fc0be1f0c85ec12c319ff376eb4562e3133214b9f0a106c35e48092ab9"
     },
     {
       "path": "termos-de-uso/index.html",
-      "bytes": 3296,
-      "sha256": "bbb41b8f3a78d594dd1577ca001cd3504ccc2a15c8708ab0abc62eb352db37e5"
+      "bytes": 3240,
+      "sha256": "34a272fc56d3a80a572d9c049cc0023e79c8a0a968ca2fe9d7c22848135ad6fd"
     }
   ]
 }
