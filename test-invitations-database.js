@@ -107,6 +107,22 @@ function service(database, clock = () => BASE_NOW, overrides = {}) {
   });
 }
 
+async function dataCounts(database) {
+  const tables = await database.query(`
+    SELECT table_name
+    FROM information_schema.tables
+    WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+      AND table_name <> 'schema_migrations'
+    ORDER BY table_name
+  `);
+  const counts = {};
+  for (const { table_name: tableName } of tables.rows) {
+    const result = await database.query(`SELECT count(*)::integer AS total FROM "${tableName}"`);
+    counts[tableName] = result.rows[0].total;
+  }
+  return counts;
+}
+
 test("migration 008 runs twice and protects invitation, notification and idempotency history", async () => {
   const database = new PGlite();
   try {
@@ -120,6 +136,37 @@ test("migration 008 runs twice and protects invitation, notification and idempot
       ORDER BY table_name
     `);
     assert.equal(tables.rows.length, 2);
+  } finally { await database.close(); }
+});
+
+test("first-access notification list is empty and creates no Radar records", async () => {
+  const database = new PGlite();
+  try {
+    await migrate({ pool: pool(database) });
+    const api = service(database);
+    const legacyOwner = identity("legacy-without-radar");
+    const before = await dataCounts(database);
+
+    const notifications = await api.listNotifications({
+      identity: legacyOwner,
+      query: {},
+      ip: "203.0.113.80"
+    });
+
+    assert.deepEqual(notifications, {
+      items: [],
+      pagination: { has_more: false, next_cursor: null }
+    });
+    assert.deepEqual(await dataCounts(database), before);
+
+    await assert.rejects(api.readNotification({
+      identity: legacyOwner,
+      publicId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      body: {},
+      idempotencyKey: "notification-read-without-profile-0001",
+      ip: "203.0.113.80"
+    }), error => error.code === "RADAR_PROFILE_NOT_FOUND");
+    assert.deepEqual(await dataCounts(database), before);
   } finally { await database.close(); }
 });
 

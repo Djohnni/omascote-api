@@ -132,6 +132,7 @@ function legacySummary(legacyProfile) {
 }
 
 function buildOwnerResponse({ team, identity, config, replayed = false }) {
+  const onboardingRequired = !team;
   return Object.freeze({
     profile: ownerProfile(team),
     legacy_profile: legacySummary(identity.legacyProfile),
@@ -139,6 +140,10 @@ function buildOwnerResponse({ team, identity, config, replayed = false }) {
       team,
       legacyProfile: identity.legacyProfile,
       config
+    }),
+    onboarding: Object.freeze({
+      required: onboardingRequired,
+      next_action: onboardingRequired ? "create_profile" : null
     }),
     replayed
   });

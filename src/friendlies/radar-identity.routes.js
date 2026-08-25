@@ -63,8 +63,10 @@ function createRadarIdentityRouter({
       const result = await service.getProfile(req.radarIdentity);
       return res.json({
         ok: true,
+        profile: result.profile,
         legacy_profile: result.legacy_profile,
-        eligibility: result.eligibility
+        eligibility: result.eligibility,
+        onboarding: result.onboarding
       });
     } catch (error) {
       return next(error);

@@ -170,6 +170,17 @@ test("identity profile mutation is owned, versioned, idempotent and audited", as
       accept_terms: true
     };
 
+    const firstAccess = await service.getProfile(identity);
+    assert.equal(firstAccess.profile, null);
+    assert.deepEqual(firstAccess.onboarding, {
+      required: true,
+      next_action: "create_profile"
+    });
+    assert.ok(firstAccess.eligibility.missing.includes("radar_profile_not_created"));
+    assert.equal((await database.query(
+      "SELECT count(*)::integer AS total FROM radar_team_profiles"
+    )).rows[0].total, 0);
+
     const created = await service.putProfile({
       identity,
       body,
@@ -181,6 +192,7 @@ test("identity profile mutation is owned, versioned, idempotent and audited", as
     assert.equal(created.profile.status, "pending_verification");
     assert.equal(created.profile.terms_accepted, true);
     assert.equal(created.eligibility.instagram_verified, false);
+    assert.equal(created.onboarding.required, false);
     assert.match(created.profile.public_id, /^[0-9a-f-]{36}$/i);
     assert.equal(Object.hasOwn(created.profile, "account_reference"), false);
 

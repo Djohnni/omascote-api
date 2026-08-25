@@ -98,6 +98,21 @@ async function loadOwnedTeam(client, identity, { lock = false } = {}) {
   return team;
 }
 
+async function findOwnedTeam(client, identity) {
+  const result = await client.query(
+    "SELECT * FROM radar_team_profiles WHERE legacy_profile_id = $1",
+    [identity.profileId]
+  );
+  if (result.rowCount === 0) return null;
+  if (result.rowCount !== 1) {
+    throw invitationError("RADAR_PROFILE_INVALID", 409, "Perfil do Radar indisponivel.");
+  }
+  const team = rowToTeam(result.rows[0]);
+  assertRadarTeamOwnedByIdentity(team, identity);
+  assertRadarTeamCanMutate(team);
+  return team;
+}
+
 async function lockPair(client, firstId, secondId) {
   const result = await client.query(
     "SELECT * FROM radar_team_profiles WHERE id IN ($1, $2) ORDER BY id FOR UPDATE",
@@ -482,7 +497,10 @@ function createInvitationRepository({ pool, config }) {
 
   async function listNotifications({ identity, cursor, limit, now, ip }) {
     return withTransaction(async client => {
-      const team = await loadOwnedTeam(client, identity, { lock: true });
+      const team = await findOwnedTeam(client, identity);
+      if (!team) {
+        return Object.freeze({ rows: Object.freeze([]), limit });
+      }
       await consumeLimits(client, { identity, teamId: team.id, ip, operation: "notifications_list", now, config });
       const params = [team.id];
       const cursorSql = cursor

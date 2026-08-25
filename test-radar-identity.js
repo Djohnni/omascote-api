@@ -236,6 +236,7 @@ test("protected Radar endpoints authenticate, resolve server-side identity and h
         profile: null,
         legacy_profile: { slug: "time-teste" },
         eligibility: { eligible: false, missing: ["radar_profile_not_created"] },
+        onboarding: { required: true, next_action: "create_profile" },
         replayed: false
       };
     },
@@ -245,6 +246,7 @@ test("protected Radar endpoints authenticate, resolve server-side identity and h
         profile: { public_id: "public-team-id", version: 1 },
         legacy_profile: { slug: "time-teste" },
         eligibility: { eligible: false, missing: ["instagram_not_verified"] },
+        onboarding: { required: false, next_action: null },
         replayed: false
       };
     }
@@ -270,12 +272,23 @@ test("protected Radar endpoints authenticate, resolve server-side identity and h
   const denied = await request(app, "/me/time/radar");
   assert.equal(denied.status, 401);
 
+  const firstAccess = await request(app, "/me/time/radar", {
+    headers: { Authorization: "Bearer valid" }
+  });
+  assert.equal(firstAccess.status, 200);
+  assert.equal(firstAccess.body.profile, null);
+  assert.deepEqual(firstAccess.body.onboarding, {
+    required: true,
+    next_action: "create_profile"
+  });
+
   const eligibility = await request(app, "/me/time/radar/elegibilidade", {
     headers: { Authorization: "Bearer valid" }
   });
   assert.equal(eligibility.status, 200);
+  assert.equal(eligibility.body.profile, null);
+  assert.equal(eligibility.body.onboarding.required, true);
   assert.equal(eligibility.body.eligibility.eligible, false);
-  assert.equal(Object.hasOwn(eligibility.body, "profile"), false);
 
   const updated = await request(app, "/me/time/radar", {
     method: "PATCH",
