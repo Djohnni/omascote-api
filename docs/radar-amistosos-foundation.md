@@ -18,6 +18,9 @@ as rotas legadas nem migra os arquivos JSON existentes.
 | `RADAR_MODERATION_SLA_HOURS` | vazio | SLA operacional, definido antes do piloto. |
 | `RADAR_MATCH_RESULTS_ENABLED` | `false` | Habilita as duas mutações de placar somente após a dupla confirmação da partida. |
 | `RADAR_MATCH_RESULTS_SECURITY_SECRET` | vazio | Segredo independente de pelo menos 32 bytes para HMAC dos placares e da aplicação única das estatísticas. Com a flag ligada e sem ele, o readiness falha fechado. |
+| `RADAR_MATCH_HISTORY_ENABLED` | `false` | Habilita o histórico privado e os confrontos diretos. |
+| `RADAR_MATCH_HISTORY_CURSOR_SECRET` | vazio | Segredo de pelo menos 32 bytes usado somente para assinar e vincular cursores. |
+| `RADAR_MATCH_HISTORY_RATE_LIMIT_SECRET` | vazio | Segredo independente de pelo menos 32 bytes usado para limitar conta, time e IP sem armazenar os identificadores. |
 | `RADAR_INSTAGRAM_VERIFICATION_SECRET` | vazio | Segredo independente, com pelo menos 32 bytes, usado apenas nos HMACs da verificação. Sem ele, o readiness falha fechado. |
 | `RADAR_INSTAGRAM_CHALLENGE_TTL_MINUTES` | `20` | Validade do desafio de bio. |
 | `RADAR_INSTAGRAM_CHALLENGE_MAX_ATTEMPTS` | `5` | Máximo de tentativas por desafio. |

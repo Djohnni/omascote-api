@@ -221,7 +221,8 @@ for (const reason of ["database_schema_missing", "database_schema_outdated"]) {
       friendly_search: "disabled",
       friendly_invitations: "disabled",
       friendly_match_center: "disabled",
-      friendly_match_results: "disabled"
+      friendly_match_results: "disabled",
+      friendly_match_history: "disabled"
     });
   });
 }
@@ -319,7 +320,8 @@ test("versioned migration contains transactional integrity foundations", () => {
     "007_friendly_team_discovery.sql",
     "008_friendly_invitations_notifications.sql",
     "009_match_center.sql",
-    "010_confirmed_match_results.sql"
+    "010_confirmed_match_results.sql",
+    "011_match_history.sql"
   ]);
   assert.equal(migrations.at(-1), LATEST_REQUIRED_MIGRATION);
 

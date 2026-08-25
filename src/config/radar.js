@@ -68,6 +68,12 @@ function createRadarConfig(env = process.env) {
   const matchResultsSecuritySecret = String(
     env.RADAR_MATCH_RESULTS_SECURITY_SECRET || ""
   ).trim() || null;
+  const matchHistoryCursorSecret = String(
+    env.RADAR_MATCH_HISTORY_CURSOR_SECRET || ""
+  ).trim() || null;
+  const matchHistoryRateLimitSecret = String(
+    env.RADAR_MATCH_HISTORY_RATE_LIMIT_SECRET || ""
+  ).trim() || null;
   const searchPageMaximum = boundedPositiveInteger(
     env.RADAR_SEARCH_PAGE_MAXIMUM,
     24,
@@ -101,6 +107,7 @@ function createRadarConfig(env = process.env) {
     invitationsEnabled: parseBoolean(env.RADAR_INVITATIONS_ENABLED, false),
     matchCenterEnabled: parseBoolean(env.RADAR_MATCH_CENTER_ENABLED, false),
     matchResultsEnabled: parseBoolean(env.RADAR_MATCH_RESULTS_ENABLED, false),
+    matchHistoryEnabled: parseBoolean(env.RADAR_MATCH_HISTORY_ENABLED, false),
     profilePrintImportEnabled: parseBoolean(
       env.RADAR_PROFILE_PRINT_IMPORT_ENABLED,
       false
@@ -340,6 +347,12 @@ function createRadarConfig(env = process.env) {
       matchResultsSecuritySecret &&
       Buffer.byteLength(matchResultsSecuritySecret, "utf8") >= 32
     ),
+    matchHistoryConfigured: Boolean(
+      matchHistoryCursorSecret &&
+      Buffer.byteLength(matchHistoryCursorSecret, "utf8") >= 32 &&
+      matchHistoryRateLimitSecret &&
+      Buffer.byteLength(matchHistoryRateLimitSecret, "utf8") >= 32
+    ),
     matchPageDefault: Math.min(
       boundedPositiveInteger(env.RADAR_MATCH_PAGE_DEFAULT, 20, 50),
       boundedPositiveInteger(env.RADAR_MATCH_PAGE_MAXIMUM, 50, 100)
@@ -348,6 +361,40 @@ function createRadarConfig(env = process.env) {
       env.RADAR_MATCH_PAGE_MAXIMUM,
       50,
       100
+    ),
+    matchHistoryPageDefault: Math.min(
+      boundedPositiveInteger(env.RADAR_MATCH_HISTORY_PAGE_DEFAULT, 20, 50),
+      boundedPositiveInteger(env.RADAR_MATCH_HISTORY_PAGE_MAXIMUM, 50, 100)
+    ),
+    matchHistoryPageMaximum: boundedPositiveInteger(
+      env.RADAR_MATCH_HISTORY_PAGE_MAXIMUM,
+      50,
+      100
+    ),
+    matchHistoryCursorTtlMinutes: boundedPositiveInteger(
+      env.RADAR_MATCH_HISTORY_CURSOR_TTL_MINUTES,
+      15,
+      120
+    ),
+    matchHistoryRateWindowSeconds: boundedPositiveInteger(
+      env.RADAR_MATCH_HISTORY_RATE_WINDOW_SECONDS,
+      60,
+      60 * 60
+    ),
+    matchHistoryAccountLimit: boundedPositiveInteger(
+      env.RADAR_MATCH_HISTORY_ACCOUNT_LIMIT,
+      60,
+      1000
+    ),
+    matchHistoryTeamLimit: boundedPositiveInteger(
+      env.RADAR_MATCH_HISTORY_TEAM_LIMIT,
+      60,
+      1000
+    ),
+    matchHistoryIpLimit: boundedPositiveInteger(
+      env.RADAR_MATCH_HISTORY_IP_LIMIT,
+      180,
+      5000
     ),
     invitationRateWindowSeconds: boundedPositiveInteger(
       env.RADAR_INVITATION_RATE_WINDOW_SECONDS,
@@ -420,6 +467,18 @@ function createRadarConfig(env = process.env) {
   });
   Object.defineProperty(config, "matchResultsSecuritySecret", {
     value: matchResultsSecuritySecret,
+    enumerable: false,
+    writable: false,
+    configurable: false
+  });
+  Object.defineProperty(config, "matchHistoryCursorSecret", {
+    value: matchHistoryCursorSecret,
+    enumerable: false,
+    writable: false,
+    configurable: false
+  });
+  Object.defineProperty(config, "matchHistoryRateLimitSecret", {
+    value: matchHistoryRateLimitSecret,
     enumerable: false,
     writable: false,
     configurable: false

@@ -181,7 +181,7 @@ test("migration 007 is idempotent and discovery excludes unsafe candidates in re
   const pool = createPoolAdapter(database);
   try {
     const applied = await migrate({ pool });
-    assert.equal(applied.at(-1), "010_confirmed_match_results.sql");
+    assert.equal(applied.at(-1), "011_match_history.sql");
     assert.deepEqual(await migrate({ pool }), []);
     assert.equal((await database.query(`
       SELECT count(*)::integer AS total
