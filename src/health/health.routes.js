@@ -34,7 +34,8 @@ function createHealthRouter({ config, buildInfo, checkDatabase }) {
     const searchConfigured = config.searchEnabled !== true || config.searchConfigured === true;
     const invitationsConfigured = config.invitationsEnabled !== true || config.invitationsConfigured === true;
     const matchCenterConfigured = config.matchCenterEnabled !== true || config.matchCenterConfigured === true;
-    const ready = database.ok && verificationConfigured && profilePrintConfigured && searchConfigured && invitationsConfigured && matchCenterConfigured;
+    const matchResultsConfigured = config.matchResultsEnabled !== true || config.matchResultsConfigured === true;
+    const ready = database.ok && verificationConfigured && profilePrintConfigured && searchConfigured && invitationsConfigured && matchCenterConfigured && matchResultsConfigured;
     return res.status(ready ? 200 : 503).json({
       ok: ready,
       ...metadata,
@@ -59,6 +60,11 @@ function createHealthRouter({ config, buildInfo, checkDatabase }) {
       friendly_match_center: config.matchCenterEnabled !== true
         ? "disabled"
         : matchCenterConfigured
+          ? "configured"
+          : "not_configured",
+      friendly_match_results: config.matchResultsEnabled !== true
+        ? "disabled"
+        : matchResultsConfigured
           ? "configured"
           : "not_configured"
     });

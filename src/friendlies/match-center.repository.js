@@ -18,6 +18,18 @@ function publicTeam(snapshot) {
   });
 }
 
+function publicScore(submission, viewerIsTeamA) {
+  if (!submission || typeof submission !== "object") return null;
+  const myGoals = viewerIsTeamA ? submission.team_a_goals : submission.team_b_goals;
+  const opponentGoals = viewerIsTeamA ? submission.team_b_goals : submission.team_a_goals;
+  if (!Number.isInteger(Number(myGoals)) || !Number.isInteger(Number(opponentGoals))) return null;
+  return Object.freeze({
+    gols_meu_time: Number(myGoals),
+    gols_adversario: Number(opponentGoals),
+    informado_em: submission.created_at || null
+  });
+}
+
 function rowToMatch(row, viewerTeamId) {
   const isTeamA = row.team_a_id === viewerTeamId;
   const opponent = publicTeam(isTeamA ? row.team_b_snapshot : row.team_a_snapshot);
@@ -25,6 +37,15 @@ function rowToMatch(row, viewerTeamId) {
   const confirmedByMe = isTeamA ? row.team_a_confirmed : row.team_b_confirmed;
   const confirmedByOpponent = isTeamA ? row.team_b_confirmed : row.team_a_confirmed;
   const cancelled = row.occurrence_state === "cancelled";
+  const mySubmission = isTeamA ? row.team_a_result_submission : row.team_b_result_submission;
+  const opponentSubmission = isTeamA ? row.team_b_result_submission : row.team_a_result_submission;
+  const officialScore = row.result_state === "verified"
+    ? Object.freeze({
+        gols_meu_time: Number(isTeamA ? row.verified_team_a_goals : row.verified_team_b_goals),
+        gols_adversario: Number(isTeamA ? row.verified_team_b_goals : row.verified_team_a_goals),
+        confirmado_em: row.verified_result_at || null
+      })
+    : null;
   return Object.freeze({
     match_id: row.public_id,
     state: row.occurrence_state,
@@ -47,6 +68,12 @@ function rowToMatch(row, viewerTeamId) {
       by_me: row.cancelled_by_team_id === viewerTeamId,
       cancelled_at: row.cancelled_at
     }) : null,
+    result: Object.freeze({
+      state: row.result_state || "empty",
+      meu_placar: publicScore(mySubmission, isTeamA),
+      placar_adversario: publicScore(opponentSubmission, isTeamA),
+      placar_oficial: officialScore
+    }),
     contact_unlocked: true,
     created_at: row.created_at,
     updated_at: row.updated_at
@@ -89,7 +116,31 @@ const MATCH_SELECT = `
     (
       SELECT count(*)::integer FROM match_occurrence_confirmations confirmation
       WHERE confirmation.match_id = match.id AND confirmation.happened = true
-    ) AS confirmation_count
+    ) AS confirmation_count,
+    (
+      SELECT jsonb_build_object(
+        'team_a_goals', submission.team_a_goals,
+        'team_b_goals', submission.team_b_goals,
+        'created_at', submission.created_at
+      )
+      FROM match_result_submissions submission
+      WHERE submission.match_id = match.id
+        AND submission.submitting_team_id = match.team_a_id
+        AND submission.is_current = true
+      LIMIT 1
+    ) AS team_a_result_submission,
+    (
+      SELECT jsonb_build_object(
+        'team_a_goals', submission.team_a_goals,
+        'team_b_goals', submission.team_b_goals,
+        'created_at', submission.created_at
+      )
+      FROM match_result_submissions submission
+      WHERE submission.match_id = match.id
+        AND submission.submitting_team_id = match.team_b_id
+        AND submission.is_current = true
+      LIMIT 1
+    ) AS team_b_result_submission
   FROM friendly_matches match
   JOIN friendly_invitations invitation ON invitation.id = match.invitation_id
   JOIN radar_team_profiles team_a ON team_a.id = match.team_a_id

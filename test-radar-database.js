@@ -47,7 +47,8 @@ test("clean PostgreSQL schema migrates idempotently and rejects cross-match conf
       "006_friendly_availability_management.sql",
       "007_friendly_team_discovery.sql",
       "008_friendly_invitations_notifications.sql",
-      "009_match_center.sql"
+      "009_match_center.sql",
+      "010_confirmed_match_results.sql"
     ]);
     assert.deepEqual(await migrate({ pool }), []);
     assert.deepEqual(await checkDatabase(pool), { ok: true });
@@ -87,6 +88,19 @@ test("clean PostgreSQL schema migrates idempotently and rejects cross-match conf
       ) VALUES ($1, $2, $3, '{}', '{}', now()) RETURNING id
     `, [invitationTwo, teamA, teamB])).rows[0].id;
 
+    for (const matchId of [matchOne, matchTwo]) {
+      await database.query(`
+        INSERT INTO match_occurrence_confirmations(match_id, confirming_team_id, happened)
+        VALUES ($1, $2, true), ($1, $3, true)
+      `, [matchId, teamA, teamB]);
+      await database.query(`
+        UPDATE friendly_matches
+        SET occurrence_state = 'played', occurrence_confirmed_at = now(),
+            version = version + 1, updated_at = now()
+        WHERE id = $1
+      `, [matchId]);
+    }
+
     const submissionHash = "e".repeat(64);
     const submission = (await database.query(`
       INSERT INTO match_result_submissions(
@@ -100,7 +114,7 @@ test("clean PostgreSQL schema migrates idempotently and rejects cross-match conf
           match_id, confirming_team_id, submission_id, submission_version, submission_hash
         ) VALUES ($1, $2, $3, 1, $4)
       `, [matchTwo, teamB, submission, submissionHash]),
-      error => error.code === "23503"
+      error => error.code === "23503" || /result submission not found/.test(error.message)
     );
 
     await assert.doesNotReject(database.query(`

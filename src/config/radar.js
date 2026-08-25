@@ -65,6 +65,9 @@ function createRadarConfig(env = process.env) {
   const invitationsSecuritySecret = String(
     env.RADAR_INVITATIONS_SECURITY_SECRET || ""
   ).trim() || null;
+  const matchResultsSecuritySecret = String(
+    env.RADAR_MATCH_RESULTS_SECURITY_SECRET || ""
+  ).trim() || null;
   const searchPageMaximum = boundedPositiveInteger(
     env.RADAR_SEARCH_PAGE_MAXIMUM,
     24,
@@ -97,6 +100,7 @@ function createRadarConfig(env = process.env) {
     searchEnabled: parseBoolean(env.RADAR_SEARCH_ENABLED, false),
     invitationsEnabled: parseBoolean(env.RADAR_INVITATIONS_ENABLED, false),
     matchCenterEnabled: parseBoolean(env.RADAR_MATCH_CENTER_ENABLED, false),
+    matchResultsEnabled: parseBoolean(env.RADAR_MATCH_RESULTS_ENABLED, false),
     profilePrintImportEnabled: parseBoolean(
       env.RADAR_PROFILE_PRINT_IMPORT_ENABLED,
       false
@@ -332,6 +336,10 @@ function createRadarConfig(env = process.env) {
       invitationsSecuritySecret &&
       Buffer.byteLength(invitationsSecuritySecret, "utf8") >= 32
     ),
+    matchResultsConfigured: Boolean(
+      matchResultsSecuritySecret &&
+      Buffer.byteLength(matchResultsSecuritySecret, "utf8") >= 32
+    ),
     matchPageDefault: Math.min(
       boundedPositiveInteger(env.RADAR_MATCH_PAGE_DEFAULT, 20, 50),
       boundedPositiveInteger(env.RADAR_MATCH_PAGE_MAXIMUM, 50, 100)
@@ -406,6 +414,12 @@ function createRadarConfig(env = process.env) {
   });
   Object.defineProperty(config, "invitationsSecuritySecret", {
     value: invitationsSecuritySecret,
+    enumerable: false,
+    writable: false,
+    configurable: false
+  });
+  Object.defineProperty(config, "matchResultsSecuritySecret", {
+    value: matchResultsSecuritySecret,
     enumerable: false,
     writable: false,
     configurable: false

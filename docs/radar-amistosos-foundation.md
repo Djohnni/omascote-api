@@ -16,6 +16,8 @@ as rotas legadas nem migra os arquivos JSON existentes.
 | `RADAR_PUBLIC_RATING_MIN_MATCHES` | `3` | Mínimo para publicar reputação agregada. |
 | `RADAR_PILOT_CITY_IBGE_CODE` | vazio | Cidade canônica do piloto, definida por ambiente. |
 | `RADAR_MODERATION_SLA_HOURS` | vazio | SLA operacional, definido antes do piloto. |
+| `RADAR_MATCH_RESULTS_ENABLED` | `false` | Habilita as duas mutações de placar somente após a dupla confirmação da partida. |
+| `RADAR_MATCH_RESULTS_SECURITY_SECRET` | vazio | Segredo independente de pelo menos 32 bytes para HMAC dos placares e da aplicação única das estatísticas. Com a flag ligada e sem ele, o readiness falha fechado. |
 | `RADAR_INSTAGRAM_VERIFICATION_SECRET` | vazio | Segredo independente, com pelo menos 32 bytes, usado apenas nos HMACs da verificação. Sem ele, o readiness falha fechado. |
 | `RADAR_INSTAGRAM_CHALLENGE_TTL_MINUTES` | `20` | Validade do desafio de bio. |
 | `RADAR_INSTAGRAM_CHALLENGE_MAX_ATTEMPTS` | `5` | Máximo de tentativas por desafio. |

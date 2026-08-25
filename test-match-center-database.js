@@ -130,12 +130,12 @@ async function createAcceptedMatch(database, first, second, suffix) {
   return accepted.match.match_id;
 }
 
-test("migration 009 runs twice and installs protected match history", async () => {
+test("match migrations run twice and install protected match history", async () => {
   const database = new PGlite();
   try {
     const adapter = pool(database);
     const applied = await migrate({ pool: adapter });
-    assert.equal(applied.at(-1), "009_match_center.sql");
+    assert.equal(applied.at(-1), "010_confirmed_match_results.sql");
     assert.deepEqual(await migrate({ pool: adapter }), []);
     const tables = await database.query(`
       SELECT table_name FROM information_schema.tables
