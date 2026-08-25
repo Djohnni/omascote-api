@@ -44,6 +44,7 @@ function publicCandidate(item, liveProfile, minimumRatingMatches) {
       label: `${Number(item.location.distanceKm.toFixed(1))} km aproximadamente`
     });
   const response = {
+    public_id: item.publicId,
     slug: item.publicSlug,
     name: liveProfile.name,
     crest_url: `/time/${encodeURIComponent(item.publicSlug)}/escudo/imagem`,

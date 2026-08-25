@@ -62,6 +62,25 @@ function createLegacyRadarIdentityResolver({ getAccountRecord, ensureLegacyProfi
   };
 }
 
+function createPilotGatedRadarIdentityResolver({ resolveIdentity, config }) {
+  if (typeof resolveIdentity !== "function") {
+    throw new TypeError("Radar identity resolver is required");
+  }
+
+  const allowed = new Set(config?.pilotAccountAllowlist || []);
+  return function resolvePilotRadarIdentity(authUser) {
+    const identity = resolveIdentity(authUser);
+    if (allowed.size > 0 && !allowed.has(String(identity.accountId || ""))) {
+      throw new RadarIdentityError(
+        "RADAR_PILOT_ACCESS_DENIED",
+        403,
+        "Esta conta nao participa do piloto do Radar."
+      );
+    }
+    return identity;
+  };
+}
+
 function assertRadarTeamOwnedByIdentity(team, identity, { allowUnclaimed = false } = {}) {
   if (!team || !identity) {
     throw new RadarIdentityError("RADAR_PROFILE_NOT_FOUND", 404, "Perfil do Radar nao encontrado.");
@@ -92,6 +111,7 @@ function assertRadarTeamCanMutate(team) {
 
 module.exports = {
   createLegacyRadarIdentityResolver,
+  createPilotGatedRadarIdentityResolver,
   accountReference,
   assertRadarTeamOwnedByIdentity,
   assertRadarTeamCanMutate

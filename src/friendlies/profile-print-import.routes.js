@@ -110,6 +110,10 @@ function createProfilePrintImportRouter(options) {
   const logger = options.logger || console;
 
   router.use((req, res, next) => {
+    const handled = req.method === "POST" && req.path === "/importar-print";
+    return handled ? next() : next("router");
+  });
+  router.use((req, res, next) => {
     if (options.config.enabled && options.config.profilePrintImportEnabled) return next();
     return res.status(404).json({ ok: false, error: "Recurso nao encontrado." });
   });

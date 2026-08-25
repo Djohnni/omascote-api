@@ -8,9 +8,10 @@ const {
 } = require("./radar-identity.policy");
 const { matchError } = require("./match-center.schemas");
 
-function publicTeam(snapshot) {
+function publicTeam(snapshot, publicId = null) {
   const value = snapshot && typeof snapshot === "object" ? snapshot : {};
   return Object.freeze({
+    public_id: publicId,
     slug: String(value.slug || ""),
     name: String(value.name || ""),
     city: String(value.city || ""),
@@ -32,7 +33,10 @@ function publicScore(submission, viewerIsTeamA) {
 
 function rowToMatch(row, viewerTeamId) {
   const isTeamA = row.team_a_id === viewerTeamId;
-  const opponent = publicTeam(isTeamA ? row.team_b_snapshot : row.team_a_snapshot);
+  const opponent = publicTeam(
+    isTeamA ? row.team_b_snapshot : row.team_a_snapshot,
+    isTeamA ? row.team_b_public_id : row.team_a_public_id
+  );
   const proposal = row.proposal && typeof row.proposal === "object" ? row.proposal : {};
   const confirmedByMe = isTeamA ? row.team_a_confirmed : row.team_b_confirmed;
   const confirmedByOpponent = isTeamA ? row.team_b_confirmed : row.team_a_confirmed;
@@ -99,6 +103,8 @@ async function loadOwnedTeam(client, identity) {
 
 const MATCH_SELECT = `
   SELECT match.*, invitation.proposal,
+    team_a.public_id AS team_a_public_id,
+    team_b.public_id AS team_b_public_id,
     team_a.account_reference AS team_a_account_reference,
     team_b.account_reference AS team_b_account_reference,
     (

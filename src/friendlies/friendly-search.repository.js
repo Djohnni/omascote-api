@@ -14,6 +14,7 @@ function searchError(code, status, message) {
 function rowToCandidate(row) {
   return Object.freeze({
     teamId: row.team_id,
+    publicId: row.public_id,
     publicSlug: row.public_slug,
     publicName: row.public_name,
     cityIbgeCode: row.city_ibge_code,
@@ -132,6 +133,7 @@ function createFriendlySearchRepository({ pool, config }) {
       const result = await client.query(`
         SELECT
           candidate.id AS team_id,
+          candidate.public_id,
           candidate.public_slug,
           candidate.public_name,
           candidate.city_ibge_code,

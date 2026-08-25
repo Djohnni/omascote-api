@@ -23,11 +23,28 @@ function boundedPositiveInteger(value, fallback, maximum) {
   return Math.min(parsed, maximum);
 }
 
+function parsePilotAccountAllowlist(value) {
+  const accounts = String(value || "")
+    .split(",")
+    .map(item => item.trim())
+    .filter(item => /^[A-Za-z0-9._:-]{3,160}$/.test(item));
+  return Object.freeze([...new Set(accounts)]);
+}
+
 const PROFILE_PRINT_REASONING_EFFORTS = new Set([
   "none", "low", "medium", "high", "xhigh", "max"
 ]);
 
 function createRadarConfig(env = process.env) {
+  const pilotAccountAllowlist = parsePilotAccountAllowlist(
+    env.RADAR_PILOT_ACCOUNT_ALLOWLIST
+  );
+  const requestedEmbeddedPath = String(
+    env.RADAR_DATABASE_EMBEDDED_PATH || ""
+  ).trim() || null;
+  const databaseEmbeddedPath = String(env.NODE_ENV || "").toLowerCase() === "production"
+    ? null
+    : requestedEmbeddedPath;
   const instagramVerificationSecret = String(
     env.RADAR_INSTAGRAM_VERIFICATION_SECRET || ""
   ).trim() || null;
@@ -121,6 +138,7 @@ function createRadarConfig(env = process.env) {
       false
     ),
     pilotFree: parseBoolean(env.RADAR_AMISTOSOS_PILOT_FREE, true),
+    pilotAccountAllowlistSize: pilotAccountAllowlist.length,
     publicRatingMinimumMatches:
       parseOptionalPositiveInteger(env.RADAR_PUBLIC_RATING_MIN_MATCHES) || 3,
     pilotCityIbgeCode: String(env.RADAR_PILOT_CITY_IBGE_CODE || "").trim() || null,
@@ -484,6 +502,18 @@ function createRadarConfig(env = process.env) {
     databaseConnectionTimeoutMs:
       parseOptionalPositiveInteger(env.DATABASE_CONNECTION_TIMEOUT_MS) || 5_000
   };
+  Object.defineProperty(config, "pilotAccountAllowlist", {
+    value: pilotAccountAllowlist,
+    enumerable: false,
+    writable: false,
+    configurable: false
+  });
+  Object.defineProperty(config, "databaseEmbeddedPath", {
+    value: databaseEmbeddedPath,
+    enumerable: false,
+    writable: false,
+    configurable: false
+  });
   Object.defineProperty(config, "instagramVerificationSecret", {
     value: instagramVerificationSecret,
     enumerable: false,
@@ -563,5 +593,6 @@ module.exports = {
   createRadarConfig,
   parseBoolean,
   parseOptionalPositiveInteger,
-  boundedPositiveInteger
+  boundedPositiveInteger,
+  parsePilotAccountAllowlist
 };

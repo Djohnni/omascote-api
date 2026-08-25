@@ -25,6 +25,7 @@ const {
   BrowserHandoffStoreError
 } = require("./src/auth/browser-handoff-store");
 const { createRadarConfig } = require("./src/config/radar");
+const { createCorsOriginAllowlist } = require("./src/config/cors");
 const { getBuildInfo } = require("./src/config/build-info");
 const { createPool, checkDatabase } = require("./src/db/pool");
 const { createHealthRouter } = require("./src/health/health.routes");
@@ -66,6 +67,7 @@ const {
 } = require("./src/friendlies/radar-moderation.routes");
 const {
   createLegacyRadarIdentityResolver,
+  createPilotGatedRadarIdentityResolver,
   accountReference
 } = require("./src/friendlies/radar-identity.policy");
 
@@ -182,7 +184,7 @@ const CLIENTES_TESTE = [
 
 // CORS: permite seu site chamar a API
 app.use(cors({
-  origin: ["https://omascote.com.br", "https://www.omascote.com.br"],
+  origin: createCorsOriginAllowlist(),
   credentials: false
 }));
 
@@ -7549,13 +7551,17 @@ app.use(createHealthRouter({
   buildInfo,
   checkDatabase: () => checkDatabase(radarPool)
 }));
-const resolveRadarIdentity = createLegacyRadarIdentityResolver({
+const resolveBaseRadarIdentity = createLegacyRadarIdentityResolver({
   getAccountRecord(authSubject) {
     return readClientes()[authSubject] || null;
   },
   ensureLegacyProfile(authSubject) {
     return ensurePerfilCliente(readClientes(), authSubject);
   }
+});
+const resolveRadarIdentity = createPilotGatedRadarIdentityResolver({
+  resolveIdentity: resolveBaseRadarIdentity,
+  config: radarConfig
 });
 
 function resolveRadarMatchContact(reference) {
