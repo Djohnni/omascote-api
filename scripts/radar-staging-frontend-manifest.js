@@ -68,10 +68,30 @@ function buildGitManifest(repository, commit = SOURCE_COMMIT) {
   });
 }
 
+function materializeGitSnapshot(repository, target, commit = SOURCE_COMMIT) {
+  const names = git(repository, ["ls-tree", "-r", "-z", "--name-only", commit])
+    .toString("utf8").split("\0").filter(Boolean);
+  const resolvedTarget = path.resolve(target);
+  if (path.basename(resolvedTarget) !== "snapshot" || path.basename(path.dirname(resolvedTarget)) !== "staging-frontend") {
+    throw new Error("Unsafe staging snapshot target");
+  }
+  fs.rmSync(resolvedTarget, { recursive: true, force: true });
+  fs.mkdirSync(resolvedTarget, { recursive: true });
+  for (const relativePath of names) {
+    const absolute = path.resolve(resolvedTarget, ...relativePath.split("/"));
+    if (!absolute.startsWith(`${resolvedTarget}${path.sep}`)) throw new Error("Unsafe source path");
+    fs.mkdirSync(path.dirname(absolute), { recursive: true });
+    fs.writeFileSync(absolute, git(repository, ["show", `${commit}:${relativePath}`]));
+  }
+  return names.length;
+}
+
 function main() {
   const repositoryRoot = path.resolve(__dirname, "..");
   const sourceRepository = path.resolve(process.argv[2] || path.join(repositoryRoot, "..", "frontend-release-candidate"));
+  const snapshotRoot = path.join(repositoryRoot, "staging-frontend", "snapshot");
   const output = path.join(repositoryRoot, "staging-frontend", "source-manifest.json");
+  if (process.argv.includes("--materialize")) materializeGitSnapshot(sourceRepository, snapshotRoot);
   const manifest = buildGitManifest(sourceRepository);
   fs.writeFileSync(output, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
   process.stdout.write(`${manifest.source_commit} ${manifest.file_count} ${manifest.tree_sha256}\n`);
@@ -79,4 +99,11 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { SOURCE_COMMIT, buildGitManifest, buildManifest, listFiles, sha256 };
+module.exports = {
+  SOURCE_COMMIT,
+  buildGitManifest,
+  buildManifest,
+  listFiles,
+  materializeGitSnapshot,
+  sha256
+};
