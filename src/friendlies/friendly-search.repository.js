@@ -247,7 +247,6 @@ function createFriendlySearchRepository({ pool, config }) {
                OR (block.blocker_team_id = candidate.id AND block.blocked_team_id = $1)
           )
         ORDER BY candidate.public_slug ASC
-        LIMIT $9
       `, [
         origin.id,
         now,
@@ -256,8 +255,7 @@ function createFriendlySearchRepository({ pool, config }) {
         filters.category,
         filters.dayNumber,
         filters.period,
-        filters.venuePreference,
-        config.searchCandidateMaximum
+        filters.venuePreference
       ]);
       await client.query("COMMIT");
       transactionOpen = false;

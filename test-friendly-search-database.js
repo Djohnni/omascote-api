@@ -304,6 +304,60 @@ test("automatic discovery keeps incomplete active teams and excludes only safety
   }
 });
 
+test("general discovery does not truncate active teams before signed pagination", async () => {
+  const database = new PGlite();
+  const pool = createPoolAdapter(database);
+  try {
+    await migrate({ pool });
+    const ownerIdentity = identity();
+    const owner = await insertTeam(database, "search-owner", {
+      profileId: ownerIdentity.profileId,
+      accountId: ownerIdentity.accountId,
+      slug: "search-owner-fc",
+      publicName: "Search Owner FC",
+      latitude: null,
+      longitude: null,
+      modalities: [],
+      categories: []
+    });
+    await database.query(`
+      INSERT INTO radar_team_profiles(
+        legacy_profile_id, account_reference, public_slug, status,
+        public_name, radar_visible, created_at, updated_at
+      )
+      SELECT
+        'bulk-profile-' || item,
+        'bulk-account-' || item,
+        'bulk-team-' || lpad(item::text, 4, '0'),
+        'active',
+        'Bulk Team ' || item,
+        true,
+        $1,
+        $1
+      FROM generate_series(1, 520) item
+    `, [FIXTURE_CREATED_AT]);
+
+    const repository = createFriendlySearchRepository({ pool, config: config() });
+    const candidates = await repository.searchCandidates({
+      origin: { ...owner, modalities: [], categories: [] },
+      filters: {
+        modality: null,
+        category: null,
+        dayNumber: null,
+        period: null,
+        venuePreference: null
+      },
+      snapshot: NOW,
+      now: NOW
+    });
+
+    assert.equal(candidates.length, 520);
+    assert.equal(candidates.at(-1).publicSlug, "bulk-team-0520");
+  } finally {
+    await database.close();
+  }
+});
+
 test("persistent limits reject repeated enumeration and store only opaque hashes", async () => {
   const database = new PGlite();
   const pool = createPoolAdapter(database);

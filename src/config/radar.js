@@ -398,11 +398,6 @@ function createRadarConfig(env = process.env) {
       120,
       2_000
     ),
-    searchCandidateMaximum: boundedPositiveInteger(
-      env.RADAR_SEARCH_CANDIDATE_MAXIMUM,
-      500,
-      5_000
-    ),
     invitationsConfigured: Boolean(
       invitationsSecuritySecret &&
       Buffer.byteLength(invitationsSecuritySecret, "utf8") >= 32
