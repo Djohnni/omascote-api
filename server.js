@@ -69,6 +69,7 @@ const {
   createRadarModerationRouters
 } = require("./src/friendlies/radar-moderation.routes");
 const { createRadarWhatsappRouter } = require("./src/friendlies/radar-whatsapp.routes");
+const { createMatchCommunicationRouter } = require("./src/friendlies/match-communication.routes");
 const { createRadarIdentityRepository } = require("./src/friendlies/radar-identity.repository");
 const { createRadarAccountSynchronizer } = require("./src/friendlies/radar-account-sync");
 const {
@@ -7681,6 +7682,13 @@ app.use("/me/time/amistosos", createMatchCenterRouter({
   pool: radarPool,
   resolveIdentity: resolveRadarIdentity,
   resolveContact: resolveRadarMatchContact,
+  logger: radarLogger
+}));
+app.use("/me/time/amistosos", createMatchCommunicationRouter({
+  config: radarConfig,
+  auth,
+  pool: radarPool,
+  resolveIdentity: resolveRadarIdentity,
   logger: radarLogger
 }));
 app.use("/me/time/amistosos", radarInvitationRouters.teamRouter);

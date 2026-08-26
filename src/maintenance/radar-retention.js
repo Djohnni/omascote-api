@@ -189,11 +189,35 @@ async function eraseModerationDescriptions(client, now, limit) {
   return result.rowCount;
 }
 
+async function eraseMatchMessages(client, now, limit) {
+  const result = await client.query(`
+    WITH candidates AS (
+      SELECT message.id
+      FROM radar_match_messages message
+      WHERE message.body IS NOT NULL
+        AND message.retention_expires_at <= $1
+        AND NOT EXISTS (
+          SELECT 1 FROM radar_moderation_cases moderation_case
+          WHERE moderation_case.message_id = message.id
+            AND moderation_case.status IN ('open', 'assigned')
+        )
+      ORDER BY message.retention_expires_at, message.id
+      LIMIT $2::integer FOR UPDATE OF message SKIP LOCKED
+    )
+    UPDATE radar_match_messages message
+    SET body = NULL, body_erased_at = $1
+    FROM candidates WHERE message.id = candidates.id
+    RETURNING message.id
+  `, [now, limit]);
+  return result.rowCount;
+}
+
 async function cleanupTechnicalLimits(client, cutoff) {
   const tables = [
     "radar_verification_rate_limits", "radar_profile_print_rate_limits",
     "radar_search_rate_limits", "radar_invitation_rate_limits",
     "radar_match_history_rate_limits", "radar_moderation_rate_limits"
+    , "radar_match_communication_rate_limits"
   ];
   let deleted = 0;
   for (const table of tables) {
@@ -225,6 +249,7 @@ async function runRadarRetention({ pool, config, now = new Date(), logger = cons
       instagram_challenges_expired: await expireInstagramChallenges(client, now, limit),
       profile_print_drafts_expired: await expireProfilePrintDrafts(client, now, limit),
       moderation_descriptions_erased: await eraseModerationDescriptions(client, now, limit),
+      match_messages_erased: await eraseMatchMessages(client, now, limit),
       technical_rows_deleted: await cleanupTechnicalLimits(client, cutoff),
       audit_rows_deleted: 0
     };

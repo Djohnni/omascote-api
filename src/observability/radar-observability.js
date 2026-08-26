@@ -50,6 +50,7 @@ function classifyOperation(method, path) {
   if (route.startsWith("/me/time/amistosos/") && /\/resultado(?:\/confirmar)?$/.test(route)) return "score";
   if (route.includes("/denuncias") || route.endsWith("/contestacao")) return "report";
   if (route.startsWith("/admin/radar/moderacao")) return "moderation";
+  if (route.startsWith("/me/time/amistosos/") && (route.includes("/mensagens") || route.endsWith("/comunicacao"))) return "communication";
   if (route.startsWith("/me/time/amistosos")) return "match";
   if (route.startsWith("/me/time/radar") || route.startsWith("/me/time/verificacao")) return "radar";
   if (route.startsWith("/health/")) return "health";

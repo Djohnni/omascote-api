@@ -109,6 +109,9 @@ function createRadarConfig(env = process.env) {
   const whatsappRateLimitSecret = String(
     env.RADAR_WHATSAPP_RATE_LIMIT_SECRET || ""
   ).trim() || null;
+  const matchCommunicationSecuritySecret = String(
+    env.RADAR_MATCH_COMMUNICATION_SECURITY_SECRET || ""
+  ).trim() || null;
   const searchPageMaximum = boundedPositiveInteger(
     env.RADAR_SEARCH_PAGE_MAXIMUM,
     24,
@@ -145,6 +148,10 @@ function createRadarConfig(env = process.env) {
     matchHistoryEnabled: parseBoolean(env.RADAR_MATCH_HISTORY_ENABLED, false),
     reputationEnabled: parseBoolean(env.RADAR_REPUTATION_ENABLED, false),
     moderationEnabled: parseBoolean(env.RADAR_MODERATION_ENABLED, false),
+    matchCommunicationEnabled: parseBoolean(
+      env.RADAR_MATCH_COMMUNICATION_ENABLED,
+      false
+    ),
     profilePrintImportEnabled: parseBoolean(
       env.RADAR_PROFILE_PRINT_IMPORT_ENABLED,
       false
@@ -326,6 +333,45 @@ function createRadarConfig(env = process.env) {
       env.RADAR_WHATSAPP_IP_LIMIT,
       40,
       500
+    ),
+    matchCommunicationConfigured: Boolean(
+      matchCommunicationSecuritySecret &&
+      Buffer.byteLength(matchCommunicationSecuritySecret, "utf8") >= 32
+    ),
+    matchCommunicationPageDefault: boundedPositiveInteger(
+      env.RADAR_MATCH_COMMUNICATION_PAGE_DEFAULT,
+      30,
+      50
+    ),
+    matchCommunicationPageMaximum: boundedPositiveInteger(
+      env.RADAR_MATCH_COMMUNICATION_PAGE_MAXIMUM,
+      50,
+      100
+    ),
+    matchCommunicationRetentionDays: boundedPositiveInteger(
+      env.RADAR_MATCH_COMMUNICATION_RETENTION_DAYS,
+      365,
+      3650
+    ),
+    matchCommunicationRateWindowSeconds: boundedPositiveInteger(
+      env.RADAR_MATCH_COMMUNICATION_RATE_WINDOW_SECONDS,
+      60,
+      3600
+    ),
+    matchCommunicationAccountLimit: boundedPositiveInteger(
+      env.RADAR_MATCH_COMMUNICATION_ACCOUNT_LIMIT,
+      90,
+      2000
+    ),
+    matchCommunicationTeamLimit: boundedPositiveInteger(
+      env.RADAR_MATCH_COMMUNICATION_TEAM_LIMIT,
+      90,
+      2000
+    ),
+    matchCommunicationIpLimit: boundedPositiveInteger(
+      env.RADAR_MATCH_COMMUNICATION_IP_LIMIT,
+      240,
+      5000
     ),
     availabilityTimeZone: "America/Sao_Paulo",
     availabilityDefaultTravelRadiusKm: boundedPositiveInteger(
@@ -683,6 +729,12 @@ function createRadarConfig(env = process.env) {
   });
   Object.defineProperty(config, "whatsappRateLimitSecret", {
     value: whatsappRateLimitSecret,
+    enumerable: false,
+    writable: false,
+    configurable: false
+  });
+  Object.defineProperty(config, "matchCommunicationSecuritySecret", {
+    value: matchCommunicationSecuritySecret,
     enumerable: false,
     writable: false,
     configurable: false

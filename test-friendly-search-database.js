@@ -191,7 +191,7 @@ test("automatic discovery keeps incomplete active teams and excludes only safety
   const pool = createPoolAdapter(database);
   try {
     const applied = await migrate({ pool });
-    assert.equal(applied.at(-1), "015_radar_automatic_participation.sql");
+    assert.equal(applied.at(-1), "016_match_communication.sql");
     assert.deepEqual(await migrate({ pool }), []);
     assert.equal((await database.query(`
       SELECT count(*)::integer AS total

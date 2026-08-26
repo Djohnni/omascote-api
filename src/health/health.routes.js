@@ -41,8 +41,9 @@ function createHealthRouter({ config, buildInfo, checkDatabase, getMigrationStat
     const matchHistoryConfigured = config.matchHistoryEnabled !== true || config.matchHistoryConfigured === true;
     const reputationConfigured = config.reputationEnabled !== true || config.reputationConfigured === true;
     const moderationConfigured = config.moderationEnabled !== true || config.moderationConfigured === true;
+    const communicationConfigured = config.matchCommunicationEnabled !== true || config.matchCommunicationConfigured === true;
     const metricsConfigured = config.metricsEnabled !== true || config.metricsConfigured === true;
-    const ready = database.ok && metricsConfigured && profilePrintConfigured && searchConfigured && invitationsConfigured && matchCenterConfigured && matchResultsConfigured && matchHistoryConfigured && reputationConfigured && moderationConfigured;
+    const ready = database.ok && metricsConfigured && profilePrintConfigured && searchConfigured && invitationsConfigured && matchCenterConfigured && matchResultsConfigured && matchHistoryConfigured && reputationConfigured && moderationConfigured && communicationConfigured;
     return res.status(ready ? 200 : 503).json({
       ok: ready,
       ...metadata,
@@ -100,6 +101,11 @@ function createHealthRouter({ config, buildInfo, checkDatabase, getMigrationStat
       radar_moderation: config.moderationEnabled !== true
         ? "disabled"
         : moderationConfigured
+          ? "configured"
+          : "not_configured",
+      match_communication: config.matchCommunicationEnabled !== true
+        ? "disabled"
+        : communicationConfigured
           ? "configured"
           : "not_configured"
     });

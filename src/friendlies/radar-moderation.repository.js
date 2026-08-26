@@ -55,6 +55,13 @@ function caseSnapshot(row, { includePrivate = false } = {}) {
   if (includePrivate) {
     result.description = row.private_description || null;
     result.reporter_team = safeTeam(row, "reporter_");
+    if (row.case_type === "message_report") {
+      result.reported_message = Object.freeze({
+        message_id: row.message_public_id || null,
+        texto: row.message_body || null,
+        removed: row.message_body === null
+      });
+    }
     result.moderation_due_at = row.moderation_due_at;
   }
   return Object.freeze(result);
@@ -484,11 +491,14 @@ function createRadarModerationRepository({ pool, config }) {
       reported.public_name AS reported_public_name,
       reporter.public_id AS reporter_public_id, reporter.public_slug AS reporter_public_slug,
       reporter.public_name AS reporter_public_name,
-      match.public_id AS match_public_id
+      match.public_id AS match_public_id,
+      message.public_id AS message_public_id,
+      message.body AS message_body
     FROM radar_moderation_cases case_row
     JOIN radar_team_profiles reported ON reported.id = case_row.reported_team_id
     LEFT JOIN radar_team_profiles reporter ON reporter.id = case_row.reporter_team_id
     LEFT JOIN friendly_matches match ON match.id = case_row.match_id
+    LEFT JOIN radar_match_messages message ON message.id = case_row.message_id
   `;
 
   async function adminQueue({ identity, limit, now }) {

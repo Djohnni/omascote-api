@@ -6,6 +6,7 @@ const bcrypt = require("bcryptjs");
 const { createRadarConfig } = require("../src/config/radar");
 const { createPool } = require("../src/db/pool");
 const { migrate } = require("../src/db/migrate");
+const { encryptWhatsapp } = require("../src/friendlies/radar-whatsapp.crypto");
 
 const accounts = Object.freeze([
   {
@@ -20,7 +21,8 @@ const accounts = Object.freeze([
     cityCode: "4209102",
     latitude: -26.304500,
     longitude: -48.848700,
-    email: "alpha@radar.local.invalid"
+    email: "alpha@radar.local.invalid",
+    whatsapp: "+5547900000001"
   },
   {
     login: "radar_beta",
@@ -34,7 +36,8 @@ const accounts = Object.freeze([
     cityCode: "4209102",
     latitude: -26.314500,
     longitude: -48.858700,
-    email: "beta@radar.local.invalid"
+    email: "beta@radar.local.invalid",
+    whatsapp: "+5547900000002"
   },
   {
     login: "radar_moderador",
@@ -141,8 +144,9 @@ function writeLocalAccounts(dataDirectory, password, accountList = accounts) {
   fs.writeFileSync(path.join(dataDirectory, "clientes.json"), JSON.stringify(clients, null, 2), "utf8");
 }
 
-async function seedRadar(pool, accountList = accounts) {
+async function seedRadar(pool, accountList = accounts, config = createRadarConfig(process.env)) {
   for (const account of accountList.filter(item => item.pilot !== false && item.seed !== false)) {
+    const whatsapp = account.whatsapp ? encryptWhatsapp(account.whatsapp, config) : { ciphertext: null, keyVersion: null };
     await pool.query(`
       INSERT INTO radar_team_profiles(
         legacy_profile_id, account_reference, public_slug, status,
@@ -151,11 +155,12 @@ async function seedRadar(pool, accountList = accounts) {
         approximate_latitude, approximate_longitude,
         modalities, categories, declared_level, travel_radius_km,
         venue_preference, availability_active, radar_terms_accepted_at,
-        public_name, public_profile_enabled, public_crest_available
+        public_name, public_profile_enabled, public_crest_available,
+        whatsapp_ciphertext, whatsapp_key_version, whatsapp_visible
       ) VALUES (
         $1, $2, $3, 'active', $4, 'verified', $5, $6, $7,
         $8, $9, ARRAY['society'], ARRAY['Livre'], 'intermediario', 50,
-        'either', true, now(), $10, true, true
+        'either', true, now(), $10, true, true, $11, $12, $13
       )
       ON CONFLICT (legacy_profile_id) DO UPDATE SET
         account_reference = EXCLUDED.account_reference,
@@ -172,11 +177,15 @@ async function seedRadar(pool, accountList = accounts) {
         radar_terms_accepted_at = COALESCE(radar_team_profiles.radar_terms_accepted_at, now()),
         public_name = EXCLUDED.public_name, public_profile_enabled = true,
         public_crest_available = true, radar_departed_at = NULL, suspended_at = NULL,
+        whatsapp_ciphertext = EXCLUDED.whatsapp_ciphertext,
+        whatsapp_key_version = EXCLUDED.whatsapp_key_version,
+        whatsapp_visible = EXCLUDED.whatsapp_visible,
         suspension_reason = NULL, updated_at = now()
     `, [
       account.profileId, account.accountReference, account.slug, account.instagram,
       account.cityCode, account.city, account.state, account.latitude,
-      account.longitude, account.name
+      account.longitude, account.name, whatsapp.ciphertext, whatsapp.keyVersion,
+      Boolean(whatsapp.ciphertext)
     ]);
   }
 
@@ -203,7 +212,7 @@ async function main() {
   const pool = createPool(config);
   try {
     const applied = await migrate({ pool });
-    await seedRadar(pool);
+    await seedRadar(pool, accounts, config);
     process.stdout.write(JSON.stringify({
       ok: true,
       migrations_applied: applied.length,

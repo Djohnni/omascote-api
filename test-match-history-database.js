@@ -219,7 +219,7 @@ test("PostgreSQL history migration, privacy, pagination and statistics", async t
     const applied = await migrate({ pool: adapter });
 
     await t.test("migration 013 runs once and the full migration runner is idempotent", async () => {
-      assert.equal(applied.at(-1), "015_radar_automatic_participation.sql");
+      assert.equal(applied.at(-1), "016_match_communication.sql");
       assert.deepEqual(await migrate({ pool: adapter }), []);
       const indexes = await database.query(`
         SELECT indexname FROM pg_indexes
