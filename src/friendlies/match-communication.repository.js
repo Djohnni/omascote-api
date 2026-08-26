@@ -206,7 +206,7 @@ function createMatchCommunicationRepository({ pool, config }) {
       let whatsapp = null;
       if (open && config.whatsappConfigured && context.whatsapp_visible === true && context.whatsapp_ciphertext) {
         const number = decryptWhatsapp(context.whatsapp_ciphertext, context.whatsapp_key_version, config).replace(/\D/g, "");
-        const message = `Ola! Somos do ${team.publicName || "nosso time"}. Vamos combinar o amistoso pelo Meu Clube FC?`;
+        const message = "Olá! Nosso amistoso foi confirmado pelo Meu Clube FC. Vamos combinar os detalhes?";
         whatsapp = Object.freeze({
           available: true,
           url: `https://wa.me/${number}?text=${encodeURIComponent(message)}`

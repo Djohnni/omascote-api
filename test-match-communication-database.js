@@ -169,6 +169,10 @@ test("participants receive safe channels while an outsider gets a private 404", 
     const channels = await service.getChannels(base(alpha, matchId));
     assert.deepEqual(Object.keys(channels.channels), ["whatsapp", "instagram", "internal"]);
     assert.match(channels.channels.whatsapp.url, /^https:\/\/wa\.me\/\d+\?text=/);
+    assert.equal(
+      new URL(channels.channels.whatsapp.url).searchParams.get("text"),
+      "Olá! Nosso amistoso foi confirmado pelo Meu Clube FC. Vamos combinar os detalhes?"
+    );
     assert.equal(channels.channels.instagram.verified, true);
     assert.equal(channels.channels.internal.available, true);
     assert.equal(JSON.stringify(channels).includes("+5547"), false);
