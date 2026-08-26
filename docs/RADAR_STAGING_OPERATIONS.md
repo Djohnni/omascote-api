@@ -7,7 +7,7 @@ Todas as flags permanecem desligadas quando ausentes.
 - `RADAR_AMISTOSOS_ENABLED`: flag mestre.
 - `RADAR_SEARCH_ENABLED`, `RADAR_INVITATIONS_ENABLED`, `RADAR_MATCH_CENTER_ENABLED`, `RADAR_MATCH_RESULTS_ENABLED`, `RADAR_MATCH_HISTORY_ENABLED`, `RADAR_REPUTATION_ENABLED`, `RADAR_MODERATION_ENABLED`: liberações graduais.
 - `RADAR_PILOT_ACCOUNT_ALLOWLIST`: referências opacas de contas, separadas por vírgula. Com a flag mestre ligada, lista vazia faz a API falhar fechada; qualquer conta fora da lista é negada.
-- `RADAR_PILOT_CITY_IBGE_CODE`, `RADAR_MODERATION_SLA_HOURS` e `RADAR_PUBLIC_RATING_MIN_MATCHES`: política configurável do piloto.
+- `RADAR_MODERATION_SLA_HOURS` e `RADAR_PUBLIC_RATING_MIN_MATCHES`: política configurável do piloto. O piloto é limitado por conta, nunca por cidade.
 - `DATABASE_URL`: PostgreSQL de staging/produção.
 - `DATABASE_SSL` e `DATABASE_SSL_REJECT_UNAUTHORIZED`: política TLS do banco.
 - `OMASCOTE_CORS_ORIGINS`: origens explícitas, separadas por vírgula. Em staging, use `OMASCOTE_CORS_INCLUDE_PRODUCTION_ORIGINS=false` para não misturar origens.

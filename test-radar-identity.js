@@ -191,10 +191,7 @@ test("If-Match supports numeric ETags and rejects unsafe versions", () => {
 });
 
 test("eligibility is derived from verified persisted and legacy data", () => {
-  const config = createRadarConfig({
-    RADAR_AMISTOSOS_ENABLED: "true",
-    RADAR_PILOT_CITY_IBGE_CODE: "4209102"
-  });
+  const config = createRadarConfig({ RADAR_AMISTOSOS_ENABLED: "true" });
   const team = completeTeam();
   const eligibility = buildRadarEligibility({ team, legacyProfile: publicLegacyProfile, config });
   assert.equal(eligibility.eligible, true);

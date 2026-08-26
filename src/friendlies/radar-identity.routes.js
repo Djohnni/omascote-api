@@ -4,6 +4,7 @@ const express = require("express");
 const { RadarIdentityError, isRadarIdentityError } = require("./radar-identity.errors");
 const { createRadarIdentityRepository } = require("./radar-identity.repository");
 const { createRadarIdentityService } = require("./radar-identity.service");
+const { suggestBrazilianCities } = require("./brazil-city-catalog");
 
 function createRadarIdentityRouter({
   config,
@@ -71,6 +72,12 @@ function createRadarIdentityRouter({
     } catch (error) {
       return next(error);
     }
+  });
+
+  router.get("/cidades", (req, res) => {
+    const query = String(req.query.busca || "").slice(0, 120);
+    const stateCode = String(req.query.uf || "").slice(0, 8);
+    return res.json({ ok: true, items: suggestBrazilianCities(query, stateCode) });
   });
 
   router.patch("/", (req, res, next) => {

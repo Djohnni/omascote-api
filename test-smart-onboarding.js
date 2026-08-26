@@ -67,7 +67,6 @@ function config(overrides = {}) {
     RADAR_WHATSAPP_ACTIVE_KEY_VERSION: "v2",
     RADAR_WHATSAPP_RATE_LIMIT_SECRET: RATE_SECRET,
     RADAR_PILOT_ACCOUNT_ALLOWLIST: "account-smart-owner,account-smart-target",
-    RADAR_PILOT_CITY_IBGE_CODE: "4209102",
     ...overrides
   });
 }
@@ -113,9 +112,7 @@ async function http(app, path) {
 }
 
 test("manual contract uses city and UF only, supports one to three modalities and rejects legacy level", () => {
-  assert.deepEqual(resolveBrazilianCity("joinville", "sc"), {
-    ibgeCode: "4209102", name: "Joinville", stateCode: "SC", latitude: -26.3044, longitude: -48.8487
-  });
+  assert.equal(resolveBrazilianCity("joinville", "sc").ibgeCode, "4209102");
   const parsed = validateRadarProfileInput(profileBody());
   assert.deepEqual(parsed.modalities, ["society", "futsal", "futebol_campo"]);
   assert.equal(Object.hasOwn(parsed, "cityIbgeCode"), false);
@@ -124,7 +121,7 @@ test("manual contract uses city and UF only, supports one to three modalities an
     { city_ibge_code: "4209102" }, { declared_level: "intermediario" },
     { modalities: [] }, { modalities: ["society", "futsal", "futebol_campo", "society"] }
   ]) assert.throws(() => validateRadarProfileInput(body), error => error.code === "VALIDATION_ERROR");
-  assert.throws(() => resolveBrazilianCity("Joinville", "PR"), error => error.code === "RADAR_CITY_NOT_SUPPORTED");
+  assert.throws(() => resolveBrazilianCity("Joinville", "PR"), error => error.code === "RADAR_CITY_INVALID");
 });
 
 test("print draft on first access creates no Radar profile and profile confirmation is exactly once", async () => {

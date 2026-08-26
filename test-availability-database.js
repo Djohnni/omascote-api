@@ -54,7 +54,6 @@ function owner(suffix = "owner") {
 function radarConfig(overrides = {}) {
   return createRadarConfig({
     RADAR_AMISTOSOS_ENABLED: "true",
-    RADAR_PILOT_CITY_IBGE_CODE: "4209102",
     RADAR_AVAILABILITY_MAX_FUTURE_PER_TEAM: "20",
     RADAR_AVAILABILITY_PAGE_DEFAULT: "2",
     RADAR_AVAILABILITY_PAGE_MAXIMUM: "10",
@@ -366,7 +365,7 @@ test("pagination is stable, expiration automatic and filters leak no internal ow
   }
 });
 
-test("future limit, suspended team and pilot eligibility fail closed", async () => {
+test("future limit and suspended team fail closed while every Brazilian city remains eligible", async () => {
   const database = new PGlite();
   const pool = createPoolAdapter(database);
   const limited = owner("limited");
@@ -396,18 +395,17 @@ test("future limit, suspended team and pilot eligibility fail closed", async () 
       service(pool).list({ identity: suspended, query: {} }),
       error => error.code === "RADAR_PROFILE_SUSPENDED"
     );
-    await assert.rejects(
+    await assert.doesNotReject(
       service(pool).create({
         identity: outside,
         body: slot(12),
         idempotencyKey: "outside-pilot-active"
-      }),
-      error => error.code === "AVAILABILITY_NOT_ELIGIBLE" && error.details.missing.includes("outside_pilot_city")
+      })
     );
     await assert.doesNotReject(
       service(pool).create({
         identity: outside,
-        body: slot(12, { status: "paused" }),
+        body: slot(13, { status: "paused" }),
         idempotencyKey: "outside-pilot-paused"
       })
     );

@@ -47,7 +47,7 @@ test("Radar feature flag is off by default and keeps policy defaults", () => {
   assert.equal(config.enabled, false);
   assert.equal(config.pilotFree, true);
   assert.equal(config.publicRatingMinimumMatches, 3);
-  assert.equal(config.pilotCityIbgeCode, null);
+  assert.equal(Object.hasOwn(config, "pilotCityIbgeCode"), false);
   assert.equal(config.moderationSlaHours, null);
   assert.equal(config.instagramVerificationSecret, null);
   assert.equal(Object.hasOwn(JSON.parse(JSON.stringify(config)), "instagramVerificationSecret"), false);
@@ -57,7 +57,7 @@ test("Radar feature flag is off by default and keeps policy defaults", () => {
   assert.equal(config.databaseSslRejectUnauthorized, true);
 });
 
-test("Radar city and moderation SLA are configurable instead of hard-coded", () => {
+test("Radar ignores the removed city-pilot setting and keeps other policy configurable", () => {
   const config = createRadarConfig({
     RADAR_AMISTOSOS_ENABLED: "true",
     RADAR_PILOT_CITY_IBGE_CODE: "4209102",
@@ -66,7 +66,7 @@ test("Radar city and moderation SLA are configurable instead of hard-coded", () 
   });
 
   assert.equal(config.enabled, true);
-  assert.equal(config.pilotCityIbgeCode, "4209102");
+  assert.equal(Object.hasOwn(config, "pilotCityIbgeCode"), false);
   assert.equal(config.moderationSlaHours, 24);
   assert.equal(config.publicRatingMinimumMatches, 5);
 });

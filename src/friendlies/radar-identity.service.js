@@ -69,22 +69,17 @@ function buildRadarEligibility({ team, legacyProfile, config }) {
   const instagramVerified = team?.instagramVerificationStatus === "verified";
   const termsAccepted = Boolean(team?.termsAcceptedAt);
   const suspended = team?.status === "suspended" || Boolean(team?.suspendedAt);
-  const insidePilot = !config?.pilotCityIbgeCode ||
-    String(team?.cityIbgeCode || "") === String(config.pilotCityIbgeCode);
-
   if (!instagramVerified) missing.push("instagram_not_verified");
   if (!termsAccepted) missing.push("terms_not_accepted");
   if (suspended) missing.push("radar_profile_suspended");
-  if (!insidePilot) missing.push("outside_pilot_city");
 
-  const eligible = profileComplete && instagramVerified && termsAccepted && !suspended && insidePilot;
+  const eligible = profileComplete && instagramVerified && termsAccepted && !suspended;
   const discoverable = eligible && team?.availabilityActive === true && team?.status === "active";
 
   return Object.freeze({
     profile_complete: profileComplete,
     instagram_verified: instagramVerified,
     terms_accepted: termsAccepted,
-    inside_pilot: insidePilot,
     eligible,
     discoverable,
     missing: Object.freeze([...new Set(missing)])

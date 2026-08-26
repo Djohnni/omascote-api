@@ -152,10 +152,7 @@ test("identity profile mutation is owned, versioned, idempotent and audited", as
     const repository = createRadarIdentityRepository({ pool });
     const service = createRadarIdentityService({
       repository,
-      config: createRadarConfig({
-        RADAR_AMISTOSOS_ENABLED: "true",
-        RADAR_PILOT_CITY_IBGE_CODE: "4209102"
-      }),
+      config: createRadarConfig({ RADAR_AMISTOSOS_ENABLED: "true" }),
       now: () => new Date("2026-08-24T12:00:00.000Z")
     });
     const body = {

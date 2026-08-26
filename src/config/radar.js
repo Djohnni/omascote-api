@@ -154,7 +154,6 @@ function createRadarConfig(env = process.env) {
     pilotAccountAllowlistConfigured: pilotAccountAllowlist.length > 0,
     publicRatingMinimumMatches:
       parseOptionalPositiveInteger(env.RADAR_PUBLIC_RATING_MIN_MATCHES) || 3,
-    pilotCityIbgeCode: String(env.RADAR_PILOT_CITY_IBGE_CODE || "").trim() || null,
     moderationSlaHours: parseOptionalPositiveInteger(env.RADAR_MODERATION_SLA_HOURS),
     instagramVerificationConfigured: Boolean(
       instagramVerificationSecret && Buffer.byteLength(instagramVerificationSecret, "utf8") >= 32

@@ -47,7 +47,6 @@ function config(overrides = {}) {
     RADAR_SEARCH_ENABLED: "true",
     RADAR_SEARCH_CURSOR_SECRET: "database-cursor-secret-at-least-32-chars",
     RADAR_SEARCH_RATE_LIMIT_SECRET: "database-rate-secret-at-least-32-chars",
-    RADAR_PILOT_CITY_IBGE_CODE: "4209102",
     RADAR_SEARCH_PAGE_DEFAULT: "10",
     RADAR_SEARCH_PAGE_MAXIMUM: "20",
     RADAR_SEARCH_ACCOUNT_LIMIT: "20",
