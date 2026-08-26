@@ -52,24 +52,19 @@ function createRadarWhatsappRouter({ config, auth, pool, resolveIdentity, logger
       assertRadarTeamOwnedByIdentity(origin, req.radarIdentity);
       assertRadarTeamCanMutate(origin);
       const eligibility = buildRadarEligibility({ team: origin, legacyProfile: req.radarIdentity.legacyProfile, config });
-      if (!eligibility.eligible || origin.status !== "active") {
+      if (!eligibility.eligible) {
         throw new RadarIdentityError("RADAR_WHATSAPP_ORIGIN_INELIGIBLE", 403, "Contato indisponivel.");
       }
       const targetResult = await client.query(`
         SELECT * FROM radar_team_profiles
         WHERE public_id = $1 AND id <> $2
           AND status = 'active' AND suspended_at IS NULL
-          AND public_profile_enabled = true AND public_crest_available = true
-          AND instagram_verification_status = 'verified'
-          AND radar_terms_accepted_at IS NOT NULL
+          AND radar_departed_at IS NULL AND radar_visible = true
           AND whatsapp_visible = true AND whatsapp_ciphertext IS NOT NULL
         FOR SHARE
       `, [publicId, origin.id]);
       if (targetResult.rowCount !== 1) throw new RadarIdentityError("RADAR_TEAM_NOT_FOUND", 404, "Time indisponivel.");
       const target = rowToTeam(targetResult.rows[0]);
-      if (!(config.pilotAccountAllowlist || []).includes(target.accountReference)) {
-        throw new RadarIdentityError("RADAR_TEAM_NOT_FOUND", 404, "Time indisponivel.");
-      }
       const blocked = await client.query(`
         SELECT 1 FROM team_blocks
         WHERE (blocker_team_id = $1 AND blocked_team_id = $2)

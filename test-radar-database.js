@@ -52,7 +52,8 @@ test("clean PostgreSQL schema migrates idempotently and rejects cross-match conf
       "011_match_history.sql",
       "012_team_reviews_reputation.sql",
       "013_radar_safety_privacy_moderation.sql",
-      "014_radar_smart_onboarding.sql"
+      "014_radar_smart_onboarding.sql",
+      "015_radar_automatic_participation.sql"
     ]);
     assert.deepEqual(await migrate({ pool }), []);
     assert.deepEqual(await checkDatabase(pool), { ok: true });
@@ -167,25 +168,26 @@ test("identity profile mutation is owned, versioned, idempotent and audited", as
     };
 
     const firstAccess = await service.getProfile(identity);
-    assert.equal(firstAccess.profile, null);
+    assert.ok(firstAccess.profile);
+    assert.equal(firstAccess.profile.status, "active");
+    assert.equal(firstAccess.profile.radar_visible, true);
     assert.deepEqual(firstAccess.onboarding, {
-      required: true,
-      next_action: "create_profile"
+      required: false,
+      next_action: null
     });
-    assert.ok(firstAccess.eligibility.missing.includes("radar_profile_not_created"));
     assert.equal((await database.query(
       "SELECT count(*)::integer AS total FROM radar_team_profiles"
-    )).rows[0].total, 0);
+    )).rows[0].total, 1);
 
     const created = await service.putProfile({
       identity,
       body,
       idempotencyKey: "database-create-0001",
-      expectedVersion: null,
+      expectedVersion: String(firstAccess.profile.version),
       requestId: "database-request-1"
     });
-    assert.equal(created.profile.version, 1);
-    assert.equal(created.profile.status, "pending_verification");
+    assert.equal(created.profile.version, 2);
+    assert.equal(created.profile.status, "active");
     assert.equal(created.profile.terms_accepted, true);
     assert.equal(created.eligibility.instagram_verified, false);
     assert.equal(created.onboarding.required, false);
@@ -199,8 +201,8 @@ test("identity profile mutation is owned, versioned, idempotent and audited", as
     `, [identity.profileId])).rows[0];
     assert.equal(persisted.account_reference, identity.accountId);
     assert.equal(persisted.legacy_profile_id, identity.profileId);
-    assert.equal(persisted.version, 1);
-    assert.equal(persisted.status, "pending_verification");
+    assert.equal(persisted.version, 2);
+    assert.equal(persisted.status, "active");
 
     const replay = await service.putProfile({
       identity,
@@ -208,7 +210,7 @@ test("identity profile mutation is owned, versioned, idempotent and audited", as
       idempotencyKey: "database-create-0001"
     });
     assert.equal(replay.replayed, true);
-    assert.equal(replay.profile.version, 1);
+    assert.equal(replay.profile.version, 2);
 
     await assert.rejects(
       service.putProfile({
@@ -245,10 +247,10 @@ test("identity profile mutation is owned, versioned, idempotent and audited", as
       identity,
       body: { availability_active: true },
       idempotencyKey: "database-activate-0001",
-      expectedVersion: 'W/"1"',
+      expectedVersion: 'W/"2"',
       requestId: "database-request-2"
     });
-    assert.equal(activated.profile.version, 2);
+    assert.equal(activated.profile.version, 3);
     assert.equal(activated.profile.status, "active");
     assert.equal(activated.profile.availability_active, true);
     assert.equal(activated.eligibility.discoverable, true);
@@ -257,12 +259,12 @@ test("identity profile mutation is owned, versioned, idempotent and audited", as
       identity,
       body: { instagram_handle: "database.novo" },
       idempotencyKey: "database-instagram-0001",
-      expectedVersion: "2"
+      expectedVersion: "3"
     });
-    assert.equal(handleChanged.profile.version, 3);
+    assert.equal(handleChanged.profile.version, 4);
     assert.equal(handleChanged.profile.instagram_verification_status, "unverified");
-    assert.equal(handleChanged.profile.availability_active, false);
-    assert.equal(handleChanged.profile.status, "pending_verification");
+    assert.equal(handleChanged.profile.availability_active, true);
+    assert.equal(handleChanged.profile.status, "active");
 
     await assert.rejects(
       service.getProfile({ ...identity, accountId: "another-account" }),
@@ -279,7 +281,7 @@ test("identity profile mutation is owned, versioned, idempotent and audited", as
         identity,
         body: { travel_radius_km: 45 },
         idempotencyKey: "database-suspended-0001",
-        expectedVersion: "3"
+        expectedVersion: "4"
       }),
       error => error.code === "RADAR_PROFILE_SUSPENDED"
     );
@@ -290,7 +292,7 @@ test("identity profile mutation is owned, versioned, idempotent and audited", as
         (SELECT count(*)::integer FROM match_audit_events) AS audits
     `)).rows[0];
     assert.equal(counts.mutations, 3);
-    assert.equal(counts.audits, 3);
+    assert.equal(counts.audits, 4);
 
     const privateAudit = await database.query(`
       SELECT 1

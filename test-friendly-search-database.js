@@ -87,6 +87,9 @@ async function insertTeam(database, suffix, overrides = {}) {
     publicName: `${suffix} FC`,
     publicProfileEnabled: true,
     publicCrestAvailable: true,
+    modalities: ["society"],
+    categories: ["Livre"],
+    radarVisible: true,
     ...overrides
   };
   const result = await database.query(`
@@ -98,12 +101,13 @@ async function insertTeam(database, suffix, overrides = {}) {
       modalities, categories, declared_level, travel_radius_km,
       venue_preference, availability_active, radar_terms_accepted_at,
       suspended_at, public_name, public_profile_enabled, public_crest_available,
+      radar_visible,
       created_at, updated_at
     ) VALUES (
       $1, $2, $3, $4, $5, $6,
       $7, $8, $9, $10, $11,
-      ARRAY['society'], ARRAY['Livre'], 'intermediario', 25,
-      'either', $12, $13, $14, $15, $16, $17, $18, $18
+      $12::text[], $13::text[], 'intermediario', 25,
+      'either', $14, $15, $16, $17, $18, $19, $20, $21, $21
     ) RETURNING id
   `, [
     value.profileId,
@@ -117,12 +121,15 @@ async function insertTeam(database, suffix, overrides = {}) {
     value.stateCode,
     value.latitude,
     value.longitude,
+    value.modalities,
+    value.categories,
     value.availabilityActive,
     value.termsAcceptedAt,
     value.suspendedAt,
     value.publicName,
     value.publicProfileEnabled,
     value.publicCrestAvailable,
+    value.radarVisible,
     FIXTURE_CREATED_AT
   ]);
   return { id: result.rows[0].id, ...value };
@@ -179,12 +186,12 @@ function publicResolver(publicTeams) {
   };
 }
 
-test("migration 007 is idempotent and discovery excludes unsafe candidates in real PostgreSQL", async () => {
+test("automatic discovery keeps incomplete active teams and excludes only safety states", async () => {
   const database = new PGlite();
   const pool = createPoolAdapter(database);
   try {
     const applied = await migrate({ pool });
-    assert.equal(applied.at(-1), "014_radar_smart_onboarding.sql");
+    assert.equal(applied.at(-1), "015_radar_automatic_participation.sql");
     assert.deepEqual(await migrate({ pool }), []);
     assert.equal((await database.query(`
       SELECT count(*)::integer AS total
@@ -232,9 +239,24 @@ test("migration 007 is idempotent and discovery excludes unsafe candidates in re
     );
     const privateTeam = await insertTeam(database, "private", { publicProfileEnabled: false });
     await insertAvailability(database, privateTeam.id, "private");
+    const minimal = await insertTeam(database, "minimal", {
+      verification: "unverified",
+      cityIbgeCode: null,
+      cityName: null,
+      stateCode: null,
+      latitude: null,
+      longitude: null,
+      availabilityActive: false,
+      termsAcceptedAt: null,
+      publicProfileEnabled: false,
+      publicCrestAvailable: false,
+      modalities: [],
+      categories: []
+    });
+    const hidden = await insertTeam(database, "hidden", { radarVisible: false });
 
     const teams = new Map([
-      visible, sameCity, far, unverified, suspended, expired, blocked, privateTeam
+      visible, sameCity, far, unverified, suspended, expired, blocked, privateTeam, minimal, hidden
     ].map(team => [team.slug, team]));
     const service = createFriendlySearchService({
       repository: createFriendlySearchRepository({ pool, config: config() }),
@@ -244,15 +266,23 @@ test("migration 007 is idempotent and discovery excludes unsafe candidates in re
     });
     const result = await service.search({
       identity: ownerIdentity,
-      query: { modality: "society", category: "Livre", radius_km: "25", limit: "10" },
+      query: { limit: "10" },
       requestContext: { ip: "203.0.113.40" }
     });
-    assert.deepEqual(new Set(result.items.map(item => item.slug)), new Set(["visible-fc", "same-city-fc"]));
-    assert.equal(result.items.find(item => item.slug === "same-city-fc").location.label, "mesma cidade");
+    assert.deepEqual(new Set(result.items.map(item => item.slug)), new Set([
+      "visible-fc", "same-city-fc", "far-fc", "unverified-fc",
+      "expired-fc", "private-fc", "minimal-fc"
+    ]));
+    assert.equal(result.items.find(item => item.slug === "same-city-fc").location.label, "Mesma cidade");
     const visibleResult = result.items.find(item => item.slug === "visible-fc");
     assert.ok(visibleResult.location.distance_km > 0);
     assert.ok(visibleResult.location.distance_km < 2);
-    assert.equal(visibleResult.reputation.state, "new_on_radar");
+    assert.equal(visibleResult.reputation.state, "unrated");
+    const minimalResult = result.items.find(item => item.slug === "minimal-fc");
+    assert.equal(minimalResult.location.kind, "unknown");
+    assert.equal(minimalResult.availability.label, "Horário a combinar");
+    assert.equal(minimalResult.instagram.label, "Não verificado");
+    assert.equal(minimalResult.experience.label, "Novo no Radar");
     const serialized = JSON.stringify(result).toLowerCase();
     for (const forbidden of [
       "account-search-owner", owner.id, visible.id, "private database reason",
@@ -268,7 +298,7 @@ test("migration 007 is idempotent and discovery excludes unsafe candidates in re
     assert.ok(storedLimits.rows.every(row => /^[0-9a-f]{64}$/.test(row.scope_hash)));
     assert.equal(JSON.stringify(storedLimits.rows).includes(ownerIdentity.accountId), false);
     const metrics = await database.query("SELECT outcome, request_count, returned_count FROM radar_search_metrics");
-    assert.deepEqual(metrics.rows, [{ outcome: "success", request_count: 1, returned_count: 2 }]);
+    assert.deepEqual(metrics.rows, [{ outcome: "success", request_count: 1, returned_count: 7 }]);
   } finally {
     await database.close();
   }

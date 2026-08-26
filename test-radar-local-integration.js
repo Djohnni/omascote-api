@@ -24,7 +24,7 @@ async function request(app, route, options = {}) {
   }
 }
 
-test("pilot allowlist is optional, normalized and enforced by opaque account reference", () => {
+test("legacy allowlist input is normalized but no longer gates active accounts", () => {
   assert.deepEqual(parsePilotAccountAllowlist(" account-alpha,account-beta,account-alpha, telefone +55 "), [
     "account-alpha", "account-beta"
   ]);
@@ -34,11 +34,7 @@ test("pilot allowlist is optional, normalized and enforced by opaque account ref
     resolveIdentity: user => ({ accountId: user.accountId, profileId: "profile-local" })
   });
   assert.equal(resolver({ accountId: "account-alpha" }).accountId, "account-alpha");
-  assert.throws(() => resolver({ accountId: "account-outside" }), error => {
-    assert.equal(error.code, "RADAR_PILOT_ACCESS_DENIED");
-    assert.equal(error.status, 403);
-    return true;
-  });
+  assert.equal(resolver({ accountId: "account-outside" }).accountId, "account-outside");
   const openPilot = createPilotGatedRadarIdentityResolver({
     config: createRadarConfig({}),
     resolveIdentity: user => user
@@ -73,7 +69,7 @@ test("embedded local PostgreSQL runs migrations twice and is unavailable in prod
   try {
     const first = await migrate({ pool });
     const second = await migrate({ pool });
-    assert.equal(first.at(-1), "014_radar_smart_onboarding.sql");
+    assert.equal(first.at(-1), "015_radar_automatic_participation.sql");
     assert.deepEqual(second, []);
     assert.deepEqual(await checkDatabase(pool), { ok: true });
   } finally {

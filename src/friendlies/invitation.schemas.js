@@ -44,7 +44,7 @@ function date(field, value) {
 function normalizeProposal(input, { create }) {
   if (!plainObject(input)) invalid("body", "dados invalidos");
   const allowed = new Set([
-    ...(create ? ["opponent_slug"] : []),
+    ...(create ? ["opponent_slug", "opponent_public_id"] : []),
     "starts_at", "ends_at", "modality", "category", "venue_preference", "message"
   ]);
   for (const field of Object.keys(input)) {
@@ -53,9 +53,16 @@ function normalizeProposal(input, { create }) {
   }
   const output = {};
   if (create) {
-    const slug = text("opponent_slug", input.opponent_slug, 96).toLowerCase();
-    if (!SLUG.test(slug)) invalid("opponent_slug", "identificador publico invalido");
-    output.opponentSlug = slug;
+    const hasSlug = input.opponent_slug !== undefined && String(input.opponent_slug).trim() !== "";
+    const hasPublicId = input.opponent_public_id !== undefined && String(input.opponent_public_id).trim() !== "";
+    if (hasSlug === hasPublicId) invalid("opponent", "informe um unico identificador publico");
+    if (hasPublicId) {
+      output.opponentPublicId = validatePublicId(input.opponent_public_id, "opponent_public_id");
+    } else {
+      const slug = text("opponent_slug", input.opponent_slug, 96).toLowerCase();
+      if (!SLUG.test(slug)) invalid("opponent_slug", "identificador publico invalido");
+      output.opponentSlug = slug;
+    }
   }
   output.startsAt = date("starts_at", input.starts_at);
   output.endsAt = date("ends_at", input.ends_at);

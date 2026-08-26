@@ -36,7 +36,7 @@ function haversineKm(first, second) {
   return 6_371.0088 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-function candidateLocation(origin, candidate, radiusKm) {
+function candidateLocation(origin, candidate, radiusKm = null) {
   const bothKnown = validCoordinate(origin.approximateLatitude, origin.approximateLongitude) &&
     validCoordinate(candidate.approximateLatitude, candidate.approximateLongitude);
   if (bothKnown) {
@@ -44,11 +44,15 @@ function candidateLocation(origin, candidate, radiusKm) {
       { latitude: origin.approximateLatitude, longitude: origin.approximateLongitude },
       { latitude: candidate.approximateLatitude, longitude: candidate.approximateLongitude }
     );
-    if (distance > radiusKm) return null;
+    if (Number.isFinite(radiusKm) && distance > radiusKm) return null;
     return Object.freeze({ kind: "approximate_distance", distanceKm: distance });
   }
-  if (String(origin.cityIbgeCode || "") !== String(candidate.cityIbgeCode || "")) return null;
-  return Object.freeze({ kind: "same_city", distanceKm: null });
+  const originCity = String(origin.cityIbgeCode || "");
+  const candidateCity = String(candidate.cityIbgeCode || "");
+  if (originCity && candidateCity && originCity === candidateCity) {
+    return Object.freeze({ kind: "same_city", distanceKm: null });
+  }
+  return Object.freeze({ kind: "unknown", distanceKm: null });
 }
 
 function normalizedSet(values) {
@@ -74,21 +78,32 @@ function buildCompatibility({ origin, candidate, location, radiusKm }) {
   if (location.kind === "same_city") {
     score += 25;
     reasons.push("mesma cidade");
-  } else {
-    score += Math.max(0, Math.round(25 * (1 - location.distanceKm / radiusKm)));
-    if (location.distanceKm <= Math.min(radiusKm, 10)) reasons.push("perto do seu time");
+  } else if (location.kind === "approximate_distance") {
+    const scale = Math.max(Number(radiusKm || 100), location.distanceKm || 0, 1);
+    score += Math.max(0, Math.round(25 * (1 - location.distanceKm / scale)));
+    if (location.distanceKm <= Math.min(scale, 10)) reasons.push("perto do seu time");
   }
 
-  if (normalizedSet(origin.modalities).has(String(candidate.modality || "").toLowerCase())) {
+  const candidateModalities = normalizedSet([
+    ...(candidate.modalities || []),
+    candidate.modality
+  ]);
+  if ([...normalizedSet(origin.modalities)].some(value => candidateModalities.has(value))) {
     score += 25;
     reasons.push("mesma modalidade");
   }
-  if (normalizedSet(origin.categories).has(String(candidate.category || "").toLowerCase())) {
+  const candidateCategories = normalizedSet([
+    ...(candidate.categories || []),
+    candidate.category
+  ]);
+  if ([...normalizedSet(origin.categories)].some(value => candidateCategories.has(value))) {
     score += 20;
     reasons.push("categoria compativel");
   }
 
-  if (candidate.availabilityOverlap === true) {
+  if (!candidate.startsAt) {
+    reasons.push("horario a combinar");
+  } else if (candidate.availabilityOverlap === true) {
     score += 25;
     reasons.push(`disponivel ${weekdayLabel(candidate.startsAt)}`);
   } else {
@@ -107,8 +122,12 @@ function buildCompatibility({ origin, candidate, location, radiusKm }) {
 function sortKey(item) {
   return Object.freeze({
     score: item.compatibility.score,
-    distance: item.location.distanceKm === null ? 1_000_000 : Number(item.location.distanceKm.toFixed(3)),
-    startsAt: item.startsAt,
+    distance: item.location.kind === "unknown"
+      ? 2_000_000
+      : item.location.distanceKm === null
+        ? 1_000_000
+        : Number(item.location.distanceKm.toFixed(3)),
+    startsAt: item.startsAt || "9999-12-31T23:59:59.999Z",
     slug: item.publicSlug
   });
 }

@@ -73,12 +73,8 @@ function rowToNotification(row) {
 
 function eligible(team) {
   return Boolean(
-    team && team.status === "active" && !team.suspendedAt && team.availabilityActive &&
-    team.instagramVerificationStatus === "verified" && team.termsAcceptedAt &&
-    team.publicProfileEnabled && team.publicCrestAvailable && team.publicName &&
-    /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(team.publicSlug || "") &&
-    /^\d{7}$/.test(team.cityIbgeCode || "") && /^[A-Z]{2}$/.test(team.stateCode || "") &&
-    team.cityName && team.modalities.length && team.categories.length
+    team && team.status === "active" && !team.suspendedAt && !team.departedAt &&
+    team.radarVisible !== false
   );
 }
 
@@ -121,54 +117,28 @@ async function lockPair(client, firstId, secondId) {
   return new Map(result.rows.map(row => [row.id, rowToTeam(row)]));
 }
 
-async function hasAvailability(client, teamId, now) {
-  const result = await client.query(`
-    SELECT EXISTS(
-      SELECT 1 FROM friendly_availabilities
-      WHERE team_id = $1 AND status = 'active' AND ends_at > $2
-    ) AS available
-  `, [teamId, now]);
-  return result.rows[0]?.available === true;
-}
-
 async function assertPairAllowed(client, origin, opponent, now) {
   if (origin.id === opponent.id) throw invitationError("INVITATION_SELF_FORBIDDEN", 409, "Nao e possivel convidar o proprio time.");
   assertEligible(origin, "INVITATION_ORIGIN_NOT_ELIGIBLE");
   assertEligible(opponent, "INVITATION_OPPONENT_NOT_ELIGIBLE");
-  const [originAvailable, opponentAvailable, block] = await Promise.all([
-    hasAvailability(client, origin.id, now),
-    hasAvailability(client, opponent.id, now),
-    client.query(`
+  const block = await client.query(`
       SELECT 1 FROM team_blocks
       WHERE (blocker_team_id = $1 AND blocked_team_id = $2)
          OR (blocker_team_id = $2 AND blocked_team_id = $1)
       LIMIT 1
-    `, [origin.id, opponent.id])
-  ]);
-  if (!originAvailable || !opponentAvailable) throw invitationError("INVITATION_TEAM_UNAVAILABLE", 409, "Um dos times nao esta disponivel.");
+    `, [origin.id, opponent.id]);
   if (block.rowCount) throw invitationError("INVITATION_BLOCKED", 404, "Time indisponivel para convite.");
 }
 
-function normalizedSet(values) {
-  return new Set((values || []).map(value => String(value).toLocaleLowerCase("pt-BR")));
-}
-
 function canonicalProposal(value, proposer, opponent) {
-  if (!normalizedSet(proposer.modalities).has(value.modality) || !normalizedSet(opponent.modalities).has(value.modality)) {
-    throw invitationError("INVITATION_MODALITY_INCOMPATIBLE", 409, "Modalidade indisponivel para os times.");
-  }
-  const category = value.category.toLocaleLowerCase("pt-BR");
-  if (!normalizedSet(proposer.categories).has(category) || !normalizedSet(opponent.categories).has(category)) {
-    throw invitationError("INVITATION_CATEGORY_INCOMPATIBLE", 409, "Categoria indisponivel para os times.");
-  }
   const host = value.venuePreference === "away" ? opponent : proposer;
   return Object.freeze({
     starts_at: value.startsAt,
     ends_at: value.endsAt,
     modality: value.modality,
     category: value.category,
-    city: host.cityName,
-    state: host.stateCode,
+    city: host.cityName || null,
+    state: host.stateCode || null,
     venue_preference: value.venuePreference,
     message: value.message
   });
@@ -323,7 +293,9 @@ function createInvitationRepository({ pool, config }) {
   async function createOwned({ identity, value, idempotencyKey, payloadHash, now, ip, requestId }) {
     return withTransaction(async client => {
       const initialOrigin = await loadOwnedTeam(client, identity);
-      const candidateResult = await client.query("SELECT * FROM radar_team_profiles WHERE public_slug = $1", [value.opponentSlug]);
+      const candidateResult = value.opponentPublicId
+        ? await client.query("SELECT * FROM radar_team_profiles WHERE public_id = $1", [value.opponentPublicId])
+        : await client.query("SELECT * FROM radar_team_profiles WHERE public_slug = $1", [value.opponentSlug]);
       if (candidateResult.rowCount !== 1) throw invitationError("INVITATION_OPPONENT_NOT_FOUND", 404, "Time indisponivel para convite.");
       const initialOpponent = rowToTeam(candidateResult.rows[0]);
       const locked = await lockPair(client, initialOrigin.id, initialOpponent.id);

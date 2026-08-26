@@ -291,8 +291,9 @@ function createTeamReputationRepository({ pool }) {
       const row = await reputationQuery(client, `
         team.public_id = $1
         AND team.status = 'active'
-        AND team.public_profile_enabled = true
         AND team.suspended_at IS NULL
+        AND team.radar_departed_at IS NULL
+        AND team.radar_visible = true
       `, teamPublicId);
       if (!row) {
         throw reputationError("TEAM_REPUTATION_NOT_FOUND", 404, "Reputacao nao encontrada.");

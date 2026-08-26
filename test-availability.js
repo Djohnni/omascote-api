@@ -258,7 +258,7 @@ test("owner can create active or paused slots with canonical profile data and ma
   assert.equal(paused.availability.status, "paused");
 });
 
-test("profile membership and activation eligibility cannot be bypassed", async () => {
+test("published schedule uses profile choices but Instagram verification is optional", async () => {
   const service = createAvailabilityService({ repository: repository(), config: config(), now: () => NOW });
   await assert.rejects(
     service.create({ identity: identity(), body: body({ modality: "futebol_campo" }), idempotencyKey: "bad-modality-0001" }),
@@ -269,10 +269,9 @@ test("profile membership and activation eligibility cannot be bypassed", async (
     error => error.code === "AVAILABILITY_CATEGORY_NOT_IN_PROFILE"
   );
   const unverified = team({ instagramVerificationStatus: "unverified" });
-  await assert.rejects(
+  await assert.doesNotReject(
     createAvailabilityService({ repository: repository(unverified), config: config(), now: () => NOW })
-      .create({ identity: identity(), body: body(), idempotencyKey: "not-eligible-0001" }),
-    error => error.code === "AVAILABILITY_NOT_ELIGIBLE" && error.details.missing.includes("instagram_not_verified")
+      .create({ identity: identity(), body: body(), idempotencyKey: "not-eligible-0001" })
   );
   await assert.doesNotReject(
     createAvailabilityService({ repository: repository(unverified), config: config(), now: () => NOW })

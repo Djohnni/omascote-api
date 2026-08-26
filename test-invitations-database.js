@@ -60,7 +60,7 @@ async function insertTeam(database, name, overrides = {}) {
       $1, $2, $3, $4, $5, $6, '4209102', 'Joinville', 'SC',
       ARRAY['society'], ARRAY['Livre'], 'intermediario', 25, 'either', $7,
       $8, $9, $10, $11, $12
-    ) RETURNING id, public_slug
+    ) RETURNING id, public_id, public_slug
   `, [
     owner.profileId, owner.accountId, `${name}-fc`, overrides.status || "active", `${name}.fc`,
     overrides.verified === false ? "unverified" : "verified",
@@ -128,7 +128,7 @@ test("migration 008 runs twice and protects invitation, notification and idempot
   try {
     const adapter = pool(database);
     const applied = await migrate({ pool: adapter });
-    assert.equal(applied.at(-1), "014_radar_smart_onboarding.sql");
+    assert.equal(applied.at(-1), "015_radar_automatic_participation.sql");
     assert.deepEqual(await migrate({ pool: adapter }), []);
     const tables = await database.query(`
       SELECT table_name FROM information_schema.tables
@@ -167,6 +167,40 @@ test("first-access notification list is empty and creates no Radar records", asy
       ip: "203.0.113.80"
     }), error => error.code === "RADAR_PROFILE_NOT_FOUND");
     assert.deepEqual(await dataCounts(database), before);
+  } finally { await database.close(); }
+});
+
+test("an active visible team can be invited by public id without schedule or matching profile fields", async () => {
+  const database = new PGlite();
+  try {
+    await migrate({ pool: pool(database) });
+    const alpha = await insertTeam(database, "automatic-alpha", { slot: false, available: false });
+    const beta = await insertTeam(database, "automatic-beta", { slot: false, available: false, verified: false });
+    await database.query(`
+      UPDATE radar_team_profiles
+      SET city_ibge_code = NULL,
+          city_name = NULL,
+          state_code = NULL,
+          approximate_latitude = NULL,
+          approximate_longitude = NULL,
+          modalities = ARRAY[]::text[],
+          categories = ARRAY[]::text[],
+          radar_terms_accepted_at = NULL,
+          public_profile_enabled = false,
+          public_crest_available = false
+      WHERE id IN ($1, $2)
+    `, [alpha.id, beta.id]);
+    const body = proposal(undefined, { opponent_public_id: beta.public_id });
+    delete body.opponent_slug;
+    const created = await service(database).create({
+      identity: alpha.identity,
+      body,
+      idempotencyKey: "automatic-invite-without-profile-0001",
+      ip: "203.0.113.70"
+    });
+    assert.equal(created.invitation.state, "pending");
+    assert.equal(created.invitation.opponent.slug, beta.public_slug);
+    assert.equal((await database.query("SELECT count(*)::integer AS total FROM friendly_invitations")).rows[0].total, 1);
   } finally { await database.close(); }
 });
 

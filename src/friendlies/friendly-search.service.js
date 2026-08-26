@@ -25,51 +25,73 @@ function searchError(code, status, message, details = null) {
   return new RadarIdentityError(code, status, message, details);
 }
 
-function livePublicProfileSafe(profile, expectedSlug) {
-  const slug = String(profile?.slug || "").trim();
-  const name = String(profile?.name || "").replace(/\s+/g, " ").trim();
-  return profile?.public === true &&
-    profile?.hasCrest === true &&
-    slug === expectedSlug &&
-    /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug) &&
-    name.length >= 2 && name.length <= 80;
-}
-
-function publicCandidate(item, liveProfile, minimumRatingMatches, pilotAccountAllowlist = []) {
+function publicCandidate(item, minimumRatingMatches) {
   const location = item.location.kind === "same_city"
-    ? Object.freeze({ kind: "same_city", label: "mesma cidade" })
-    : Object.freeze({
-      kind: "approximate_distance",
-      distance_km: Number(item.location.distanceKm.toFixed(1)),
-      label: `${Number(item.location.distanceKm.toFixed(1))} km aproximadamente`
-    });
+    ? Object.freeze({ kind: "same_city", label: "Mesma cidade" })
+    : item.location.kind === "approximate_distance"
+      ? Object.freeze({
+        kind: "approximate_distance",
+        distance_km: Number(item.location.distanceKm.toFixed(1)),
+        label: `${Number(item.location.distanceKm.toFixed(1))} km aprox.`
+      })
+      : Object.freeze({ kind: "unknown", label: "Cidade não informada" });
+  const reviewCount = Number(item.verifiedReviewCount || 0);
+  const reputation = reviewCount >= minimumRatingMatches
+    ? Object.freeze({
+      state: "established",
+      verified_evaluations: reviewCount,
+      overall: Math.round((
+        item.punctualitySum + item.organizationSum +
+        item.communicationSum + item.fairPlaySum
+      ) * 10 / (reviewCount * 4)) / 10,
+      would_play_again_percent: Math.round(item.wouldPlayAgainCount * 100 / reviewCount)
+    })
+    : Object.freeze({ state: "unrated", label: "Sem nota" });
   const response = {
     public_id: item.publicId,
     slug: item.publicSlug,
-    name: liveProfile.name,
-    crest_url: `/time/${encodeURIComponent(item.publicSlug)}/escudo/imagem`,
-    city: item.cityName,
-    state: item.stateCode,
+    name: item.publicName || "Time do Meu Clube FC",
+    crest_url: item.publicCrestAvailable && item.publicSlug
+      ? `/time/${encodeURIComponent(item.publicSlug)}/escudo/imagem`
+      : null,
+    city: item.cityName || null,
+    state: item.stateCode || null,
+    modalities: Object.freeze([...(item.modalities || [])]),
+    categories: Object.freeze([...(item.categories || [])]),
     modality: item.modality,
     category: item.category,
-    whatsapp_disponivel: item.whatsappAvailable === true && pilotAccountAllowlist.includes(item.accountReference),
+    whatsapp_disponivel: item.whatsappAvailable === true,
     location,
     compatibility: Object.freeze({
       score: item.compatibility.score,
       reasons: item.compatibility.reasons
     }),
-    next_availability: Object.freeze({
+    availability: item.startsAt
+      ? Object.freeze({ state: "available", label: "Disponível" })
+      : Object.freeze({ state: "to_arrange", label: "Horário a combinar" }),
+    next_availability: item.startsAt ? Object.freeze({
       starts_at: new Date(item.startsAt).toISOString(),
       ends_at: new Date(item.endsAt).toISOString(),
       venue_preference: item.venuePreference
+    }) : null,
+    instagram: Object.freeze({
+      verified: item.instagramVerified === true,
+      label: item.instagramVerified === true ? "Verificado" : "Não verificado"
     }),
-    reputation: Object.freeze({ state: "new_on_radar" })
+    joined_at: item.joinedAt ? new Date(item.joinedAt).toISOString() : null,
+    experience: item.verifiedMatchCount > 0
+      ? Object.freeze({ state: "experienced", label: `${item.verifiedMatchCount} jogos` })
+      : Object.freeze({ state: "new", label: "Novo no Radar" }),
+    statistics: Object.freeze({
+      matches: Number(item.verifiedMatchCount || 0),
+      wins: Number(item.wins || 0),
+      draws: Number(item.draws || 0),
+      losses: Number(item.losses || 0)
+    }),
+    reputation
   };
   if (item.verifiedMatchCount > 0) {
     response.verified_match_count = item.verifiedMatchCount;
-  }
-  if (item.verifiedMatchCount >= minimumRatingMatches) {
-    response.reputation = Object.freeze({ state: "new_on_radar" });
   }
   return Object.freeze(response);
 }
@@ -83,9 +105,6 @@ function createFriendlySearchService({
 }) {
   if (!repository || typeof repository.getOrigin !== "function") {
     throw new TypeError("Friendly search service requires a repository");
-  }
-  if (typeof resolvePublicProfile !== "function" && typeof resolvePublicProfiles !== "function") {
-    throw new TypeError("Friendly search service requires a public profile resolver");
   }
 
   async function recordMetricQuietly(outcome, returnedCount, now) {
@@ -104,21 +123,18 @@ function createFriendlySearchService({
       legacyProfile: identity.legacyProfile,
       config
     });
-    if (!eligibility.eligible || origin.status !== "active") {
+    if (!eligibility.eligible) {
       throw searchError(
         "FRIENDLY_SEARCH_ORIGIN_INELIGIBLE",
         409,
-        "Complete e ative o perfil do Radar antes de procurar amistosos.",
+        "Este time nao pode usar o Radar no momento.",
         { missing: eligibility.missing }
       );
     }
 
-    const requestedRadius = filters.radiusKm || 25;
-    const appliedRadiusKm = Math.min(
-      requestedRadius,
-      Number(origin.travelRadiusKm || 25),
-      config.searchRadiusMaximumKm
-    );
+    const appliedRadiusKm = filters.radiusKm === null
+      ? null
+      : Math.min(filters.radiusKm, config.searchRadiusMaximumKm);
     const boundFilters = cursorBoundFilters(filters, appliedRadiusKm);
     const fingerprint = filtersFingerprint(boundFilters);
     const expectedOriginScope = originScope(secrets.cursor, origin);
@@ -182,24 +198,15 @@ function createFriendlySearchService({
         if (!location) continue;
         located.push(Object.freeze({ ...candidate, location }));
       }
-      const liveProfiles = typeof resolvePublicProfiles === "function"
-        ? await resolvePublicProfiles(located.map(candidate => candidate.publicSlug))
-        : null;
       const candidates = [];
       for (const candidate of located) {
-        const liveProfile = liveProfiles instanceof Map
-          ? liveProfiles.get(candidate.publicSlug)
-          : liveProfiles && typeof liveProfiles === "object"
-            ? liveProfiles[candidate.publicSlug]
-            : await resolvePublicProfile(candidate.publicSlug);
-        if (!livePublicProfileSafe(liveProfile, candidate.publicSlug)) continue;
         const compatibility = buildCompatibility({
           origin,
           candidate,
           location: candidate.location,
           radiusKm: appliedRadiusKm
         });
-        candidates.push(Object.freeze({ ...candidate, compatibility, liveProfile }));
+        candidates.push(Object.freeze({ ...candidate, compatibility }));
       }
       candidates.sort((first, second) => compareSortKeys(sortKey(first), sortKey(second)));
       const remaining = afterKey
@@ -222,9 +229,7 @@ function createFriendlySearchService({
         : null;
       const items = Object.freeze(page.map(item => publicCandidate(
         item,
-        item.liveProfile,
-        config.publicRatingMinimumMatches,
-        config.pilotAccountAllowlist || []
+        config.publicRatingMinimumMatches
       )));
       await recordMetricQuietly(items.length > 0 ? "success" : "empty", items.length, now);
       return Object.freeze({
@@ -251,6 +256,5 @@ function createFriendlySearchService({
 
 module.exports = {
   createFriendlySearchService,
-  publicCandidate,
-  livePublicProfileSafe
+  publicCandidate
 };

@@ -201,7 +201,7 @@ test("distance uses approximate municipality points and missing coordinates neve
     25
   );
   assert.deepEqual(sameCity, { kind: "same_city", distanceKm: null });
-  assert.equal(candidateLocation(
+  assert.deepEqual(candidateLocation(
     origin({ approximateLatitude: null, approximateLongitude: null }),
     candidate(1, {
       cityIbgeCode: "3550308",
@@ -209,7 +209,7 @@ test("distance uses approximate municipality points and missing coordinates neve
       approximateLongitude: null
     }),
     25
-  ), null);
+  ), { kind: "unknown", distanceKm: null });
 });
 
 test("compatibility is deterministic and exposes objective reasons", () => {
@@ -229,7 +229,7 @@ test("compatibility is deterministic and exposes objective reasons", () => {
   ]);
 });
 
-test("service resolves origin server-side, excludes itself and unsafe public profiles", async () => {
+test("service resolves origin server-side and keeps incomplete active profiles visible", async () => {
   const own = candidate(0, { teamId: origin().id, publicSlug: "owner-fc" });
   const privateCandidate = candidate(2, { publicSlug: "private-fc" });
   const repo = repository([own, candidate(1), privateCandidate]);
@@ -247,7 +247,7 @@ test("service resolves origin server-side, excludes itself and unsafe public pro
     query: { limit: "5" },
     requestContext: { ip: "203.0.113.4" }
   });
-  assert.deepEqual(result.items.map(item => item.slug), ["time-1"]);
+  assert.deepEqual(result.items.map(item => item.slug), ["time-1", "private-fc"]);
   assert.equal(repo.state.searches[0].origin.id, origin().id);
   assert.equal(repo.state.rateCalls[0].scopes.length, 3);
   const serialized = JSON.stringify(result);
@@ -258,11 +258,12 @@ test("service resolves origin server-side, excludes itself and unsafe public pro
     assert.equal(serialized.toLowerCase().includes(forbidden.toLowerCase()), false, forbidden);
   }
   assert.equal(result.items[0].whatsapp_disponivel, false);
-  assert.equal(result.items[0].reputation.state, "new_on_radar");
+  assert.equal(result.items[0].reputation.state, "unrated");
+  assert.equal(result.items[0].reputation.label, "Sem nota");
   assert.equal(result.items[0].verified_match_count, 2);
 });
 
-test("radius is clamped by the team preference and fallback says same city without fake km", async () => {
+test("explicit radius is honored while teams without city remain after located teams", async () => {
   const owner = origin({
     travelRadiusKm: 10,
     approximateLatitude: null,
@@ -283,9 +284,10 @@ test("radius is clamped by the team preference and fallback says same city witho
     clock: () => NOW
   });
   const result = await service.search({ identity: identity(), query: { radius_km: "80", limit: "5" } });
-  assert.equal(result.search.radius_km, 10);
-  assert.equal(result.items.length, 1);
-  assert.deepEqual(result.items[0].location, { kind: "same_city", label: "mesma cidade" });
+  assert.equal(result.search.radius_km, 80);
+  assert.equal(result.items.length, 2);
+  assert.deepEqual(result.items[0].location, { kind: "same_city", label: "Mesma cidade" });
+  assert.deepEqual(result.items[1].location, { kind: "unknown", label: "Cidade não informada" });
   assert.equal(JSON.stringify(result).includes("distance_km"), false);
 });
 
@@ -343,7 +345,7 @@ test("missing secrets, ineligible origin and persistent rate denial fail closed"
   );
   await assert.rejects(
     createFriendlySearchService({
-      repository: repository(rows, origin({ instagramVerificationStatus: "unverified" })),
+      repository: repository(rows, origin({ status: "suspended", suspendedAt: NOW })),
       config: config(),
       resolvePublicProfile: profileResolver,
       clock: () => NOW
@@ -363,6 +365,40 @@ test("missing secrets, ineligible origin and persistent rate denial fail closed"
     }).search({ identity: identity(), query: {} }),
     error => error.status === 429
   );
+});
+
+test("general search lists a new team without city, verification, crest, categories or schedule", async () => {
+  const newTeam = candidate(9, {
+    publicCrestAvailable: false,
+    instagramVerified: false,
+    cityIbgeCode: null,
+    cityName: null,
+    stateCode: null,
+    approximateLatitude: null,
+    approximateLongitude: null,
+    modalities: [],
+    categories: [],
+    modality: null,
+    category: null,
+    startsAt: null,
+    endsAt: null,
+    venuePreference: null,
+    availabilityOverlap: false,
+    verifiedMatchCount: 0
+  });
+  const service = createFriendlySearchService({
+    repository: repository([newTeam]),
+    config: config(),
+    clock: () => NOW
+  });
+  const result = await service.search({ identity: identity(), query: {} });
+  assert.equal(result.items.length, 1);
+  assert.equal(result.search.radius_km, null);
+  assert.equal(result.items[0].availability.label, "Horário a combinar");
+  assert.equal(result.items[0].instagram.label, "Não verificado");
+  assert.equal(result.items[0].verified_match_count, undefined);
+  assert.equal(result.items[0].experience.label, "Novo no Radar");
+  assert.equal(result.items[0].reputation.label, "Sem nota");
 });
 
 test("representative volume and concurrent searches keep deterministic small pages", async () => {

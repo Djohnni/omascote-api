@@ -77,7 +77,7 @@ inteligente e o contato opcional criptografado.
 
 O WhatsApp começa oculto e exige consentimento separado. A listagem expõe apenas
 `whatsapp_disponivel`; o número é descriptografado somente após um clique
-autenticado, elegível, permitido pela allowlist e sem bloqueio bilateral. A
+autenticado, ativo, visível e sem bloqueio bilateral. A
 resposta usa `private, no-store`, recebe limites persistentes e a auditoria não
 contém o número.
 

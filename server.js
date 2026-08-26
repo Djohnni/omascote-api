@@ -69,9 +69,10 @@ const {
   createRadarModerationRouters
 } = require("./src/friendlies/radar-moderation.routes");
 const { createRadarWhatsappRouter } = require("./src/friendlies/radar-whatsapp.routes");
+const { createRadarIdentityRepository } = require("./src/friendlies/radar-identity.repository");
+const { createRadarAccountSynchronizer } = require("./src/friendlies/radar-account-sync");
 const {
   createLegacyRadarIdentityResolver,
-  createPilotGatedRadarIdentityResolver,
   accountReference
 } = require("./src/friendlies/radar-identity.policy");
 
@@ -7569,10 +7570,33 @@ const resolveBaseRadarIdentity = createLegacyRadarIdentityResolver({
     return ensurePerfilCliente(readClientes(), authSubject);
   }
 });
-const resolveRadarIdentity = createPilotGatedRadarIdentityResolver({
-  resolveIdentity: resolveBaseRadarIdentity,
-  config: radarConfig
-});
+const resolveRadarIdentity = resolveBaseRadarIdentity;
+const radarAccountSynchronizer = radarPool
+  ? createRadarAccountSynchronizer({
+    repository: createRadarIdentityRepository({ pool: radarPool }),
+    resolveIdentity: resolveBaseRadarIdentity,
+    listAccounts: readClientes
+  })
+  : null;
+
+async function reconcileRadarAccount(authSubject, requestId) {
+  if (!radarAccountSynchronizer) return null;
+  try {
+    return await radarAccountSynchronizer.syncAuthSubject(authSubject, { requestId });
+  } catch (error) {
+    radarLogger.error?.("[RADAR_ACCOUNT_SYNC] reconciliation failed", {
+      error: error?.name || "Error"
+    });
+    return null;
+  }
+}
+
+async function runRadarAutomaticBackfill() {
+  if (!radarAccountSynchronizer) return null;
+  const counts = await radarAccountSynchronizer.backfill();
+  radarLogger.info?.("[RADAR_ACCOUNT_SYNC] backfill completed", counts);
+  return counts;
+}
 
 function resolveRadarMatchContact(reference) {
   const expected = String(reference || "").trim();
@@ -7872,7 +7896,7 @@ app.post(
   "/auth/browser-handoff/redeem",
   requireAuthBrowserHandoffEnabled,
   requireAuthBrowserHandoffOrigin,
-  (req, res) => {
+  async (req, res) => {
     const startedAt = Date.now();
 
     if (!req.is("application/json")) {
@@ -7960,6 +7984,7 @@ app.post(
         { expiresIn: remainingSessionSeconds }
       );
       const saldoInfo = billingService.getBalanceFields(cliente);
+      await reconcileRadarAccount(userId, "auth-browser-handoff-redeem");
 
       logAuthBrowserHandoff(req, {
         evento: "handoff_resgatado",
@@ -8032,6 +8057,7 @@ app.post("/auth/google", async (req, res) => {
 
     const token = jwt.sign({ whatsapp: chaveCliente }, JWT_SECRET, { expiresIn: "7d" });
     const saldoInfo = billingService.getBalanceFields(c);
+    await reconcileRadarAccount(chaveCliente, "auth-google");
 
     return res.json({
       ok: true,
@@ -8051,7 +8077,7 @@ app.post("/auth/google", async (req, res) => {
 });
 
 // Login automático invisível
-app.post("/auth/auto-register", (req, res) => {
+app.post("/auth/auto-register", async (req, res) => {
   try {
     const body = req.body || {};
     const clientes = readClientes();
@@ -8089,6 +8115,7 @@ app.post("/auth/auto-register", (req, res) => {
 
     clientes[login] = novo;
     writeClientes(clientes);
+    await reconcileRadarAccount(login, "auth-auto-register");
 
     const token = jwt.sign({ whatsapp: login }, JWT_SECRET, { expiresIn: "7d" });
     const saldoInfo = billingService.getBalanceFields(novo);
@@ -8112,7 +8139,7 @@ app.post("/auth/auto-register", (req, res) => {
 });
 
 // Login
-app.post("/auth/register", (req, res) => {
+app.post("/auth/register", async (req, res) => {
   const body = req.body || {};
   const whatsapp = normalizarLoginId(body.whatsapp);
   const senha = body.senha || "";
@@ -8159,6 +8186,7 @@ app.post("/auth/register", (req, res) => {
 
   clientesAtualizados[whatsapp] = novo;
   writeClientes(clientesAtualizados);
+  await reconcileRadarAccount(whatsapp, "auth-register");
 
   const token = jwt.sign({ whatsapp }, JWT_SECRET, { expiresIn: "7d" });
   const saldoInfo = billingService.getBalanceFields(novo);
@@ -8173,7 +8201,7 @@ app.post("/auth/register", (req, res) => {
   });
 });
 
-app.post("/auth/finalizar-conta-auto", auth, (req, res) => {
+app.post("/auth/finalizar-conta-auto", auth, async (req, res) => {
   try {
     const loginAtual = req.user.whatsapp;
     const novoLogin = normalizarLoginId(req.body?.login);
@@ -8227,6 +8255,7 @@ app.post("/auth/finalizar-conta-auto", auth, (req, res) => {
     }
 
     writeClientes(clientes);
+    await reconcileRadarAccount(novoLogin, "auth-finalizar-conta-auto");
 
     const token = jwt.sign({ whatsapp: novoLogin }, JWT_SECRET, { expiresIn: "7d" });
     const saldoInfo = billingService.getBalanceFields(clienteAtual);
@@ -8249,7 +8278,7 @@ app.post("/auth/finalizar-conta-auto", auth, (req, res) => {
   }
 });
 
-app.post("/auth/login", (req, res) => {
+app.post("/auth/login", async (req, res) => {
   const body = req.body || {};
   const whatsapp = normalizarLoginId(body.whatsapp);
   const senha = body.senha || "";
@@ -8284,6 +8313,7 @@ app.post("/auth/login", (req, res) => {
 
   const token = jwt.sign({ whatsapp }, JWT_SECRET, { expiresIn: "7d" });
   const saldoInfo = billingService.getBalanceFields(c);
+  await reconcileRadarAccount(whatsapp, "auth-login");
 
   return res.json({
     ok: true,
@@ -14572,6 +14602,11 @@ if (require.main === module) {
   }
   app.listen(PORT, () => {
     console.log("API rodando na porta", PORT);
+    runRadarAutomaticBackfill().catch(error => {
+      radarLogger.error?.("[RADAR_ACCOUNT_SYNC] backfill failed", {
+        error: error?.name || "Error"
+      });
+    });
   });
 }
 
@@ -14580,6 +14615,7 @@ module.exports = {
   __radarReleaseCandidate: {
     config: radarConfig,
     observabilitySnapshot: () => radarObservability.snapshot(),
+    runAccountBackfill: runRadarAutomaticBackfill,
     closePool: async () => {
       if (radarPool) await radarPool.end();
     }

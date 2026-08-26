@@ -296,7 +296,8 @@ function createRadarModerationRepository({ pool, config }) {
     if (operation === "report" && value.type === "time") {
       const result = await client.query(`
         SELECT id, public_id FROM radar_team_profiles
-        WHERE public_id = $1 AND radar_departed_at IS NULL AND public_profile_enabled = true
+        WHERE public_id = $1 AND radar_departed_at IS NULL
+          AND suspended_at IS NULL AND radar_visible = true
       `, [value.teamPublicId]);
       if (result.rowCount !== 1 || result.rows[0].id === team.id) {
         throw moderationError("RADAR_REPORT_TARGET_NOT_FOUND", 404, "Alvo nao encontrado.");
@@ -435,7 +436,7 @@ function createRadarModerationRepository({ pool, config }) {
           approximate_longitude = NULL, modalities = '{}', categories = '{}',
           availability_active = false, radar_terms_accepted_at = NULL,
           public_name = 'Time removido', public_profile_enabled = false,
-          public_crest_available = false, radar_departed_at = $2,
+          public_crest_available = false, radar_visible = false, radar_departed_at = $2,
           version = version + 1, updated_at = $2
         WHERE id = $1 RETURNING version
       `, [team.id, values.now]);

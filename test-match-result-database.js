@@ -156,7 +156,7 @@ test("migration 010 runs twice and installs result ledgers and verified statisti
   try {
     const adapter = pool(database);
     const applied = await migrate({ pool: adapter });
-    assert.equal(applied.at(-1), "014_radar_smart_onboarding.sql");
+    assert.equal(applied.at(-1), "015_radar_automatic_participation.sql");
     assert.deepEqual(await migrate({ pool: adapter }), []);
     const tables = await database.query(`
       SELECT table_name FROM information_schema.tables

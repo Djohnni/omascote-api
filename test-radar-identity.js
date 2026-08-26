@@ -58,10 +58,12 @@ function completeTeam(overrides = {}) {
     travelRadiusKm: 25,
     venuePreference: "either",
     availabilityActive: false,
+    radarVisible: true,
     termsAcceptedAt: "2026-08-24T12:00:00.000Z",
     suspendedAt: null,
     version: 2,
     updatedAt: "2026-08-24T12:00:00.000Z",
+    createdAt: "2026-08-24T12:00:00.000Z",
     ...overrides
   };
 }
@@ -150,6 +152,7 @@ test("profile contract normalizes safe fields and rejects identity or invalid va
     travel_radius_km: 40,
     venue_preference: "either",
     availability_active: false,
+    radar_visible: false,
     accept_terms: true
   }), {
     cityName: "Joinville",
@@ -160,6 +163,7 @@ test("profile contract normalizes safe fields and rejects identity or invalid va
     travelRadiusKm: 40,
     venuePreference: "either",
     availabilityActive: false,
+    radarVisible: false,
     acceptTerms: true
   });
 
@@ -190,24 +194,34 @@ test("If-Match supports numeric ETags and rejects unsafe versions", () => {
   );
 });
 
-test("eligibility is derived from verified persisted and legacy data", () => {
+test("participation is automatic while optional profile improvements remain visible", () => {
   const config = createRadarConfig({ RADAR_AMISTOSOS_ENABLED: "true" });
   const team = completeTeam();
   const eligibility = buildRadarEligibility({ team, legacyProfile: publicLegacyProfile, config });
   assert.equal(eligibility.eligible, true);
-  assert.equal(eligibility.discoverable, false);
+  assert.equal(eligibility.discoverable, true);
   assert.deepEqual(eligibility.missing, []);
-  assert.equal(deriveStatus(team, eligibility), "paused");
+  assert.equal(deriveStatus(team, eligibility), "active");
 
   const unsafe = buildRadarEligibility({
     team: completeTeam({ instagramVerificationStatus: "unverified" }),
     legacyProfile: { ...publicLegacyProfile, publico: false, escudo_url: "" },
     config
   });
-  assert.equal(unsafe.eligible, false);
+  assert.equal(unsafe.eligible, true);
+  assert.equal(unsafe.discoverable, true);
   assert.ok(unsafe.missing.includes("profile_not_public"));
   assert.ok(unsafe.missing.includes("crest_missing"));
   assert.ok(unsafe.missing.includes("instagram_not_verified"));
+
+  const hidden = buildRadarEligibility({
+    team: completeTeam({ radarVisible: false }),
+    legacyProfile: publicLegacyProfile,
+    config
+  });
+  assert.equal(hidden.eligible, true);
+  assert.equal(hidden.discoverable, false);
+  assert.equal(deriveStatus(completeTeam({ radarVisible: false }), hidden), "paused");
 });
 
 test("owner response does not expose internal identity or contact fields", () => {

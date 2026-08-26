@@ -216,9 +216,9 @@ for (const reason of ["database_schema_missing", "database_schema_outdated"]) {
       build: null,
       radar_amistosos: "enabled",
       database: reason,
-      pilot_allowlist: "not_configured",
+      radar_participation: "automatic",
       metrics: "disabled",
-      instagram_verification: "configured",
+      instagram_verification: "optional_configured",
       profile_print_import: "disabled",
       friendly_search: "disabled",
       friendly_invitations: "disabled",
@@ -231,7 +231,7 @@ for (const reason of ["database_schema_missing", "database_schema_outdated"]) {
   });
 }
 
-test("readiness fails closed when Instagram verification secret is absent", async () => {
+test("Instagram verification is optional and cannot block automatic participation", async () => {
   const app = express();
   app.use(createHealthRouter({
     config: createRadarConfig({ RADAR_AMISTOSOS_ENABLED: "true" }),
@@ -239,10 +239,10 @@ test("readiness fails closed when Instagram verification secret is absent", asyn
     checkDatabase: async () => ({ ok: true })
   }));
   const response = await request(app, "/health/ready");
-  assert.equal(response.status, 503);
-  assert.equal(response.body.ok, false);
+  assert.equal(response.status, 200);
+  assert.equal(response.body.ok, true);
   assert.equal(response.body.database, "ready");
-  assert.equal(response.body.instagram_verification, "not_configured");
+  assert.equal(response.body.instagram_verification, "optional_disabled");
 });
 
 test("readiness fails closed when friendly search is enabled without independent secrets", async () => {
@@ -344,7 +344,8 @@ test("versioned migration contains transactional integrity foundations", () => {
     "011_match_history.sql",
     "012_team_reviews_reputation.sql",
     "013_radar_safety_privacy_moderation.sql",
-    "014_radar_smart_onboarding.sql"
+    "014_radar_smart_onboarding.sql",
+    "015_radar_automatic_participation.sql"
   ]);
   assert.equal(migrations.at(-1), LATEST_REQUIRED_MIGRATION);
 

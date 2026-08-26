@@ -131,7 +131,7 @@ test("print draft on first access creates no Radar profile and profile confirmat
   let providerCalls = 0;
   try {
     const first = await migrate({ pool });
-    assert.equal(first.at(-1), "014_radar_smart_onboarding.sql");
+    assert.equal(first.at(-1), "015_radar_automatic_participation.sql");
     assert.deepEqual(await migrate({ pool }), []);
     const importService = createProfilePrintImportService({
       repository: createProfilePrintImportRepository({ pool }),

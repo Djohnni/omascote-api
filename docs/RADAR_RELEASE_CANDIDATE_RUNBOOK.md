@@ -10,9 +10,9 @@ Este runbook prepara **staging somente**. Ele não autoriza push, deploy, altera
 4. Mantenha todas as flags `false` e execute `npm run radar:staging:preflight`.
 5. Faça backup do banco vazio, execute `npm run db:migrate` duas vezes e confirme 14 migrações na prontidão.
 6. Inicie API e frontend de staging; valide CORS, proxy, health, métricas e retenção antes de autorizar o piloto.
-7. Só depois de autorização separada, ligue a flag mestre e as flags funcionais para as referências opacas da allowlist.
+7. Só depois de autorização separada, ligue a flag mestre e as flags funcionais; contas ativas participam automaticamente.
 
-O preflight deve terminar com `ok: true`, zero flags ligadas, allowlist presente, dez segredos separados, CORS HTTPS exclusivo de staging, proxy definido e metadados de commit/build.
+O preflight deve terminar com `ok: true`, zero flags ligadas, segredos separados, CORS HTTPS exclusivo de staging, proxy definido e metadados de commit/build.
 
 ## Variáveis sem valores
 
@@ -20,7 +20,7 @@ Infraestrutura: `NODE_ENV`, `PORT`, `PUBLIC_API_BASE_URL`, `DATABASE_URL`, `DATA
 
 Autenticação e rede: `JWT_SECRET`, `OMASCOTE_CORS_INCLUDE_PRODUCTION_ORIGINS`, `OMASCOTE_CORS_ORIGINS`, `RADAR_TRUST_PROXY_HOPS`.
 
-Piloto e flags: `RADAR_AMISTOSOS_ENABLED`, `RADAR_SEARCH_ENABLED`, `RADAR_INVITATIONS_ENABLED`, `RADAR_MATCH_CENTER_ENABLED`, `RADAR_MATCH_RESULTS_ENABLED`, `RADAR_MATCH_HISTORY_ENABLED`, `RADAR_REPUTATION_ENABLED`, `RADAR_MODERATION_ENABLED`, `RADAR_PROFILE_PRINT_IMPORT_ENABLED`, `RADAR_PILOT_ACCOUNT_ALLOWLIST`, `RADAR_MODERATION_SLA_HOURS`. A allowlist limita contas; município não limita acesso.
+Participação e flags: `RADAR_AMISTOSOS_ENABLED`, `RADAR_SEARCH_ENABLED`, `RADAR_INVITATIONS_ENABLED`, `RADAR_MATCH_CENTER_ENABLED`, `RADAR_MATCH_RESULTS_ENABLED`, `RADAR_MATCH_HISTORY_ENABLED`, `RADAR_REPUTATION_ENABLED`, `RADAR_MODERATION_ENABLED`, `RADAR_PROFILE_PRINT_IMPORT_ENABLED`, `RADAR_MODERATION_SLA_HOURS`. Contas ativas participam automaticamente; município não limita acesso.
 
 Segredos exclusivos: `RADAR_INSTAGRAM_VERIFICATION_SECRET`, `RADAR_SEARCH_CURSOR_SECRET`, `RADAR_SEARCH_RATE_LIMIT_SECRET`, `RADAR_INVITATIONS_SECURITY_SECRET`, `RADAR_MATCH_RESULTS_SECURITY_SECRET`, `RADAR_MATCH_HISTORY_CURSOR_SECRET`, `RADAR_MATCH_HISTORY_RATE_LIMIT_SECRET`, `RADAR_REPUTATION_SECURITY_SECRET`, `RADAR_MODERATION_SECURITY_SECRET`, `RADAR_METRICS_TOKEN`.
 
@@ -66,10 +66,10 @@ O comando `npm run radar:backup:verify` é a prova local com PGlite e recusa `NO
 
 `npm run radar:load` cria um banco isolado e simula 30 times, disponibilidades, buscas, convites, aceites concorrentes, partidas, placares, paginação, denúncias e moderação. O script recusa produção e qualquer `DATABASE_URL`. Repita a mesma carga no PostgreSQL gerenciado de staging antes de considerar produção.
 
-Validações obrigatórias: sessão expirada; conta fora da allowlist; acesso cruzado; IDs adulterados; cursor adulterado; `Idempotency-Key`; `ETag`/`If-Match`; cliques concorrentes; autoaceite/autoverificação; papel administrativo; CORS; IP atrás do proxy; limite de upload; e busca por credenciais em arquivos versionados.
+Validações obrigatórias: sessão expirada; conta inativa; conta suspensa; acesso cruzado; IDs adulterados; cursor adulterado; `Idempotency-Key`; `ETag`/`If-Match`; cliques concorrentes; autoaceite/autoverificação; papel administrativo; CORS; IP atrás do proxy; limite de upload; e busca por credenciais em arquivos versionados.
 
 ## Ativação e saída
 
-Ative primeiro a flag mestre e depois as flags funcionais, sempre mantendo a allowlist. Acompanhe erros, latência e fila. Para desligar, desative imediatamente `RADAR_AMISTOSOS_ENABLED`; o frontend oculta a entrada e a API falha fechada sem remover dados.
+Ative primeiro a flag mestre e depois as flags funcionais. Acompanhe erros, latência, backfill e fila. Para desligar, desative imediatamente `RADAR_AMISTOSOS_ENABLED`; o frontend oculta a entrada e a API falha fechada sem remover dados.
 
 OpenAI continua fora do caminho crítico. Perfil, elegibilidade, disponibilidade e todo o fluxo do Radar funcionam manualmente sem chave ou chamada externa.

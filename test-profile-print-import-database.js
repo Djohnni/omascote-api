@@ -165,7 +165,8 @@ test("profile print import is owned, draft-only, idempotent, deduplicated and mi
       "011_match_history.sql",
       "012_team_reviews_reputation.sql",
       "013_radar_safety_privacy_moderation.sql",
-      "014_radar_smart_onboarding.sql"
+      "014_radar_smart_onboarding.sql",
+      "015_radar_automatic_participation.sql"
     ]);
     assert.deepEqual(await migrate({ pool }), []);
     await insertTeam(database, owner);

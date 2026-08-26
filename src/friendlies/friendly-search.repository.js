@@ -18,6 +18,9 @@ function rowToCandidate(row) {
     publicId: row.public_id,
     publicSlug: row.public_slug,
     publicName: row.public_name,
+    publicCrestAvailable: row.public_crest_available === true,
+    instagramVerified: row.instagram_verification_status === "verified",
+    joinedAt: row.joined_at,
     cityIbgeCode: row.city_ibge_code,
     cityName: row.city_name,
     stateCode: row.state_code,
@@ -32,7 +35,16 @@ function rowToCandidate(row) {
     endsAt: row.ends_at,
     venuePreference: row.venue_preference,
     availabilityOverlap: row.availability_overlap === true,
-    verifiedMatchCount: Number(row.verified_match_count || 0)
+    verifiedMatchCount: Number(row.verified_match_count || 0),
+    wins: Number(row.wins || 0),
+    draws: Number(row.draws || 0),
+    losses: Number(row.losses || 0),
+    verifiedReviewCount: Number(row.verified_review_count || 0),
+    punctualitySum: Number(row.punctuality_sum || 0),
+    organizationSum: Number(row.organization_sum || 0),
+    communicationSum: Number(row.communication_sum || 0),
+    fairPlaySum: Number(row.fair_play_sum || 0),
+    wouldPlayAgainCount: Number(row.would_play_again_count || 0)
   });
 }
 
@@ -137,6 +149,9 @@ function createFriendlySearchRepository({ pool, config }) {
           candidate.public_id,
           candidate.public_slug,
           candidate.public_name,
+          candidate.public_crest_available,
+          candidate.instagram_verification_status,
+          candidate.created_at AS joined_at,
           candidate.city_ibge_code,
           candidate.city_name,
           candidate.state_code,
@@ -162,15 +177,18 @@ function createFriendlySearchRepository({ pool, config }) {
               AND own_availability.starts_at < availability.ends_at
               AND own_availability.ends_at > availability.starts_at
           ) AS availability_overlap,
-          (
-            SELECT count(*)::integer
-            FROM friendly_matches game
-            WHERE game.occurrence_state = 'played'
-              AND game.result_state = 'verified'
-              AND (game.team_a_id = candidate.id OR game.team_b_id = candidate.id)
-          ) AS verified_match_count
+          COALESCE(statistics.matches_played, 0) AS verified_match_count,
+          COALESCE(statistics.wins, 0) AS wins,
+          COALESCE(statistics.draws, 0) AS draws,
+          COALESCE(statistics.losses, 0) AS losses,
+          COALESCE(reputation.verified_review_count, 0) AS verified_review_count,
+          COALESCE(reputation.punctuality_sum, 0) AS punctuality_sum,
+          COALESCE(reputation.organization_sum, 0) AS organization_sum,
+          COALESCE(reputation.communication_sum, 0) AS communication_sum,
+          COALESCE(reputation.fair_play_sum, 0) AS fair_play_sum,
+          COALESCE(reputation.would_play_again_count, 0) AS would_play_again_count
         FROM radar_team_profiles candidate
-        JOIN LATERAL (
+        LEFT JOIN LATERAL (
           SELECT item.modality, item.category,
                  item.starts_at, item.ends_at, item.venue_preference
           FROM friendly_availabilities item
@@ -179,18 +197,6 @@ function createFriendlySearchRepository({ pool, config }) {
             AND item.ends_at > $2
             AND item.created_at <= $3
             AND item.updated_at <= $3
-            AND EXISTS (
-              SELECT 1 FROM unnest(candidate.modalities) AS profile_modality(value)
-              WHERE lower(profile_modality.value) = lower(item.modality)
-            )
-            AND EXISTS (
-              SELECT 1 FROM unnest($10::text[]) AS owner_modality(value)
-              WHERE lower(owner_modality.value) = lower(item.modality)
-            )
-            AND EXISTS (
-              SELECT 1 FROM unnest(candidate.categories) AS profile_category(value)
-              WHERE lower(profile_category.value) = lower(item.category)
-            )
             AND ($4::text IS NULL OR lower(item.modality) = lower($4))
             AND ($5::text IS NULL OR lower(item.category) = lower($5))
             AND ($6::integer IS NULL OR EXTRACT(ISODOW FROM item.starts_at AT TIME ZONE 'America/Sao_Paulo') = $6)
@@ -207,20 +213,33 @@ function createFriendlySearchRepository({ pool, config }) {
           ORDER BY item.starts_at ASC, item.public_id ASC
           LIMIT 1
         ) availability ON true
+        LEFT JOIN radar_team_verified_statistics statistics ON statistics.team_id = candidate.id
+        LEFT JOIN team_reputation_aggregates reputation ON reputation.team_id = candidate.id
         WHERE candidate.id <> $1
           AND candidate.status = 'active'
           AND candidate.suspended_at IS NULL
-          AND candidate.availability_active = true
-          AND candidate.instagram_verification_status = 'verified'
-          AND candidate.instagram_handle IS NOT NULL
-          AND candidate.radar_terms_accepted_at IS NOT NULL
-          AND candidate.city_ibge_code ~ '^[0-9]{7}$'
-          AND candidate.city_name IS NOT NULL
-          AND candidate.state_code ~ '^[A-Z]{2}$'
-          AND cardinality(candidate.modalities) > 0
-          AND cardinality(candidate.categories) > 0
-          AND candidate.public_slug ~ '^[a-z0-9]+(?:-[a-z0-9]+)*$'
+          AND candidate.radar_departed_at IS NULL
+          AND candidate.radar_visible = true
           AND candidate.updated_at <= $3
+          AND (
+            $4::text IS NULL
+            OR EXISTS (
+              SELECT 1 FROM unnest(candidate.modalities) profile_modality(value)
+              WHERE lower(profile_modality.value) = lower($4)
+            )
+            OR availability.modality IS NOT NULL
+          )
+          AND (
+            $5::text IS NULL
+            OR EXISTS (
+              SELECT 1 FROM unnest(candidate.categories) profile_category(value)
+              WHERE lower(profile_category.value) = lower($5)
+            )
+            OR availability.category IS NOT NULL
+          )
+          AND ($6::integer IS NULL OR availability.starts_at IS NOT NULL)
+          AND ($7::text IS NULL OR availability.starts_at IS NOT NULL)
+          AND ($8::text IS NULL OR availability.venue_preference IS NOT NULL)
           AND NOT EXISTS (
             SELECT 1
             FROM team_blocks block
@@ -238,8 +257,7 @@ function createFriendlySearchRepository({ pool, config }) {
         filters.dayNumber,
         filters.period,
         filters.venuePreference,
-        config.searchCandidateMaximum,
-        origin.modalities
+        config.searchCandidateMaximum
       ]);
       await client.query("COMMIT");
       transactionOpen = false;

@@ -69,7 +69,7 @@ test("server process fails closed before startup when JWT_SECRET is absent", () 
   assert.doesNotMatch(`${result.stderr}${result.stdout}`, /TROQUE_ISSO_AGORA.*rodando/);
 });
 
-test("staging preflight validates managed PostgreSQL, separate secrets, allowlist and disabled flags", () => {
+test("staging preflight validates managed PostgreSQL, separate secrets and disabled flags", () => {
   const good = validateStagingEnvironment(goodStagingEnvironment());
   assert.equal(good.ok, true, good.errors.join("; "));
   assert.equal(good.summary.separated_secrets, PURPOSE_SECRETS.length);
@@ -82,7 +82,7 @@ test("staging preflight validates managed PostgreSQL, separate secrets, allowlis
   const result = validateStagingEnvironment(bad);
   assert.equal(result.ok, false);
   assert.ok(result.errors.some(item => item.includes("must differ")));
-  assert.ok(result.errors.some(item => item.includes("ALLOWLIST")));
+  assert.equal(result.errors.some(item => item.includes("ALLOWLIST")), false);
   assert.ok(result.errors.some(item => item.includes("must remain false")));
 });
 
@@ -93,16 +93,12 @@ test("staging CORS can exclude production and rejects path or script origins", (
   }), ["https://stage.example"]);
 });
 
-test("enabled pilot fails closed when the opaque account allowlist is absent", () => {
+test("active accounts are not gated by the retired pilot allowlist", () => {
   const resolver = createPilotGatedRadarIdentityResolver({
     config: createRadarConfig({ RADAR_AMISTOSOS_ENABLED: "true" }),
     resolveIdentity: user => user
   });
-  assert.throws(() => resolver({ accountId: "account-alpha" }), error => {
-    assert.equal(error.code, "RADAR_PILOT_CONFIGURATION_UNAVAILABLE");
-    assert.equal(error.status, 503);
-    return true;
-  });
+  assert.equal(resolver({ accountId: "account-alpha" }).accountId, "account-alpha");
 });
 
 test("request logs and metrics are structured, token-protected and redact private fields", async () => {

@@ -6,7 +6,7 @@ Todas as flags permanecem desligadas quando ausentes.
 
 - `RADAR_AMISTOSOS_ENABLED`: flag mestre.
 - `RADAR_SEARCH_ENABLED`, `RADAR_INVITATIONS_ENABLED`, `RADAR_MATCH_CENTER_ENABLED`, `RADAR_MATCH_RESULTS_ENABLED`, `RADAR_MATCH_HISTORY_ENABLED`, `RADAR_REPUTATION_ENABLED`, `RADAR_MODERATION_ENABLED`: liberações graduais.
-- `RADAR_PILOT_ACCOUNT_ALLOWLIST`: referências opacas de contas, separadas por vírgula. Com a flag mestre ligada, lista vazia faz a API falhar fechada; qualquer conta fora da lista é negada.
+- `RADAR_PILOT_ACCOUNT_ALLOWLIST`: configuração legada retirada da autorização; deve permanecer ausente.
 - `RADAR_MODERATION_SLA_HOURS` e `RADAR_PUBLIC_RATING_MIN_MATCHES`: política configurável do piloto. O piloto é limitado por conta, nunca por cidade.
 - `DATABASE_URL`: PostgreSQL de staging/produção.
 - `DATABASE_SSL` e `DATABASE_SSL_REJECT_UNAUTHORIZED`: política TLS do banco.
@@ -43,7 +43,7 @@ Execute `npm run db:migrate` antes de ligar qualquer flag. A prontidão exige a 
 ## Ativação
 
 1. Aplicar as migrações com as flags desligadas.
-2. Configurar segredos e allowlist do piloto.
+2. Configurar os segredos independentes; contas ativas participam automaticamente.
 3. Validar `/health/ready`.
 4. Ligar a flag mestre.
 5. Ligar funções gradualmente, acompanhando erros, fila e limites.
@@ -78,7 +78,7 @@ Alertas iniciais recomendados: readiness indisponível por 2 minutos; erro 5xx a
 
 Use valores locais não reutilizados e mantenha todos fora do Git.
 
-1. Configure `JWT_SECRET`, `RADAR_LOCAL_TEST_PASSWORD`, `OMASCOTE_DATA_DIR`, `RADAR_DATABASE_EMBEDDED_PATH`, as flags, a allowlist e os segredos independentes.
+1. Configure `JWT_SECRET`, `RADAR_LOCAL_TEST_PASSWORD`, `OMASCOTE_DATA_DIR`, `RADAR_DATABASE_EMBEDDED_PATH`, as flags e os segredos independentes.
 2. Execute `npm run radar:local:setup` para migrar e criar as contas locais.
 3. Inicie a API e valide `/health/ready`.
 4. Configure `RADAR_LOCAL_API_BASE` e execute `npm run radar:local:e2e`.

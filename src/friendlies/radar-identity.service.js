@@ -69,12 +69,16 @@ function buildRadarEligibility({ team, legacyProfile, config }) {
   const instagramVerified = team?.instagramVerificationStatus === "verified";
   const termsAccepted = Boolean(team?.termsAcceptedAt);
   const suspended = team?.status === "suspended" || Boolean(team?.suspendedAt);
+  const departed = Boolean(team?.departedAt);
+  const visible = team?.radarVisible !== false;
   if (!instagramVerified) missing.push("instagram_not_verified");
   if (!termsAccepted) missing.push("terms_not_accepted");
   if (suspended) missing.push("radar_profile_suspended");
+  if (departed) missing.push("radar_profile_departed");
+  if (!visible) missing.push("radar_profile_hidden");
 
-  const eligible = profileComplete && instagramVerified && termsAccepted && !suspended;
-  const discoverable = eligible && team?.availabilityActive === true && team?.status === "active";
+  const eligible = Boolean(team) && !suspended && !departed;
+  const discoverable = eligible && visible;
 
   return Object.freeze({
     profile_complete: profileComplete,
@@ -88,11 +92,8 @@ function buildRadarEligibility({ team, legacyProfile, config }) {
 
 function deriveStatus(team, eligibility) {
   if (team?.status === "suspended" || team?.suspendedAt) return "suspended";
-  if (!eligibility.profile_complete) return "draft";
-  if (!eligibility.instagram_verified || !eligibility.terms_accepted) {
-    return "pending_verification";
-  }
-  return team.availabilityActive === true ? "active" : "paused";
+  if (team?.departedAt || team?.radarVisible === false) return "paused";
+  return "active";
 }
 
 function ownerProfile(team) {
@@ -109,10 +110,12 @@ function ownerProfile(team) {
     travel_radius_km: team.travelRadiusKm,
     venue_preference: team.venuePreference,
     availability_active: team.availabilityActive === true,
+    radar_visible: team.radarVisible !== false,
     terms_accepted: Boolean(team.termsAcceptedAt),
     whatsapp_configured: Boolean(team.whatsappCiphertext),
     whatsapp_visible: team.whatsappVisible === true,
     public_name: team.publicName,
+    joined_at: team.createdAt,
     version: team.version,
     updated_at: team.updatedAt
   });
@@ -128,7 +131,6 @@ function legacySummary(legacyProfile) {
 }
 
 function buildOwnerResponse({ team, identity, config, replayed = false }) {
-  const onboardingRequired = !team;
   return Object.freeze({
     profile: ownerProfile(team),
     legacy_profile: legacySummary(identity.legacyProfile),
@@ -138,8 +140,8 @@ function buildOwnerResponse({ team, identity, config, replayed = false }) {
       config
     }),
     onboarding: Object.freeze({
-      required: onboardingRequired,
-      next_action: onboardingRequired ? "create_profile" : null
+      required: false,
+      next_action: null
     }),
     replayed
   });
@@ -201,7 +203,10 @@ function applyInput(team, input, now, config) {
       : team.termsAcceptedAt,
     whatsappCiphertext: whatsapp ? whatsapp.ciphertext : team.whatsappCiphertext,
     whatsappKeyVersion: whatsapp ? whatsapp.keyVersion : team.whatsappKeyVersion,
-    whatsappVisible: Boolean(resultingCiphertext) && requestedWhatsappVisible
+    whatsappVisible: Boolean(resultingCiphertext) && requestedWhatsappVisible,
+    radarVisible: Object.hasOwn(input, "radarVisible")
+      ? input.radarVisible
+      : team.radarVisible !== false
   };
   return prospective;
 }
@@ -212,7 +217,9 @@ function createRadarIdentityService({ repository, config, now = () => new Date()
   }
 
   async function getProfile(identity) {
-    const team = await repository.findOwnedByIdentity(identity);
+    const team = typeof repository.reconcileOwnedProfile === "function"
+      ? (await repository.reconcileOwnedProfile({ identity })).team
+      : await repository.findOwnedByIdentity(identity);
     return buildOwnerResponse({ team, identity, config });
   }
 
@@ -245,17 +252,6 @@ function createRadarIdentityService({ repository, config, now = () => new Date()
           legacyProfile: identity.legacyProfile,
           config
         });
-
-        if (input.availabilityActive === true && !eligibility.eligible) {
-          throw new RadarIdentityError(
-            "RADAR_PROFILE_NOT_ELIGIBLE",
-            409,
-            "Complete e verifique o perfil antes de ativar a disponibilidade.",
-            { missing: eligibility.missing }
-          );
-        }
-
-        if (!eligibility.eligible) prospective.availabilityActive = false;
 
         prospective.status = deriveStatus(prospective, eligibility);
         return prospective;

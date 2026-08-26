@@ -9,7 +9,6 @@ const RADAR_FLAGS = Object.freeze([
   "RADAR_REPUTATION_ENABLED", "RADAR_MODERATION_ENABLED", "RADAR_PROFILE_PRINT_IMPORT_ENABLED"
 ]);
 const PURPOSE_SECRETS = Object.freeze([
-  "RADAR_INSTAGRAM_VERIFICATION_SECRET",
   "RADAR_SEARCH_CURSOR_SECRET",
   "RADAR_SEARCH_RATE_LIMIT_SECRET",
   "RADAR_INVITATIONS_SECURITY_SECRET",
@@ -61,10 +60,6 @@ function validateStagingEnvironment(env = process.env) {
     errors.push("RADAR_TRUST_PROXY_HOPS must match the staging proxy chain (1-5)");
   }
 
-  const allowlist = String(env.RADAR_PILOT_ACCOUNT_ALLOWLIST || "")
-    .split(",").map(item => item.trim()).filter(Boolean);
-  if (!allowlist.length) errors.push("RADAR_PILOT_ACCOUNT_ALLOWLIST is required");
-
   for (const flag of RADAR_FLAGS) {
     if (truthy(env[flag])) errors.push(`${flag} must remain false before staging authorization`);
   }
@@ -93,7 +88,7 @@ function validateStagingEnvironment(env = process.env) {
       environment,
       cors_origin_count: origins.length,
       proxy_hops: Number.isInteger(proxyHops) ? proxyHops : null,
-      pilot_accounts: allowlist.length,
+      participation: "automatic",
       separated_secrets: values.size,
       flags_enabled: RADAR_FLAGS.filter(name => truthy(env[name])).length,
       openai_enabled: truthy(env.RADAR_PROFILE_PRINT_IMPORT_ENABLED)

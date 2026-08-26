@@ -11,6 +11,7 @@ const ALLOWED_FIELDS = new Set([
   "travel_radius_km",
   "venue_preference",
   "availability_active",
+  "radar_visible",
   "accept_terms",
   "whatsapp",
   "whatsapp_visible"
@@ -141,6 +142,10 @@ function validateRadarProfileInput(input) {
   if (Object.hasOwn(input, "availability_active")) {
     if (typeof input.availability_active !== "boolean") invalid("availability_active", "use booleano");
     output.availabilityActive = input.availability_active;
+  }
+  if (Object.hasOwn(input, "radar_visible")) {
+    if (typeof input.radar_visible !== "boolean") invalid("radar_visible", "use booleano");
+    output.radarVisible = input.radar_visible;
   }
   if (Object.hasOwn(input, "accept_terms")) {
     if (input.accept_terms !== true) invalid("accept_terms", "o aceite deve ser explicito");

@@ -1,5 +1,6 @@
 "use strict";
 
+const crypto = require("node:crypto");
 const { RadarIdentityError } = require("./radar-identity.errors");
 const {
   assertRadarTeamOwnedByIdentity,
@@ -28,17 +29,58 @@ const MUTABLE_COLUMNS = Object.freeze({
   publicCrestAvailable: "public_crest_available",
   whatsappCiphertext: "whatsapp_ciphertext",
   whatsappKeyVersion: "whatsapp_key_version",
-  whatsappVisible: "whatsapp_visible"
+  whatsappVisible: "whatsapp_visible",
+  radarVisible: "radar_visible"
 });
 
-function publicSnapshot(legacyProfile) {
+function compactText(value) {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function identifierLike(value, identity = {}) {
+  const raw = compactText(value);
+  if (!raw) return true;
+  const folded = raw.toLocaleLowerCase("pt-BR");
+  const subject = compactText(identity.authSubject).toLocaleLowerCase("pt-BR");
+  if (subject && folded === subject) return true;
+  const digits = raw.replace(/\D/g, "");
+  return digits.length >= 8 && digits === raw.replace(/[\s()+.-]/g, "");
+}
+
+function safePublicName(legacyProfile, identity = {}) {
   const name = String(legacyProfile?.nome_time || "").replace(/\s+/g, " ").trim();
+  if (name.length >= 2 && name.length <= 80 && !identifierLike(name, identity)) return name;
+  return "Time do Meu Clube FC";
+}
+
+function safePublicSlug(legacyProfile, identity = {}) {
+  const candidate = compactText(legacyProfile?.slug).toLowerCase();
+  const subjectSlug = compactText(identity.authSubject)
+    .toLocaleLowerCase("pt-BR")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  if (
+    /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(candidate) &&
+    candidate.length <= 96 &&
+    candidate !== subjectSlug &&
+    !identifierLike(candidate.replace(/-/g, ""), identity)
+  ) return candidate;
+  const opaque = crypto.createHash("sha256")
+    .update(`omascote-radar-public:${identity.accountId || identity.profileId || "team"}`)
+    .digest("hex")
+    .slice(0, 16);
+  return `time-${opaque}`;
+}
+
+function publicSnapshot(legacyProfile, identity = {}) {
   const hasCrest = Boolean(
     String(legacyProfile?.escudo_url || "").trim() ||
     String(legacyProfile?.escudo_path || "").trim()
   );
   return Object.freeze({
-    publicName: name.length >= 2 && name.length <= 80 ? name : null,
+    publicName: safePublicName(legacyProfile, identity),
     publicProfileEnabled: legacyProfile?.publico === true,
     publicCrestAvailable: hasCrest
   });
@@ -74,6 +116,7 @@ function rowToTeam(row) {
     whatsappCiphertext: row.whatsapp_ciphertext,
     whatsappKeyVersion: row.whatsapp_key_version,
     whatsappVisible: row.whatsapp_visible === true,
+    radarVisible: row.radar_visible !== false,
     suspendedAt: row.suspended_at,
     departedAt: row.radar_departed_at,
     version: Number(row.version || 1),
@@ -129,6 +172,105 @@ function createRadarIdentityRepository({ pool }) {
     return team;
   }
 
+  async function reconcileOwnedProfile({ identity, requestId = null, allowAccountRebind = false } = {}) {
+    const client = await pool.connect();
+    let transactionOpen = false;
+    try {
+      await client.query("BEGIN");
+      transactionOpen = true;
+      await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
+        `radar-profile:${identity.profileId}`
+      ]);
+      const snapshot = publicSnapshot(identity.legacyProfile, identity);
+      const slug = safePublicSlug(identity.legacyProfile, identity);
+      const inserted = await client.query(`
+        INSERT INTO radar_team_profiles(
+          legacy_profile_id, account_reference, public_slug, status,
+          public_name, public_profile_enabled, public_crest_available, radar_visible
+        ) VALUES ($1, $2, $3, 'active', $4, $5, $6, true)
+        ON CONFLICT (legacy_profile_id) DO NOTHING
+        RETURNING *
+      `, [
+        identity.profileId,
+        identity.accountId,
+        slug,
+        snapshot.publicName,
+        snapshot.publicProfileEnabled,
+        snapshot.publicCrestAvailable
+      ]);
+      const created = inserted.rowCount === 1;
+      const found = created ? inserted : await client.query(
+        "SELECT * FROM radar_team_profiles WHERE legacy_profile_id = $1 FOR UPDATE",
+        [identity.profileId]
+      );
+      if (found.rowCount !== 1) {
+        throw new RadarIdentityError("RADAR_PROFILE_NOT_FOUND", 409, "Perfil do Radar indisponivel.");
+      }
+      let team = rowToTeam(found.rows[0]);
+      if (String(team.legacyProfileId || "") !== String(identity.profileId || "")) {
+        throw new RadarIdentityError("RADAR_PROFILE_FORBIDDEN", 403, "Acesso negado ao perfil do Radar.");
+      }
+      if (
+        !created && !allowAccountRebind &&
+        String(team.accountReference || "") !== String(identity.accountId || "")
+      ) {
+        throw new RadarIdentityError("RADAR_PROFILE_FORBIDDEN", 403, "Acesso negado ao perfil do Radar.");
+      }
+      const proposed = {
+        accountReference: identity.accountId,
+        publicSlug: slug,
+        publicName: snapshot.publicName,
+        publicProfileEnabled: snapshot.publicProfileEnabled,
+        publicCrestAvailable: snapshot.publicCrestAvailable
+      };
+      if (!team.departedAt && !team.suspendedAt && team.status !== "suspended") {
+        proposed.status = "active";
+      }
+      const values = changedValues(team, proposed);
+      const changedFields = Object.keys(values);
+      if (!created && changedFields.length) {
+        const parameters = [];
+        const assignments = changedFields.map(key => {
+          parameters.push(values[key]);
+          return `${MUTABLE_COLUMNS[key]} = $${parameters.length}`;
+        });
+        parameters.push(team.id);
+        const updated = await client.query(`
+          UPDATE radar_team_profiles
+          SET ${assignments.join(", ")}, version = version + 1, updated_at = now()
+          WHERE id = $${parameters.length}
+          RETURNING *
+        `, parameters);
+        team = rowToTeam(updated.rows[0]);
+      }
+      assertRadarTeamOwnedByIdentity(team, identity);
+      if (created || changedFields.length) {
+        await client.query(`
+          INSERT INTO match_audit_events(
+            actor_team_id, actor_reference, event_type, entity_version, payload, request_id
+          ) VALUES ($1, $2, $3, $4, $5::jsonb, $6)
+        `, [
+          team.id,
+          identity.accountId,
+          created ? "radar_profile.automatic_joined" : "radar_profile.automatic_reconciled",
+          team.version,
+          JSON.stringify({ changed_fields: changedFields, participation: "automatic" }),
+          requestId
+        ]);
+      }
+      await client.query("COMMIT");
+      transactionOpen = false;
+      return Object.freeze({ team, created, changed: changedFields.length > 0 });
+    } catch (error) {
+      if (transactionOpen) {
+        try { await client.query("ROLLBACK"); } catch {}
+      }
+      throw normalizeDatabaseError(error);
+    } finally {
+      client.release();
+    }
+  }
+
   async function mutateOwnedProfile({
     identity,
     idempotencyKey,
@@ -143,19 +285,21 @@ function createRadarIdentityRepository({ pool }) {
     try {
       await client.query("BEGIN");
       transactionOpen = true;
-      const snapshot = publicSnapshot(identity.legacyProfile);
+      const snapshot = publicSnapshot(identity.legacyProfile, identity);
+      const safeSlug = safePublicSlug(identity.legacyProfile, identity);
 
       const inserted = await client.query(`
         INSERT INTO radar_team_profiles(
           legacy_profile_id, account_reference, public_slug,
-          public_name, public_profile_enabled, public_crest_available
-        ) VALUES ($1, $2, $3, $4, $5, $6)
+          public_name, public_profile_enabled, public_crest_available,
+          status, radar_visible
+        ) VALUES ($1, $2, $3, $4, $5, $6, 'active', true)
         ON CONFLICT (legacy_profile_id) DO NOTHING
         RETURNING *
       `, [
         identity.profileId,
         identity.accountId,
-        String(identity.legacyProfile?.slug || "").trim() || null,
+        safeSlug,
         snapshot.publicName,
         snapshot.publicProfileEnabled,
         snapshot.publicCrestAvailable
@@ -225,7 +369,7 @@ function createRadarIdentityRepository({ pool }) {
       const values = changedValues(team, {
         ...proposed,
         accountReference: identity.accountId,
-        publicSlug: team.publicSlug || String(identity.legacyProfile?.slug || "").trim() || null,
+        publicSlug: team.publicSlug || safeSlug,
         ...snapshot
       });
       const changedFields = Object.keys(values);
@@ -322,7 +466,13 @@ function createRadarIdentityRepository({ pool }) {
     }
   }
 
-  return Object.freeze({ findOwnedByIdentity, mutateOwnedProfile });
+  return Object.freeze({ findOwnedByIdentity, reconcileOwnedProfile, mutateOwnedProfile });
 }
 
-module.exports = { createRadarIdentityRepository, rowToTeam, publicSnapshot };
+module.exports = {
+  createRadarIdentityRepository,
+  rowToTeam,
+  publicSnapshot,
+  safePublicName,
+  safePublicSlug
+};
