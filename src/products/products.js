@@ -19,8 +19,8 @@ const PRODUCTS = {
 
   contratacao: {
     id: "contratacao",
-    name: "Contratação",
-    price: 7.00,
+    name: "Contratação / Renovação",
+    price: 7.80,
     category: "time",
     flyerTipos: ["zz1fm"],
     aliases: ["contratacao"]

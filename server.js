@@ -818,7 +818,7 @@ function getCustoPedido(categoria, cliente) {
 
   if (categoria === "resultado") return 8.00;
   if (categoria === "escalacao") return 8.00;
-  if (categoria === "contratacao") return 7.00;
+  if (categoria === "contratacao") return 7.80;
   if (categoria === "proximo_jogo") return 7.00;
   if (categoria === "patrocinador") return 8.00;
   if (categoria === "escudo3d") return 4.00;
@@ -831,6 +831,77 @@ function getCustoPedido(categoria, cliente) {
   }
 
   return 0;
+}
+
+const CONTRATACAO_CAMISETA_ADICIONAL = 2.00;
+const CONTRATACAO_SAMPLE_IDS = new Set([
+  "contratacao_modelo_01_v1",
+  "contratacao_modelo_02_v1"
+]);
+const CONTRATACAO_STYLE_MODES = new Set(["catalog", "custom", "auto"]);
+const CONTRATACAO_ANNOUNCEMENT_TYPES = new Set(["contratado", "renovado"]);
+
+function valorBooleanoPedido(value) {
+  if (value === true || value === 1) return true;
+  return ["1", "true", "sim", "yes", "on"].includes(String(value || "").trim().toLowerCase());
+}
+
+function getContratacaoStructuredFields(source = {}) {
+  const direct = source?.new_model?.fields;
+  if (direct && typeof direct === "object" && !Array.isArray(direct)) return direct;
+
+  const raw = source?.fields_json || source?.fields;
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) return raw;
+  if (typeof raw === "string") {
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
+    } catch {}
+  }
+
+  return source && typeof source === "object" && !Array.isArray(source) ? source : {};
+}
+
+function contratacaoTemCamiseta(source = {}) {
+  const fields = getContratacaoStructuredFields(source);
+  return valorBooleanoPedido(fields.jersey_enabled ?? source?.jersey_enabled);
+}
+
+function getCustoPedidoComAdicionais(categoria, cliente, source = {}) {
+  const base = getCustoPedido(categoria, cliente);
+  const adicional = categoria === "contratacao" && contratacaoTemCamiseta(source)
+    ? CONTRATACAO_CAMISETA_ADICIONAL
+    : 0;
+  return normalizarValorFinanceiro(base + adicional);
+}
+
+function validarContratoContratacao({ fields = {}, files = {}, requireVersion = false } = {}) {
+  const structured = getContratacaoStructuredFields(fields);
+  const version = Number(structured.contratacao_version || 0);
+  if (!requireVersion && version < 3) return { ok:true, errors:[] };
+
+  const errors = [];
+  const hasFile = key => Array.isArray(files?.[key]) && files[key].length > 0;
+  const announcementType = String(structured.announcement_type || "").trim().toLowerCase();
+  const playerName = String(structured.player_name || "").trim();
+  const playerPosition = String(structured.player_position || "").trim();
+  const styleMode = String(structured.style_mode || "").trim().toLowerCase();
+  const sampleId = String(structured.sample_id || "").trim().toLowerCase();
+  const jerseyEnabled = contratacaoTemCamiseta(structured);
+
+  if (!CONTRATACAO_ANNOUNCEMENT_TYPES.has(announcementType)) {
+    errors.push("Escolha Contratado ou Renovado.");
+  }
+  if (!playerName) errors.push("Informe o nome do jogador.");
+  if (!playerPosition) errors.push("Informe a posicao do jogador.");
+  if (!CONTRATACAO_STYLE_MODES.has(styleMode)) errors.push("Escolha uma amostra, envie uma referencia ou use a criacao automatica.");
+  if (styleMode === "catalog" && !CONTRATACAO_SAMPLE_IDS.has(sampleId)) errors.push("Amostra de contratacao invalida.");
+  if (styleMode === "custom" && !hasFile("referencia")) errors.push("Envie a imagem de referencia escolhida.");
+  if (!hasFile("escudo1")) errors.push("Envie o escudo do time.");
+  if (!hasFile("escudo2")) errors.push("Envie a foto do jogador.");
+  if (jerseyEnabled && !hasFile("camiseta")) errors.push("Envie a camiseta do time para aplicar no jogador.");
+
+  return { ok:errors.length === 0, errors:[...new Set(errors)] };
 }
 
 const MODALIDADE_CRIACAO_COM_SUPORTE = "com_suporte";
@@ -2589,13 +2660,14 @@ function beginFotoJogosAnalysisDedupe(key, imageHash, promise) {
 
 const FOTO_JOGOS_BATCH_MAX_ITEMS = 3;
 const FOTO_JOGOS_BATCH_DEDUPE_TTL_MS = 2 * 60 * 1000;
-const FOTO_JOGOS_BATCH_ALLOWED_FILE_KEYS = new Set(["escudo1", "escudo2", "mascote", "patrocinadores"]);
-const FOTO_JOGOS_BATCH_FILE_FIELD_RE = /^item_(\d+)_(escudo1|escudo2|mascote|patrocinadores)$/;
+const FOTO_JOGOS_BATCH_ALLOWED_FILE_KEYS = new Set(["escudo1", "escudo2", "mascote", "patrocinadores", "referencia", "camiseta"]);
+const FOTO_JOGOS_BATCH_FILE_FIELD_RE = /^item_(\d+)_(escudo1|escudo2|mascote|patrocinadores|referencia|camiseta)$/;
 const FOTO_JOGOS_BATCH_MAX_FILES = FOTO_JOGOS_BATCH_MAX_ITEMS * FOTO_JOGOS_BATCH_ALLOWED_FILE_KEYS.size;
 const FOTO_JOGOS_BATCH_PRODUCTS = {
   proximo_jogo: { flyerTipo: "zz1ft", label: "Pr\u00f3ximo Jogo" },
   resultado: { flyerTipo: "", label: "Resultado" },
   escalacao: { flyerTipo: "zz1fs", label: "Escala\u00e7\u00e3o" },
+  contratacao: { flyerTipo: "zz1fm", label: "Contrata\u00e7\u00e3o / Renova\u00e7\u00e3o" },
   escudo3d: { flyerTipo: "escudo3d", label: "Escudo 3D" },
   jogador_escudo: { flyerTipo: "jog_escudo", label: "Jogador + Escudo" }
 };
@@ -2620,6 +2692,13 @@ const LEGACY_GENERATION_CONTRACTS = Object.freeze({
     flyerTipo: "zz1fs",
     promptFile: "prompt_escalacao.txt",
     promptSha256: "b5064e67df90748f6538a106a5757e274da250c1183221747a86d5805fd0603d"
+  },
+  contratacao: {
+    route: "/pedidos",
+    internalType: "contratacao",
+    flyerTipo: "zz1fm",
+    promptFile: "prompt_contratacao.txt",
+    promptSha256: "03bbbfc17ec278d653b04ca43734dd47e8944d352b718fec21aa315be7d82dd7"
   },
   escudo3d: {
     route: "/pedidos",
@@ -2691,7 +2770,7 @@ function getFotoJogosBatchMappedFiles(fileMap, item) {
     : {};
   const output = {};
 
-  ["escudo1", "escudo2", "mascote", "patrocinadores"].forEach(legacyName => {
+  ["escudo1", "escudo2", "mascote", "patrocinadores", "referencia", "camiseta"].forEach(legacyName => {
     const mapped = String(fileFields[legacyName] || "").trim();
     if (!mapped) return;
     const files = fileMap.get(mapped) || [];
@@ -2851,6 +2930,11 @@ function validarFotoJogosBatchItem({ productId, body, files }) {
     if (String(body.foto_tipo || "").trim() && String(body.foto_tipo || "").trim() !== "jogador") {
       erros.push("Use uma foto marcada como Foto de jogador.");
     }
+  }
+
+  if (productId === "contratacao") {
+    const validacaoContratacao = validarContratoContratacao({ fields:body, files, requireVersion:true });
+    erros.push(...validacaoContratacao.errors);
   }
 
   if (!orderService.hasRequiredOrderFields(orderService.normalizeOrderBody(body))) {
@@ -3046,6 +3130,16 @@ async function processarFotoJogosCriarArtesBatch(req, batchId, items) {
         product_id: item.productId,
         client_request_id: item.clientRequestId,
         error: "Modalidade de cria\u00e7\u00e3o inv\u00e1lida."
+      });
+      continue;
+    }
+
+    if (item.productId === "contratacao" && item.modalidadeCriacao !== MODALIDADE_CRIACAO_COM_SUPORTE) {
+      falhas.push({
+        index: item.index,
+        product_id: item.productId,
+        client_request_id: item.clientRequestId,
+        error: "Contratacao / Renovacao usa o valor integral com suporte incluido."
       });
       continue;
     }
@@ -12111,6 +12205,20 @@ function criarPedidoHandler(categoria) {
     const { fields, legacyFields, resolution: scenarioResolution } = scenarioContext;
     const scenarioLogMeta = getScenarioLogMeta(scenarioResolution);
     const files = req.files || {};
+
+    if (categoria === "contratacao") {
+      const validacaoContratacao = validarContratoContratacao({ fields, files });
+      if (!validacaoContratacao.ok) {
+        limparUploadsTemporarios(files);
+        return res.status(400).json({
+          ok:false,
+          code:"CONTRATACAO_INVALIDA",
+          error:validacaoContratacao.errors[0],
+          detalhes:validacaoContratacao.errors
+        });
+      }
+    }
+
     let dedupeMeta;
 
     try {
@@ -12242,7 +12350,7 @@ function criarPedidoHandler(categoria) {
     const modalidadeCriacao = req.fotoJogosBatchItem === true
       ? normalizarModalidadeCriacao(req.body?.modalidade_criacao)
       : MODALIDADE_CRIACAO_COM_SUPORTE;
-    const custoPedidoComSuporte = getCustoPedido(categoria, c);
+    const custoPedidoComSuporte = getCustoPedidoComAdicionais(categoria, c, fields);
     const custoPedido = calcularCustoPedidoPorModalidade(custoPedidoComSuporte, modalidadeCriacao);
     const valorBaseParaCupom = brindeEscudo3dApp ? 0 : custoPedido;
     const cupomCodigo = normalizarCupomCodigo(req.body?.cupom_codigo);
@@ -12395,6 +12503,12 @@ function criarPedidoHandler(categoria) {
       ? normalizarFotoJogosBatchId(req.body?.batch_id || "")
       : "";
     draft.pedido.suporte_personalizado_incluido = modalidadeCriacao !== MODALIDADE_CRIACAO_ECONOMICA;
+    if (categoria === "contratacao") {
+      draft.pedido.camiseta_time_adicional = contratacaoTemCamiseta(fields);
+      draft.pedido.valor_adicional_camiseta = draft.pedido.camiseta_time_adicional
+        ? CONTRATACAO_CAMISETA_ADICIONAL
+        : 0;
+    }
     draft.pedido.valor_com_suporte = normalizarValorFinanceiro(custoPedidoComSuporte);
     draft.pedido.valor_original = cupomAplicado
       ? normalizarValorFinanceiro(resultadoCupom.valorOriginal)
@@ -12558,6 +12672,8 @@ function criarPedidoHandler(categoria) {
       valor_desconto: cupomAplicado ? resultadoCupom.desconto : 0,
       valor_final: cupomAplicado ? resultadoCupom.valorFinal : Number(custoEfetivoPedido || 0),
       modalidade_criacao: modalidadeCriacao,
+      camiseta_time_adicional: draft.pedido.camiseta_time_adicional === true,
+      valor_adicional_camiseta: Number(draft.pedido.valor_adicional_camiseta || 0),
       requer_pix_antes_criacao: pagamentoAntecipadoObrigatorio,
       batch_id: draft.pedido.batch_id || "",
       assistente_lote: draft.pedido.assistente_lote === true,
@@ -12613,7 +12729,7 @@ app.post("/cupons/preco", (req, res) => {
     const brindeEscudo3dApp = cliente
       ? clienteElegivelBrindeEscudo3dApp({ ...req, body }, cliente, whatsapp, categoria)
       : false;
-    const custoPedido = getCustoPedido(categoria, cliente);
+    const custoPedido = getCustoPedidoComAdicionais(categoria, cliente, body);
     const valorOriginal = brindeEscudo3dApp ? 0 : custoPedido;
     const cupomCodigo = normalizarCupomCodigo(body.cupom_codigo);
     let resultadoCupom = validarCupomPedido({
@@ -12723,7 +12839,9 @@ app.post(
     { name: "escudo1", maxCount: 1 },
     { name: "escudo2", maxCount: 1 },
     { name: "mascote", maxCount: 4 },
-    { name: "patrocinadores", maxCount: 20 }
+    { name: "patrocinadores", maxCount: 20 },
+    { name: "referencia", maxCount: 1 },
+    { name: "camiseta", maxCount: 1 }
   ])),
   (req, res) => {
     const flyer_tipo = (req.body?.flyer_tipo || "").toLowerCase();
@@ -14640,7 +14758,10 @@ module.exports = {
     beginFotoJogosAnalysisDedupe,
     cleanupFotoJogosAnalysisDedupe,
     normalizarModalidadeCriacao,
-    calcularCustoPedidoPorModalidade
+    calcularCustoPedidoPorModalidade,
+    getCustoPedidoComAdicionais,
+    contratacaoTemCamiseta,
+    validarContratoContratacao
   },
   __resultadoScenarioTest: {
     registry: resultScenarioRegistry,

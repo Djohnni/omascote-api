@@ -116,7 +116,10 @@ const PRODUCT_AUDIT_RULES = {
   contratacao: {
     fields: [
       { name: "titulo", ok: fields => hasText(fields.rodada) || hasText(cleanText(fields, "title")) },
-      { name: "nome_jogador", ok: fields => hasText(fields.data) || hasText(cleanText(fields, "player_name")) }
+      { name: "nome_jogador", ok: fields => hasText(fields.data) || hasText(cleanText(fields, "player_name")) },
+      { name: "posicao_jogador", ok: fields => hasText(fields.hora) || hasText(cleanText(fields, "player_position")) },
+      { name: "tipo_anuncio", ok: fields => hasText(cleanText(fields, "announcement_type")) },
+      { name: "modo_visual", ok: fields => hasText(cleanText(fields, "style_mode")) }
     ],
     files: [
       { field: "escudo1", name: "escudo1" },
@@ -125,6 +128,9 @@ const PRODUCT_AUDIT_RULES = {
     futureErrors: [
       "contratacao_sem_titulo",
       "contratacao_sem_nome_jogador",
+      "contratacao_sem_posicao_jogador",
+      "contratacao_sem_tipo_anuncio",
+      "contratacao_sem_modo_visual",
       "contratacao_sem_escudo",
       "contratacao_sem_foto_jogador"
     ]

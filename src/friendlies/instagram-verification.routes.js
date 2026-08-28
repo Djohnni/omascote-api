@@ -121,6 +121,16 @@ function createInstagramVerificationRouter(options) {
   const router = express.Router();
   const parser = express.json({ limit: "8kb", strict: true });
   const service = createService(options);
+  router.use((req, res, next) => {
+    const handled = (
+      (req.method === "GET" && req.path === "/verificacao") ||
+      (req.method === "POST" && [
+        "/verificacoes/instagram",
+        "/verificacoes/instagram/confirmar"
+      ].includes(req.path))
+    );
+    return handled ? next() : next("router");
+  });
   installCommonMiddleware(router, { ...options, service });
 
   router.get("/verificacao", async (req, res, next) => {

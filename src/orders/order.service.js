@@ -51,7 +51,7 @@ function validateOrderJsonBody(body = {}, categoria = "") {
     validateJsonField(body.artilheiros, "artilheiros", errors);
   }
 
-  if (["escalacao", "jogador_escudo", "mascote_uniforme"].includes(categoriaNormalizada)) {
+  if (["escalacao", "jogador_escudo", "mascote_uniforme", "contratacao"].includes(categoriaNormalizada)) {
     validateJsonField(body.jogadores_json, "jogadores_json", errors);
   }
 
@@ -107,7 +107,9 @@ function getUploadPermissions(categoria) {
     podeUsarEscudo2: ["resultado", "escalacao", "contratacao", "proximo_jogo", "proximo_jogo_jogador", "resultado_jogo_jogador"].includes(categoria),
     escudo2EhFotoJogador: false,
     podeUsarMascote: ["resultado", "escalacao", "proximo_jogo", "proximo_jogo_jogador", "resultado_jogo_jogador", "jogador_escudo", "mascote_uniforme"].includes(categoria),
-    podeUsarPatrocinadores: categoria === "patrocinador"
+    podeUsarPatrocinadores: categoria === "patrocinador",
+    podeUsarReferencia: categoria === "contratacao",
+    podeUsarCamiseta: categoria === "contratacao"
   };
 }
 
@@ -199,6 +201,14 @@ function moveOrderUploads({ categoria, files, base }) {
     }
   }
 
+  if (permissions.podeUsarReferencia) {
+    moveUploadedFile({ files, base, field: "referencia", destName: "referencia.png" });
+  }
+
+  if (permissions.podeUsarCamiseta) {
+    moveUploadedFile({ files, base, field: "camiseta", destName: "camiseta.png" });
+  }
+
   const pats = permissions.podeUsarPatrocinadores ? (files["patrocinadores"] || []) : [];
 
   pats.forEach((f, i) => {
@@ -225,6 +235,8 @@ function buildPedidoData({
   podeUsarEscudo2,
   escudo2EhFotoJogador,
   podeUsarMascote,
+  podeUsarReferencia,
+  podeUsarCamiseta,
   fotosExtras = []
 }) {
   const {
@@ -262,12 +274,14 @@ function buildPedidoData({
     time_adversario: ["resultado", "proximo_jogo", "proximo_jogo_jogador", "resultado_jogo_jogador", "escalacao"].includes(categoria) ? (time_adversario || "") : "",
 
     artilheiros: categoria === "resultado" && artilheiros ? JSON.parse(artilheiros) : [],
-    jogadores: ["escalacao", "jogador_escudo", "mascote_uniforme"].includes(categoria) && jogadores_json ? JSON.parse(jogadores_json) : [],
-    jogadores_texto: ["escalacao", "jogador_escudo", "mascote_uniforme"].includes(categoria) ? (jogadores_texto || "") : "",
+    jogadores: ["escalacao", "jogador_escudo", "mascote_uniforme", "contratacao"].includes(categoria) && jogadores_json ? JSON.parse(jogadores_json) : [],
+    jogadores_texto: ["escalacao", "jogador_escudo", "mascote_uniforme", "contratacao"].includes(categoria) ? (jogadores_texto || "") : "",
 
     escudo_principal: podeUsarEscudo1 && files["escudo1"]?.[0] ? "escudo1.png" : "",
     escudo_adversario: podeUsarEscudo2 && files["escudo2"]?.[0] ? "escudo2.png" : "",
     foto_jogo: ((podeUsarMascote && files["mascote"]?.[0]) || (escudo2EhFotoJogador && files["escudo2"]?.[0])) ? "mascote.png" : "",
+    referencia_visual: podeUsarReferencia && files["referencia"]?.[0] ? "referencia.png" : "",
+    camiseta_referencia: podeUsarCamiseta && files["camiseta"]?.[0] ? "camiseta.png" : "",
     fotos_extras: Array.isArray(fotosExtras) ? fotosExtras : [],
 
     categoria: categoria,
@@ -321,6 +335,8 @@ function buildPedidoData({
       escudo_principal: pedido.escudo_principal,
       escudo_adversario: pedido.escudo_adversario,
       foto_jogo: pedido.foto_jogo,
+      referencia_visual: pedido.referencia_visual,
+      camiseta_referencia: pedido.camiseta_referencia,
       fotos_extras: pedido.fotos_extras,
       categoria: pedido.categoria,
       rodada: pedido.rodada,
@@ -376,6 +392,8 @@ function createOrderDraft({
     podeUsarEscudo2: uploadResult.podeUsarEscudo2,
     escudo2EhFotoJogador: uploadResult.escudo2EhFotoJogador,
     podeUsarMascote: uploadResult.podeUsarMascote,
+    podeUsarReferencia: uploadResult.podeUsarReferencia,
+    podeUsarCamiseta: uploadResult.podeUsarCamiseta,
     fotosExtras: uploadResult.fotosExtras
   });
 
