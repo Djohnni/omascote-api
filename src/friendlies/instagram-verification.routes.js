@@ -26,10 +26,12 @@ function installCommonMiddleware(router, {
   service
 }) {
   router.use((req, res, next) => {
+    if (res.locals.skipInstagramVerificationRouter) return next();
     if (config.enabled) return next();
     return res.status(404).json({ ok: false, error: "Recurso nao encontrado." });
   });
   router.use((req, res, next) => {
+    if (res.locals.skipInstagramVerificationRouter) return next();
     res.set("Cache-Control", "private, no-store");
     if (typeof auth !== "function" || typeof resolveIdentity !== "function" || !service) {
       return res.status(503).json({
@@ -41,6 +43,7 @@ function installCommonMiddleware(router, {
     return auth(req, res, next);
   });
   router.use(async (req, res, next) => {
+    if (res.locals.skipInstagramVerificationRouter) return next();
     try {
       req.radarIdentity = await resolveIdentity(req.user);
       return next();
@@ -129,7 +132,17 @@ function createInstagramVerificationRouter(options) {
         "/verificacoes/instagram/confirmar"
       ].includes(req.path))
     );
-    return handled ? next() : next("router");
+    const reservedRadarPath = (
+      req.path === "/perfil/importar-print" ||
+      req.path === "/radar" ||
+      req.path.startsWith("/radar/") ||
+      req.path === "/amistosos" ||
+      req.path.startsWith("/amistosos/")
+    );
+    if (!handled && !reservedRadarPath) {
+      res.locals.skipInstagramVerificationRouter = true;
+    }
+    return next();
   });
   installCommonMiddleware(router, { ...options, service });
 
