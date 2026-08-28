@@ -836,7 +836,8 @@ function getCustoPedido(categoria, cliente) {
 const CONTRATACAO_CAMISETA_ADICIONAL = 2.00;
 const CONTRATACAO_SAMPLE_IDS = new Set([
   "contratacao_modelo_01_v1",
-  "contratacao_modelo_02_v1"
+  "contratacao_modelo_02_v1",
+  "contratacao_modelo_03_v1"
 ]);
 const CONTRATACAO_STYLE_MODES = new Set(["catalog", "custom", "auto"]);
 const CONTRATACAO_ANNOUNCEMENT_TYPES = new Set(["contratado", "renovado"]);

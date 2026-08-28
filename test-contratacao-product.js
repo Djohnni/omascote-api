@@ -90,7 +90,7 @@ test("camiseta acrescenta R$ 2,00 e totaliza R$ 9,80", () => {
 
 test("amostra, referencia propria e camiseta sao validadas no servidor", () => {
   const catalog = __fotoJogosTest.validarContratoContratacao({
-    fields: validFields(),
+    fields: validFields({ sample_id: "contratacao_modelo_03_v1" }),
     files: validFiles(),
     requireVersion: true
   });
