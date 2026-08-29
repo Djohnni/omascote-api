@@ -56,6 +56,20 @@ function batchBody(fields) {
   };
 }
 
+function jogadorEscudoBatchBody(name) {
+  return {
+    schema_version: "3",
+    product_id: "jogador_escudo",
+    flyer_tipo: "jog_escudo",
+    rodada: "Jogador + escudo",
+    data: name,
+    jogadores_json: JSON.stringify([{ nome: name, posicao: "" }]),
+    jogadores_texto: name,
+    fields_json: JSON.stringify({ player_name: name, scenario_id: "jogador_escudo_atual_v1" }),
+    assets_json: "{}"
+  };
+}
+
 function validFields(overrides = {}) {
   return {
     contratacao_version: 3,
@@ -120,6 +134,16 @@ test("amostra, referencia propria e camiseta sao validadas no servidor", () => {
   assert.equal(complete.ok, true);
 });
 
+test("contratacao e jogador + escudo aceitam ate 10 itens por lote", () => {
+  const contratacoes = Array.from({ length: 10 }, () => ({ product_id: "contratacao" }));
+  const jogadoresEscudo = Array.from({ length: 10 }, () => ({ product_id: "jogador_escudo" }));
+  const loteComum = Array.from({ length: 4 }, () => ({ product_id: "resultado" }));
+
+  assert.equal(__fotoJogosTest.getFotoJogosBatchMaxItems(contratacoes), 10);
+  assert.equal(__fotoJogosTest.getFotoJogosBatchMaxItems(jogadoresEscudo), 10);
+  assert.equal(__fotoJogosTest.getFotoJogosBatchMaxItems(loteComum), 3);
+});
+
 test("auditoria registra o prompt e os campos estruturados da contratacao", () => {
   const fields = {
     rodada: "CONTRATADO",
@@ -179,6 +203,52 @@ test("lote cria pedidos antecipados de R$ 7,80 e R$ 9,80", async () => {
     assert.equal(payload.criados.length, 2, JSON.stringify(payload));
     assert.deepEqual(payload.criados.map(item => item.valor_final), [7.8, 9.8]);
     assert.ok(payload.criados.every(item => item.pagamento_pendente === true));
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
+test("jogador + escudo aceita mais de 3 jogadores e segura a criacao ate o pagamento", async () => {
+  createTestClient();
+  const server = app.listen(0, "127.0.0.1");
+  await new Promise(resolve => server.once("listening", resolve));
+
+  try {
+    const port = server.address().port;
+    const token = jwt.sign({ whatsapp: TEST_USER, cliente_id: TEST_USER }, process.env.JWT_SECRET, { expiresIn: "1h" });
+    const form = new FormData();
+    const items = Array.from({ length: 4 }, (_, index) => ({
+      product_id: "jogador_escudo",
+      client_request_id: `jogador_escudo_batch_item_${index + 1}`,
+      modalidade_criacao: "com_suporte",
+      fields: jogadorEscudoBatchBody(`Jogador ${index + 1}`),
+      files: {
+        escudo1: `item_${index}_escudo1`,
+        mascote: `item_${index}_mascote`
+      }
+    }));
+
+    form.append("batch_id", "jogador_escudo_batch_test");
+    form.append("items_json", JSON.stringify(items));
+    items.forEach((_, index) => {
+      ["escudo1", "mascote"].forEach(key => {
+        const field = `item_${index}_${key}`;
+        form.append(field, new Blob([PNG], { type: "image/png" }), `${field}.png`);
+      });
+    });
+
+    const response = await fetch(`http://127.0.0.1:${port}/me/time/jogos/criar-artes`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "X-Idempotency-Key": "jogador_escudo_batch_test" },
+      body: form
+    });
+    const payload = await response.json();
+
+    assert.equal(response.status, 200, JSON.stringify(payload));
+    assert.equal(payload.criados.length, 4, JSON.stringify(payload));
+    assert.ok(payload.criados.every(item => item.valor_final === 6));
+    assert.ok(payload.criados.every(item => item.pagamento_pendente === true));
+    assert.ok(payload.criados.every(item => item.requer_pix_antes_criacao === true));
   } finally {
     await new Promise(resolve => server.close(resolve));
   }

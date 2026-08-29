@@ -2660,10 +2660,12 @@ function beginFotoJogosAnalysisDedupe(key, imageHash, promise) {
 }
 
 const FOTO_JOGOS_BATCH_MAX_ITEMS = 3;
+const FOTO_JOGOS_PLAYER_ART_BATCH_MAX_ITEMS = 10;
 const FOTO_JOGOS_BATCH_DEDUPE_TTL_MS = 2 * 60 * 1000;
 const FOTO_JOGOS_BATCH_ALLOWED_FILE_KEYS = new Set(["escudo1", "escudo2", "mascote", "patrocinadores", "referencia", "camiseta"]);
 const FOTO_JOGOS_BATCH_FILE_FIELD_RE = /^item_(\d+)_(escudo1|escudo2|mascote|patrocinadores|referencia|camiseta)$/;
-const FOTO_JOGOS_BATCH_MAX_FILES = FOTO_JOGOS_BATCH_MAX_ITEMS * FOTO_JOGOS_BATCH_ALLOWED_FILE_KEYS.size;
+const FOTO_JOGOS_BATCH_MAX_FILES = FOTO_JOGOS_PLAYER_ART_BATCH_MAX_ITEMS * FOTO_JOGOS_BATCH_ALLOWED_FILE_KEYS.size;
+const FOTO_JOGOS_PLAYER_ART_BATCH_PRODUCTS = new Set(["contratacao", "jogador_escudo"]);
 const FOTO_JOGOS_BATCH_PRODUCTS = {
   proximo_jogo: { flyerTipo: "zz1ft", label: "Pr\u00f3ximo Jogo" },
   resultado: { flyerTipo: "", label: "Resultado" },
@@ -2735,6 +2737,14 @@ function normalizarFotoJogosBatchId(value) {
 function normalizarFotoJogosBatchProduto(value) {
   const produto = String(value || "").trim().toLowerCase();
   return FOTO_JOGOS_BATCH_PRODUCTS[produto] ? produto : "";
+}
+
+function getFotoJogosBatchMaxItems(items = []) {
+  const produtos = (Array.isArray(items) ? items : [])
+    .map(item => normalizarFotoJogosBatchProduto(item?.product_id || item?.productKey || item?.produto));
+  return produtos.length > 0 && produtos.every(produto => FOTO_JOGOS_PLAYER_ART_BATCH_PRODUCTS.has(produto))
+    ? FOTO_JOGOS_PLAYER_ART_BATCH_MAX_ITEMS
+    : FOTO_JOGOS_BATCH_MAX_ITEMS;
 }
 
 function parseFotoJogosBatchItems(body = {}) {
@@ -10393,6 +10403,7 @@ app.post("/me/time/jogos/criar-artes", auth, uploadComErroControlado(orderUpload
   try {
     const batchId = normalizarFotoJogosBatchId(req.body?.batch_id || req.body?.batchId);
     const items = parseFotoJogosBatchItems(req.body || {});
+    const batchMaxItems = getFotoJogosBatchMaxItems(items);
 
     if (!batchId) {
       limparUploadsRequest(req);
@@ -10416,11 +10427,11 @@ app.post("/me/time/jogos/criar-artes", auth, uploadComErroControlado(orderUpload
       });
     }
 
-    if (items.length > FOTO_JOGOS_BATCH_MAX_ITEMS) {
+    if (items.length > batchMaxItems) {
       limparUploadsRequest(req);
       return res.status(400).json({
         ok: false,
-        error: `Crie no m\u00e1ximo ${FOTO_JOGOS_BATCH_MAX_ITEMS} artes por vez neste MVP.`,
+        error: `Crie no m\u00e1ximo ${batchMaxItems} artes por vez.`,
         batch_id: batchId,
         criados: [],
         falhas: items.map((item, index) => fotoJogosBatchFalha(index, item, "Limite do lote excedido."))
@@ -12437,7 +12448,7 @@ function criarPedidoHandler(categoria) {
     const previewLimiterIdentifiers = getPreviewLimiterIdentifiers(req, c, whatsapp);
     const previewLimiterState = getPreviewLimiterState(previewLimiterIdentifiers);
 
-    if (!temSaldoSuficiente && previewLimiterState.total >= PREVIEW_LIMITER_MAX) {
+    if (!pagamentoAntecipadoObrigatorio && !temSaldoSuficiente && previewLimiterState.total >= PREVIEW_LIMITER_MAX) {
       console.warn(`[PREVIEW_LIMIT] bloqueado identificador=${previewLimiterState.identificador} total=${previewLimiterState.total} motivo=3_previews_sem_pagamento`);
 
       return res.status(429).json({
@@ -12649,7 +12660,9 @@ function criarPedidoHandler(categoria) {
       if (pagamentoAntecipadoObrigatorio) {
         writeOrderStatus(draft.base, "aguardando_pagamento");
       }
-      registrarPreviewPendente({ identifiers: previewLimiterIdentifiers, whatsapp, pedidoId: id });
+      if (!pagamentoAntecipadoObrigatorio) {
+        registrarPreviewPendente({ identifiers: previewLimiterIdentifiers, whatsapp, pedidoId: id });
+      }
     }
 
     orderService.orderStorage.writeOrder(draft.base, draft.pedido);
@@ -14762,7 +14775,8 @@ module.exports = {
     calcularCustoPedidoPorModalidade,
     getCustoPedidoComAdicionais,
     contratacaoTemCamiseta,
-    validarContratoContratacao
+    validarContratoContratacao,
+    getFotoJogosBatchMaxItems
   },
   __resultadoScenarioTest: {
     registry: resultScenarioRegistry,
