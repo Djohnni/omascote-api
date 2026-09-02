@@ -4,6 +4,7 @@ const os = require("node:os");
 const path = require("node:path");
 const jwt = require("jsonwebtoken");
 const crypto = require("node:crypto");
+const APP_MODE = process.argv.includes("--app");
 
 const TEST_JWT_SECRET = "economic-creation-integration-secret";
 const TEST_MP_WEBHOOK_SECRET = "economic-creation-webhook-secret";
@@ -36,6 +37,12 @@ const gateway = {
 
 global.fetch = async (input, options = {}) => {
   const url = String(input || "");
+
+  if (url === "https://api.mercadopago.com/checkout/preferences" && options.method === "POST") {
+    const payload = JSON.parse(options.body || "{}");
+    assert.equal(payload.items[0].unit_price, 8);
+    return Response.json({ init_point: "https://example.test/checkout/saldo" });
+  }
 
   if (url === "https://api.mercadopago.com/v1/orders" && options.method === "POST") {
     if (gateway.failNextCreate) {
@@ -232,7 +239,10 @@ async function api(
   endpoint,
   { token, body, form, headers: extraHeaders = {} } = {}
 ) {
-  const headers = { ...extraHeaders };
+  const headers = {
+    ...(APP_MODE ? { "X-Omascote-App-Mode": "app" } : {}),
+    ...extraHeaders
+  };
   if (token) headers.Authorization = `Bearer ${token}`;
   if (body !== undefined) headers["Content-Type"] = "application/json";
   const response = await nativeFetch(`${baseUrl}${endpoint}`, {
@@ -449,12 +459,57 @@ async function run() {
     putClient(legacyPaymentsUser, 0);
     putClient(legacyUntouchedUser, 0);
 
+    const paymentRoutes = [
+      "/comprar-creditos",
+      "/comprar-creditos-pix",
+      "/pedidos/gerar-pix-lote",
+      "/pedidos/inexistente/gerar-pix",
+      "/pedidos/inexistente/pagar-com-saldo"
+    ];
+    for (const endpoint of paymentRoutes) {
+      const unauthenticated = await api(baseUrl, "POST", endpoint);
+      assert.equal(unauthenticated.response.status, 401, endpoint);
+    }
+
+    for (const appContext of [
+      { headers: { "X-Omascote-App-Mode": "app" } },
+      { headers: { "X-Omascote-App-Mode": "twa" } },
+      { body: { origem_acesso: "app" } },
+      { body: { origem_acesso: "twa" } },
+      { body: { omascote_app: "1" } },
+      { body: { modo_app: "1" } }
+    ]) {
+      const missing = await api(baseUrl, "POST", "/pedidos/inexistente/gerar-pix", {
+        token: tokenFor(supportUser), ...appContext
+      });
+      assert.equal(missing.response.status, 404);
+    }
+
+    const creditPix = await api(baseUrl, "POST", "/comprar-creditos-pix", {
+      token: tokenFor(supportUser), body: { pacote: "saldo_800" }
+    });
+    assert.equal(creditPix.response.status, 200);
+    assert.ok(creditPix.payload.pix_copia_cola);
+    assert.ok(creditPix.payload.qr_code_base64);
+    assert.equal((await getMe(baseUrl, supportUser)).saldo, 20);
+    const creditCheckout = await api(baseUrl, "POST", "/comprar-creditos", {
+      token: tokenFor(supportUser), body: { pacote: "saldo_800" }
+    });
+    assert.equal(creditCheckout.response.status, 200);
+    assert.equal(creditCheckout.payload.init_point, "https://example.test/checkout/saldo");
+
     const support = await createResult(baseUrl, supportUser, "com_suporte", "support_balance");
     assert.equal(support.valor_final, 8);
     assert.equal(support.pagamento_pendente, true);
     assert.equal(support.requer_pix_antes_criacao, true);
     assert.equal((await getMe(baseUrl, supportUser)).saldo, 20);
     const supportOrder = readOrder(supportUser, support.pedido_id);
+    for (const action of ["gerar-pix", "pagar-com-saldo"]) {
+      const wrongOwner = await api(baseUrl, "POST", `/pedidos/${support.pedido_id}/${action}`, {
+        token: tokenFor(wrongOwnerUser)
+      });
+      assert.equal(wrongOwner.response.status, 404);
+    }
     assert.equal(supportOrder.modalidade_criacao, "com_suporte");
     assert.equal(supportOrder.valor_original, 8);
     assert.equal(supportOrder.valor_final, 8);
@@ -1259,6 +1314,9 @@ async function run() {
     assert.ok(Buffer.isBuffer(download.payload));
     assert.ok(download.payload.length > 10);
 
+    console.log(`OK - pagamentos no modo ${APP_MODE ? "app Android/TWA" : "navegador"}`);
+    console.log("OK - compra de saldo por PIX e checkout aceita o app sem antecipar credito");
+    console.log("OK - pagamentos exigem autenticacao e acesso ao proprio pedido");
     console.log("OK - assistente com suporte exige PIX de R$8 antes da criacao");
     console.log("OK - economico exige PIX antes da criacao e nao desconta saldo automaticamente");
     console.log("OK - repeticao idempotente nao duplica pedido, PIX nem desconto");

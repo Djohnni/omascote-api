@@ -2210,30 +2210,6 @@ function clienteElegivelBrindeEscudo3dApp(req, cliente, whatsapp, categoria) {
   return true;
 }
 
-function isModoAppRequest(req) {
-  const headerModoApp = String(req.headers["x-omascote-app-mode"] || "").trim().toLowerCase();
-  const origemAcesso = String(req.body?.origem_acesso || req.query?.origem_acesso || "").trim().toLowerCase();
-  const omascoteApp = String(req.body?.omascote_app || req.query?.omascote_app || "").trim().toLowerCase();
-  const modoApp = String(req.body?.modo_app || req.query?.modo_app || "").trim().toLowerCase();
-
-  return headerModoApp === "app" ||
-    headerModoApp === "twa" ||
-    origemAcesso === "app" ||
-    origemAcesso === "twa" ||
-    omascoteApp === "1" ||
-    modoApp === "1";
-}
-
-function bloquearRecursoPagamentoNoApp(req, res) {
-  if (!isModoAppRequest(req)) return false;
-
-  res.status(403).json({
-    ok: false,
-    error: "Este recurso não está disponível no app."
-  });
-  return true;
-}
-
 function nomeCategoriaPedido(categoria) {
   const registryName = productsRegistry.getProductName(categoria);
   if (registryName) return registryName;
@@ -11486,8 +11462,6 @@ app.get("/cartas-app/:id/imagem", auth, (req, res) => {
 // ===== MERCADO PAGO =====
 app.post("/comprar-creditos", auth, async (req, res) => {
   try {
-    if (bloquearRecursoPagamentoNoApp(req, res)) return;
-
     if (!MP_ACCESS_TOKEN) {
       return res.status(500).json({ ok: false, error: "MP_ACCESS_TOKEN não configurado" });
     }
@@ -11564,8 +11538,6 @@ app.post("/comprar-creditos", auth, async (req, res) => {
 
 app.post("/comprar-creditos-pix", auth, async (req, res) => {
   try {
-    if (bloquearRecursoPagamentoNoApp(req, res)) return;
-
     if (!MP_ACCESS_TOKEN) {
       return res.status(500).json({ ok: false, error: "MP_ACCESS_TOKEN nÃ£o configurado" });
     }
@@ -13098,8 +13070,6 @@ app.get("/meus-pedidos", auth, (req, res) => {
 });
 
 app.post("/pedidos/:id/pagar-com-saldo", auth, (req, res) => {
-  if (bloquearRecursoPagamentoNoApp(req, res)) return;
-
   const whatsapp = req.user.whatsapp;
   const base = getPedidoBase(whatsapp, req.params.id);
 
@@ -13199,8 +13169,6 @@ app.post("/pedidos/:id/pagar-com-saldo", auth, (req, res) => {
 
 app.post("/pedidos/gerar-pix-lote", auth, async (req, res) => {
   try {
-    if (bloquearRecursoPagamentoNoApp(req, res)) return;
-
     const whatsapp = req.user.whatsapp;
     const batchId = normalizarFotoJogosBatchId(req.body?.batch_id || "");
     if (!batchId) {
@@ -13250,8 +13218,6 @@ app.post("/pedidos/gerar-pix-lote", auth, async (req, res) => {
 
 app.post("/pedidos/:id/gerar-pix", auth, async (req, res) => {
   try {
-    if (bloquearRecursoPagamentoNoApp(req, res)) return;
-
     const whatsapp = req.user.whatsapp;
     const id = req.params.id;
     const base = getPedidoBase(whatsapp, id);

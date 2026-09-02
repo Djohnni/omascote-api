@@ -18,7 +18,7 @@
     "radar:retention": "node scripts/radar-retention.js",
     "radar:load": "node scripts/radar-pilot-load.js",
     "radar:backup:verify": "node scripts/radar-backup-restore-verify.js",
-    "test:payments": "node test-economic-creation.js",
+    "test:payments": "node test-economic-creation.js && node test-economic-creation.js --app",
     "test:scenario": "node --test test-result-scenario-pilot.js test-multi-product-scenarios.js",
     "test:hashing": "node --test test-upload-content-hash.js"
   },
