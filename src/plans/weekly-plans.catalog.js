@@ -24,9 +24,7 @@ const CYCLE_WINDOWS = Object.freeze([
 
 const WEEKLY_PLANS = Object.freeze([
   Object.freeze({ code: "semanal_1", name: "1 imagem por semana", weeklyLimit: 1, cycleLimit: 4, priceCents: 1890 }),
-  Object.freeze({ code: "semanal_2", name: "2 imagens por semana", weeklyLimit: 2, cycleLimit: 8, priceCents: 2890 }),
-  Object.freeze({ code: "semanal_4", name: "4 imagens por semana", weeklyLimit: 4, cycleLimit: 16, priceCents: 3890 }),
-  Object.freeze({ code: "semanal_6", name: "6 imagens por semana", weeklyLimit: 6, cycleLimit: 24, priceCents: 4890 })
+  Object.freeze({ code: "semanal_2", name: "2 imagens por semana", weeklyLimit: 2, cycleLimit: 8, priceCents: 2890 })
 ]);
 
 const PLAN_BY_CODE = new Map(WEEKLY_PLANS.map(plan => [plan.code, plan]));

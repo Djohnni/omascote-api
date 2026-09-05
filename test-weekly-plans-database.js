@@ -218,7 +218,7 @@ test("weekly plans persist, renew safely and enforce concurrent weekly quota", a
 
     const renewal = await activate(repository, {
       customerKey,
-      planCode: "semanal_4",
+      planCode: "semanal_1",
       attemptId: "222222222222222222222222",
       now: new Date(start.getTime() + 24 * 60 * 60 * 1000),
       clientRequestId: "buy-plan-request-0002"
@@ -230,7 +230,7 @@ test("weekly plans persist, renew safely and enforce concurrent weekly quota", a
     await assert.rejects(
       repository.beginPaymentAttempt({
         customerKey,
-        plan: getPlan("semanal_6"),
+        plan: getPlan("semanal_2"),
         attemptId: "444444444444444444444444",
         externalReference: "omplan_444444444444444444444444",
         idempotencyKey: "provider_444444444444444444444444",

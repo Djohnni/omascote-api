@@ -595,7 +595,7 @@ async function run() {
     assert.equal(weeklyCatalog.response.status, 200);
     assert.deepEqual(
       weeklyCatalog.payload.planos.map(item => [item.imagens_por_semana, item.valor_centavos]),
-      [[1, 1890], [2, 2890], [4, 3890], [6, 4890]]
+      [[1, 1890], [2, 2890]]
     );
     const inactiveWeeklyPurchase = await api(
       baseUrl,

@@ -24,12 +24,12 @@ test("weekly plan catalog fixes server-side prices and limits", () => {
     WEEKLY_PLANS.map(plan => [plan.code, plan.weeklyLimit, plan.cycleLimit, plan.priceCents]),
     [
       ["semanal_1", 1, 4, 1890],
-      ["semanal_2", 2, 8, 2890],
-      ["semanal_4", 4, 16, 3890],
-      ["semanal_6", 6, 24, 4890]
+      ["semanal_2", 2, 8, 2890]
     ]
   );
   assert.equal(getPlan("SEMANAL_2").priceCents, 2890);
+  assert.equal(getPlan("semanal_4"), null);
+  assert.equal(getPlan("semanal_6"), null);
   assert.equal(getPlan("nao_existe"), null);
   assert.equal(isWeeklyPlanEligibleProduct("resultado", { priceCents: 800 }), true);
   assert.equal(isWeeklyPlanEligibleProduct("resultado", { priceCents: 801 }), false);
