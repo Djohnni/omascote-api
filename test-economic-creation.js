@@ -20,6 +20,8 @@ process.env.JWT_SECRET = TEST_JWT_SECRET;
 process.env.MP_ACCESS_TOKEN = "TEST-MP-TOKEN";
 process.env.MP_WEBHOOK_SECRET = TEST_MP_WEBHOOK_SECRET;
 process.env.OMASCOTE_DATA_DIR = TEST_DATA_DIR;
+process.env.RADAR_DATABASE_EMBEDDED_PATH = path.join(TEST_DATA_DIR, "weekly-plans-db");
+process.env.WEEKLY_PLANS_ENABLED = "true";
 process.env.BOT_ADMIN_WHATSAPP = "15991120599";
 process.env.NODE_ENV = "test";
 process.env.MP_ORDERS_V2_TIMEOUT_MS = "60";
@@ -34,6 +36,25 @@ const gateway = {
   nextGetMode: "",
   orderGetCalls: 0
 };
+
+function withSettledAmounts(order) {
+  if (!order || typeof order !== "object") return order;
+  const payments = Array.isArray(order.transactions?.payments)
+    ? order.transactions.payments.map(payment => ({
+        ...payment,
+        ...(["processed", "refunded", "charged_back"].includes(String(payment?.status || ""))
+          ? { paid_amount: payment.paid_amount ?? payment.amount }
+          : {})
+      }))
+    : [];
+  const settled = ["processed", "refunded", "charged_back"].includes(String(order.status || "")) ||
+    payments.some(payment => ["processed", "refunded", "charged_back"].includes(String(payment.status || "")));
+  return settled ? {
+    ...order,
+    total_paid_amount: order.total_paid_amount ?? order.total_amount,
+    transactions: { ...(order.transactions || {}), payments }
+  } : order;
+}
 
 global.fetch = async (input, options = {}) => {
   const url = String(input || "");
@@ -86,6 +107,7 @@ global.fetch = async (input, options = {}) => {
           id: paymentId,
           amount: payload.transactions.payments[0].amount,
           status: "action_required",
+          expiration_time: payload.transactions.payments[0].expiration_time,
           payment_method: {
             id: "pix",
             type: "bank_transfer",
@@ -138,6 +160,47 @@ global.fetch = async (input, options = {}) => {
     });
   }
 
+  const orderCancelMatch = url.match(
+    /^https:\/\/api\.mercadopago\.com\/v1\/orders\/([^/?#]+)\/cancel$/
+  );
+  if (orderCancelMatch && options.method === "POST") {
+    const id = orderCancelMatch[1];
+    const current = gateway.approved.get(id) || gateway.created.get(id);
+    if (!current) {
+      return Response.json({ status: "not_found" }, { status: 404 });
+    }
+    if (!["action_required", "created"].includes(String(current.status || ""))) {
+      return Response.json({ message: "order cannot be cancelled" }, { status: 409 });
+    }
+    const cancelled = {
+      ...current,
+      status: "canceled",
+      status_detail: "canceled",
+      transactions: {
+        ...(current.transactions || {}),
+        payments: (current.transactions?.payments || []).map(payment => ({
+          ...payment,
+          status: "canceled",
+          status_detail: "canceled"
+        }))
+      }
+    };
+    gateway.created.set(id, cancelled);
+    gateway.approved.delete(id);
+    return Response.json(cancelled);
+  }
+
+  if (url.startsWith("https://api.mercadopago.com/v1/orders?")) {
+    const parsed = new URL(url);
+    const externalReference = parsed.searchParams.get("external_reference") || "";
+    const orders = [...gateway.created.values(), ...gateway.approved.values()]
+      .filter((order, index, all) =>
+        String(order?.external_reference || "") === externalReference &&
+        all.findIndex(candidate => candidate?.id === order?.id) === index
+      );
+    return Response.json({ data: orders, paging: { total: orders.length } });
+  }
+
   const orderMatch = url.match(/^https:\/\/api\.mercadopago\.com\/v1\/orders\/([^/?#]+)$/);
   if (orderMatch) {
     gateway.orderGetCalls += 1;
@@ -156,7 +219,7 @@ global.fetch = async (input, options = {}) => {
       });
     }
     const id = orderMatch[1];
-    const order = gateway.approved.get(id) || gateway.created.get(id);
+    const order = withSettledAmounts(gateway.approved.get(id) || gateway.created.get(id));
     return new Response(JSON.stringify(order || { status: "not_found" }), {
       status: order ? 200 : 404,
       headers: { "Content-Type": "application/json" }
@@ -176,7 +239,14 @@ global.fetch = async (input, options = {}) => {
   return nativeFetch(input, options);
 };
 
-const { app, __mpOrdersV2Test } = require("./server");
+const orderService = require("./src/orders/order.service");
+
+const {
+  app,
+  __mpOrdersV2Test,
+  __resultadoScenarioTest,
+  __weeklyPlansTest,
+} = require("./server");
 
 const CLIENTES_FILE = path.join(TEST_DATA_DIR, "clientes.json");
 const PEDIDOS_DIR = path.join(TEST_DATA_DIR, "pedidos");
@@ -420,11 +490,20 @@ async function webhook(baseUrl, paymentId, type = "order", extraBody = {}) {
 }
 
 async function run() {
+  const appliedMigrations = await __weeklyPlansTest.migrateDatabase();
+  assert.equal(appliedMigrations.at(-1), "017_weekly_image_plans.sql");
+  assert.equal(__weeklyPlansTest.flags.purchasesEnabled, true);
+  assert.equal(__weeklyPlansTest.pedidoElegivelPlanoSemanal("resultado", null, {}), true);
+  assert.equal(__weeklyPlansTest.pedidoElegivelPlanoSemanal("mascote_uniforme", null, {}), false);
+  assert.equal(__weeklyPlansTest.pedidoElegivelPlanoSemanal("contratacao", null, {
+    jersey_enabled: true
+  }), false);
   const server = await new Promise(resolve => {
     const instance = app.listen(0, "127.0.0.1", () => resolve(instance));
   });
   const address = server.address();
   const baseUrl = `http://127.0.0.1:${address.port}`;
+  let weeklyPlanPoolClosed = false;
 
   try {
     const supportUser = "551100000001";
@@ -442,6 +521,11 @@ async function run() {
     const legacyBalanceUser = "551100000016";
     const legacyPaymentsUser = "551100000017";
     const legacyUntouchedUser = "551100000018";
+    const weeklyPlanUser = "551100000019";
+    const inactiveWeeklyPlanUser = "551100000020";
+    const legacyBypassUser = "551100000021";
+    const weeklyAmountMismatchUser = "551100000022";
+    const weeklyUnavailableWebhookUser = "551100000023";
 
     putClient(supportUser, 20);
     putClient(economicUser, 20);
@@ -458,10 +542,19 @@ async function run() {
     putClient(legacyBalanceUser, 0);
     putClient(legacyPaymentsUser, 0);
     putClient(legacyUntouchedUser, 0);
+    putClient(weeklyPlanUser, 0);
+    putClient(inactiveWeeklyPlanUser, 0);
+    putClient(legacyBypassUser, 0);
+    putClient(weeklyAmountMismatchUser, 0);
+    putClient(weeklyUnavailableWebhookUser, 0);
+    const clientesComInativo = readJson(CLIENTES_FILE, {});
+    clientesComInativo[inactiveWeeklyPlanUser].ativo = false;
+    writeJson(CLIENTES_FILE, clientesComInativo);
 
     const paymentRoutes = [
       "/comprar-creditos",
       "/comprar-creditos-pix",
+      "/me/plano-semanal/gerar-pix",
       "/pedidos/gerar-pix-lote",
       "/pedidos/inexistente/gerar-pix",
       "/pedidos/inexistente/pagar-com-saldo"
@@ -497,6 +590,402 @@ async function run() {
     });
     assert.equal(creditCheckout.response.status, 200);
     assert.equal(creditCheckout.payload.init_point, "https://example.test/checkout/saldo");
+
+    const weeklyCatalog = await api(baseUrl, "GET", "/planos-semanais");
+    assert.equal(weeklyCatalog.response.status, 200);
+    assert.deepEqual(
+      weeklyCatalog.payload.planos.map(item => [item.imagens_por_semana, item.valor_centavos]),
+      [[1, 1890], [2, 2890]]
+    );
+    const inactiveWeeklyPurchase = await api(
+      baseUrl,
+      "POST",
+      "/me/plano-semanal/gerar-pix",
+      {
+        token: tokenFor(inactiveWeeklyPlanUser),
+        headers: { "X-Idempotency-Key": "weekly-plan-inactive-0001" },
+        body: { plano_id: "semanal_2" }
+      }
+    );
+    assert.equal(inactiveWeeklyPurchase.response.status, 403);
+
+    const weeklyPurchase = await api(
+      baseUrl,
+      "POST",
+      "/me/plano-semanal/gerar-pix",
+      {
+        token: tokenFor(weeklyPlanUser),
+        headers: { "X-Idempotency-Key": "weekly-plan-purchase-e2e-0001" },
+        body: { plano_id: "semanal_2" }
+      }
+    );
+    assert.equal(weeklyPurchase.response.status, 200, JSON.stringify(weeklyPurchase.payload));
+    assert.equal(weeklyPurchase.payload.plano.valor_centavos, 2890);
+    const weeklyGatewayOrder = gateway.created.get(String(weeklyPurchase.payload.order_id));
+    assert.equal(Number(weeklyGatewayOrder.total_amount), 28.9);
+    assert.equal(weeklyGatewayOrder.transactions.payments[0].expiration_time, "PT30M");
+    assert.match(weeklyGatewayOrder.external_reference, /^omplan_[a-f0-9]{24}$/);
+    assert.notEqual(
+      readJson(CLIENTES_FILE, {})[weeklyPlanUser].plano_semanal_participante,
+      true
+    );
+    assert.equal(
+      readJson(CLIENTES_FILE, {})[weeklyPlanUser].plano_semanal_pagamento_pendente,
+      true
+    );
+    const weeklyPendingStatus = await api(
+      baseUrl,
+      "GET",
+      `/me/plano-semanal/pagamentos/${weeklyPurchase.payload.tentativa_id}`,
+      { token: tokenFor(weeklyPlanUser) }
+    );
+    assert.equal(weeklyPendingStatus.response.status, 200);
+    assert.equal(weeklyPendingStatus.payload.status, "pending");
+    assert.equal(
+      weeklyPendingStatus.payload.pix_copia_cola,
+      weeklyPurchase.payload.pix_copia_cola
+    );
+    const orderWhilePlanPaymentPending = await api(
+      baseUrl,
+      "POST",
+      "/me/time/jogos/criar-artes",
+      {
+        token: tokenFor(weeklyPlanUser),
+        form: resultBatchForm({
+          mode: "com_suporte",
+          requestId: "economic_test_weekly_plan_payment_pending",
+          batchId: "economic_batch_weekly_plan_payment_pending"
+        })
+      }
+    );
+    assert.equal(orderWhilePlanPaymentPending.response.status, 409);
+    assert.equal(
+      orderWhilePlanPaymentPending.payload.falhas?.[0]?.code,
+      "WEEKLY_PLAN_PAYMENT_PENDING"
+    );
+    gateway.approved.set(String(weeklyPurchase.payload.order_id), {
+      ...weeklyGatewayOrder,
+      status: "processed",
+      transactions: {
+        payments: [{
+          ...weeklyGatewayOrder.transactions.payments[0],
+          status: "processed",
+          status_detail: "accredited"
+        }]
+      }
+    });
+    const weeklyWebhook = await webhook(baseUrl, weeklyPurchase.payload.order_id);
+    assert.equal(weeklyWebhook.response.status, 200, JSON.stringify(weeklyWebhook.payload));
+    assert.equal(weeklyWebhook.payload.tipo, "plano_semanal");
+    assert.equal(
+      readJson(CLIENTES_FILE, {})[weeklyPlanUser].plano_semanal_participante,
+      true
+    );
+    assert.notEqual(
+      readJson(CLIENTES_FILE, {})[weeklyPlanUser].plano_semanal_pagamento_pendente,
+      true
+    );
+
+    const weeklySummaryBeforeOrder = await api(
+      baseUrl,
+      "GET",
+      "/me/plano-semanal",
+      { token: tokenFor(weeklyPlanUser) }
+    );
+    assert.equal(weeklySummaryBeforeOrder.payload.plano_semanal.ativa, true);
+    assert.equal(weeklySummaryBeforeOrder.payload.plano_semanal.disponiveis_na_semana, 2);
+
+    const originalWriteStatus = orderService.orderStorage.writeStatus;
+    let weeklyStatusFailureInjected = false;
+    orderService.orderStorage.writeStatus = (base, status) => {
+      if (!weeklyStatusFailureInjected && status === "preparando_pagamento") {
+        weeklyStatusFailureInjected = true;
+        throw new Error("falha simulada ao gravar status do plano");
+      }
+      return originalWriteStatus(base, status);
+    };
+    let interruptedWeeklyCreate;
+    try {
+      interruptedWeeklyCreate = await api(
+        baseUrl,
+        "POST",
+        "/me/time/jogos/criar-artes",
+        {
+          token: tokenFor(weeklyPlanUser),
+          form: resultBatchForm({
+            mode: "com_suporte",
+            requestId: "economic_test_weekly_plan_covered",
+            batchId: "economic_batch_weekly_plan_covered"
+          })
+        }
+      );
+    } finally {
+      orderService.orderStorage.writeStatus = originalWriteStatus;
+    }
+    assert.equal(interruptedWeeklyCreate.response.status, 503);
+    assert.equal(
+      interruptedWeeklyCreate.payload.falhas[0].code,
+      "WEEKLY_PLAN_ORDER_RECOVERY_REQUIRED"
+    );
+    const persistedWeeklyOrder = await api(
+      baseUrl,
+      "GET",
+      "/pedidos/por-client-request-id/economic_test_weekly_plan_covered",
+      { token: tokenFor(weeklyPlanUser) }
+    );
+    assert.equal(persistedWeeklyOrder.response.status, 200);
+    assert.equal(persistedWeeklyOrder.payload.encontrado, true);
+    assert.equal(persistedWeeklyOrder.payload.pedido.pagamento_metodo, "plano_semanal");
+
+    __resultadoScenarioTest.resetDedupe();
+    const weeklyRecoveredOrder = await createResult(
+      baseUrl,
+      weeklyPlanUser,
+      "com_suporte",
+      "weekly_plan_covered"
+    );
+    assert.equal(weeklyRecoveredOrder.pedido_id, persistedWeeklyOrder.payload.pedido_id);
+    assert.equal(weeklyRecoveredOrder.coberto_pelo_plano, true);
+    assert.equal(weeklyRecoveredOrder.pagamento_pendente, false);
+    assert.equal(weeklyRecoveredOrder.valor_final, 0);
+    assert.equal(weeklyRecoveredOrder.recuperado_apos_interrupcao, true);
+    assert.equal(
+      readOrder(weeklyPlanUser, weeklyRecoveredOrder.pedido_id).pagamento_metodo,
+      "plano_semanal"
+    );
+    assert.equal(readOrderStatus(weeklyPlanUser, weeklyRecoveredOrder.pedido_id), "novo");
+
+    const weeklySummaryAfterReplay = await api(
+      baseUrl,
+      "GET",
+      "/me/plano-semanal",
+      { token: tokenFor(weeklyPlanUser) }
+    );
+    assert.equal(weeklySummaryAfterReplay.payload.plano_semanal.usadas_na_semana, 1);
+    assert.equal(weeklySummaryAfterReplay.payload.plano_semanal.disponiveis_na_semana, 1);
+
+    const customersAfterSimulatedCrash = readJson(CLIENTES_FILE, {});
+    const weeklyCustomerAfterCrash = customersAfterSimulatedCrash[weeklyPlanUser];
+    delete weeklyCustomerAfterCrash.plano_semanal_participante;
+    delete weeklyCustomerAfterCrash.plano_semanal_participante_em;
+    weeklyCustomerAfterCrash.plano_semanal_pagamento_pendente = true;
+    weeklyCustomerAfterCrash.plano_semanal_tentativa_pendente_id =
+      weeklyPurchase.payload.tentativa_id;
+    weeklyCustomerAfterCrash.plano_semanal_pix_expira_em =
+      new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
+    writeJson(CLIENTES_FILE, customersAfterSimulatedCrash);
+    const weeklyOrderAfterMarkerCrash = await createResult(
+      baseUrl,
+      weeklyPlanUser,
+      "com_suporte",
+      "weekly_plan_after_marker_crash"
+    );
+    assert.equal(weeklyOrderAfterMarkerCrash.coberto_pelo_plano, true);
+    const recoveredWeeklyCustomer = readJson(CLIENTES_FILE, {})[weeklyPlanUser];
+    assert.equal(recoveredWeeklyCustomer.plano_semanal_participante, true);
+    assert.notEqual(recoveredWeeklyCustomer.plano_semanal_pagamento_pendente, true);
+
+    const amountMismatchPurchase = await api(
+      baseUrl,
+      "POST",
+      "/me/plano-semanal/gerar-pix",
+      {
+        token: tokenFor(weeklyAmountMismatchUser),
+        headers: { "X-Idempotency-Key": "weekly-plan-paid-amount-mismatch-0001" },
+        body: { plano_id: "semanal_1" }
+      }
+    );
+    assert.equal(amountMismatchPurchase.response.status, 200);
+    const amountMismatchGatewayOrder = gateway.created.get(
+      String(amountMismatchPurchase.payload.order_id)
+    );
+    gateway.approved.set(String(amountMismatchPurchase.payload.order_id), {
+      ...amountMismatchGatewayOrder,
+      status: "processed",
+      total_paid_amount: "0.00",
+      transactions: {
+        payments: [{
+          ...amountMismatchGatewayOrder.transactions.payments[0],
+          paid_amount: "0.00",
+          status: "processed",
+          status_detail: "accredited"
+        }]
+      }
+    });
+    const amountMismatchWebhook = await webhook(
+      baseUrl,
+      amountMismatchPurchase.payload.order_id
+    );
+    assert.equal(amountMismatchWebhook.response.status, 200);
+    assert.equal(amountMismatchWebhook.payload.rejected, true);
+    assert.equal(amountMismatchWebhook.payload.reason, "amount_mismatch");
+    assert.notEqual(
+      readJson(CLIENTES_FILE, {})[weeklyAmountMismatchUser].plano_semanal_pagamento_pendente,
+      true
+    );
+    const amountMismatchSummary = await api(
+      baseUrl,
+      "GET",
+      "/me/plano-semanal",
+      { token: tokenFor(weeklyAmountMismatchUser) }
+    );
+    assert.equal(amountMismatchSummary.payload.plano_semanal.ativa, false);
+
+    const replacementPendingPurchase = await api(
+      baseUrl,
+      "POST",
+      "/me/plano-semanal/gerar-pix",
+      {
+        token: tokenFor(weeklyAmountMismatchUser),
+        headers: { "X-Idempotency-Key": "weekly-plan-replacement-pending-0001" },
+        body: { plano_id: "semanal_1" }
+      }
+    );
+    assert.equal(replacementPendingPurchase.response.status, 200);
+    const staleAttemptPoll = await api(
+      baseUrl,
+      "GET",
+      `/me/plano-semanal/pagamentos/${amountMismatchPurchase.payload.tentativa_id}`,
+      { token: tokenFor(weeklyAmountMismatchUser) }
+    );
+    assert.equal(staleAttemptPoll.payload.status, "divergent");
+    const markerAfterStalePoll = readJson(CLIENTES_FILE, {})[weeklyAmountMismatchUser];
+    assert.equal(markerAfterStalePoll.plano_semanal_pagamento_pendente, true);
+    assert.equal(
+      markerAfterStalePoll.plano_semanal_tentativa_pendente_id,
+      replacementPendingPurchase.payload.tentativa_id
+    );
+    const replacementGatewayOrder = gateway.created.get(
+      String(replacementPendingPurchase.payload.order_id)
+    );
+    gateway.approved.set(String(replacementPendingPurchase.payload.order_id), {
+      ...replacementGatewayOrder,
+      status: "processed",
+      transactions: {
+        payments: [{
+          ...replacementGatewayOrder.transactions.payments[0],
+          status: "processed",
+          status_detail: "accredited"
+        }]
+      }
+    });
+    const recoveredWithoutWebhook = await api(
+      baseUrl,
+      "GET",
+      "/me/plano-semanal",
+      { token: tokenFor(weeklyAmountMismatchUser) }
+    );
+    assert.equal(recoveredWithoutWebhook.response.status, 200);
+    assert.equal(recoveredWithoutWebhook.payload.plano_semanal.ativa, true);
+    assert.equal(
+      readJson(CLIENTES_FILE, {})[weeklyAmountMismatchUser].plano_semanal_participante,
+      true
+    );
+    const markerlessCustomers = readJson(CLIENTES_FILE, {});
+    delete markerlessCustomers[weeklyAmountMismatchUser].plano_semanal_participante;
+    delete markerlessCustomers[weeklyAmountMismatchUser].plano_semanal_participante_em;
+    delete markerlessCustomers[weeklyAmountMismatchUser].plano_semanal_pagamento_pendente;
+    delete markerlessCustomers[weeklyAmountMismatchUser].plano_semanal_tentativa_pendente_id;
+    delete markerlessCustomers[weeklyAmountMismatchUser].plano_semanal_pix_expira_em;
+    writeJson(CLIENTES_FILE, markerlessCustomers);
+    const markerlessPlanOrder = await createResult(
+      baseUrl,
+      weeklyAmountMismatchUser,
+      "com_suporte",
+      "weekly_plan_without_local_marker"
+    );
+    assert.equal(markerlessPlanOrder.coberto_pelo_plano, true);
+    assert.equal(
+      readJson(CLIENTES_FILE, {})[weeklyAmountMismatchUser].plano_semanal_participante,
+      true
+    );
+
+    gateway.approved.set(String(weeklyPurchase.payload.order_id), {
+      ...weeklyGatewayOrder,
+      status: "processed",
+      status_detail: "partially_refunded",
+      transactions: {
+        payments: [{
+          ...weeklyGatewayOrder.transactions.payments[0],
+          status: "processed",
+          status_detail: "accredited",
+          refunded_amount: "1.00"
+        }],
+        refunds: [{
+          id: "REF-WEEKLY-PARTIAL-1",
+          transaction_id: weeklyGatewayOrder.transactions.payments[0].id,
+          amount: "1.00",
+          status: "processed"
+        }]
+      }
+    });
+    const weeklyRefundWebhook = await webhook(baseUrl, weeklyPurchase.payload.order_id);
+    assert.equal(weeklyRefundWebhook.response.status, 200);
+    assert.equal(weeklyRefundWebhook.payload.reversed, true);
+    const refundedWeeklyOrder = readOrder(weeklyPlanUser, weeklyRecoveredOrder.pedido_id);
+    assert.equal(refundedWeeklyOrder.pagamento_pendente, true);
+    assert.equal(refundedWeeklyOrder.motivo_pagamento_pendente, "plano_estornado");
+    assert.equal(readOrderStatus(weeklyPlanUser, weeklyRecoveredOrder.pedido_id), "erro");
+
+    refundedWeeklyOrder.pagamento_pendente = false;
+    refundedWeeklyOrder.valor_pendente = 0;
+    refundedWeeklyOrder.status = "novo";
+    refundedWeeklyOrder.aprovado_cliente = true;
+    writeJson(orderPath(weeklyPlanUser, weeklyRecoveredOrder.pedido_id), refundedWeeklyOrder);
+    fs.writeFileSync(
+      path.join(path.dirname(orderPath(weeklyPlanUser, weeklyRecoveredOrder.pedido_id)), "resultado_final.png"),
+      tinyPng
+    );
+    fs.writeFileSync(
+      path.join(path.dirname(orderPath(weeklyPlanUser, weeklyRecoveredOrder.pedido_id)), "status.txt"),
+      "novo",
+      "utf8"
+    );
+    const galleryAfterLocalUnblock = await api(
+      baseUrl,
+      "GET",
+      "/me/time/galeria",
+      { token: tokenFor(weeklyPlanUser) }
+    );
+    assert.equal(galleryAfterLocalUnblock.response.status, 200);
+    assert.equal(
+      galleryAfterLocalUnblock.payload.galeria.some(
+        item => item.pedido_id === weeklyRecoveredOrder.pedido_id
+      ),
+      false
+    );
+    const unblockedAgain = readOrder(weeklyPlanUser, weeklyRecoveredOrder.pedido_id);
+    unblockedAgain.pagamento_pendente = false;
+    unblockedAgain.valor_pendente = 0;
+    unblockedAgain.status = "novo";
+    writeJson(orderPath(weeklyPlanUser, weeklyRecoveredOrder.pedido_id), unblockedAgain);
+    const refundedGalleryImage = await api(
+      baseUrl,
+      "GET",
+      `/me/time/galeria/${weeklyRecoveredOrder.pedido_id}/imagem`,
+      { token: tokenFor(weeklyPlanUser) }
+    );
+    assert.equal(refundedGalleryImage.response.status, 403);
+    const weeklyBotToken = tokenFor("15991120599");
+    const botAfterWeeklyRefund = await api(baseUrl, "GET", "/bot/pedidos/novos", {
+      token: weeklyBotToken
+    });
+    assert.equal(botAfterWeeklyRefund.response.status, 200);
+    assert.equal(
+      botAfterWeeklyRefund.payload.pedidos.some(
+        item => item.id === weeklyRecoveredOrder.pedido_id
+      ),
+      false
+    );
+    assert.equal(readOrder(weeklyPlanUser, weeklyRecoveredOrder.pedido_id).pagamento_pendente, true);
+    assert.equal(readOrderStatus(weeklyPlanUser, weeklyRecoveredOrder.pedido_id), "erro");
+    const refundedWeeklyZip = await api(
+      baseUrl,
+      "GET",
+      `/bot/pedidos/${weeklyRecoveredOrder.pedido_id}/zip`,
+      { token: weeklyBotToken }
+    );
+    assert.equal(refundedWeeklyZip.response.status, 403);
 
     const support = await createResult(baseUrl, supportUser, "com_suporte", "support_balance");
     assert.equal(support.valor_final, 8);
@@ -1254,6 +1743,18 @@ async function run() {
       readOrder(legacyPaymentsUser, legacyPaymentOrderId).pagamento_info.payment_id,
       legacyPaymentId
     );
+    const legacyChargebackNotice = await webhook(
+      baseUrl,
+      "CASE-LEGACY-1",
+      "topic_chargebacks_wh",
+      { data: { id: "CASE-LEGACY-1", payment_id: legacyPaymentId } }
+    );
+    assert.equal(legacyChargebackNotice.response.status, 200);
+    assert.equal(legacyChargebackNotice.payload.ignored, true);
+    assert.equal(
+      legacyChargebackNotice.payload.reason,
+      "legacy_chargeback_requires_authoritative_case_lookup"
+    );
 
     const botOrders = await api(baseUrl, "GET", "/bot/pedidos/novos", { token: botToken });
     assert.equal(botOrders.response.status, 200);
@@ -1314,6 +1815,79 @@ async function run() {
     assert.ok(Buffer.isBuffer(download.payload));
     assert.ok(download.payload.length > 10);
 
+    const unavailableWeeklyPurchase = await api(
+      baseUrl,
+      "POST",
+      "/me/plano-semanal/gerar-pix",
+      {
+        token: tokenFor(weeklyUnavailableWebhookUser),
+        headers: { "X-Idempotency-Key": "weekly-plan-db-unavailable-0001" },
+        body: { plano_id: "semanal_1" }
+      }
+    );
+    assert.equal(unavailableWeeklyPurchase.response.status, 200);
+    const unavailableWeeklyGatewayOrder = gateway.created.get(
+      String(unavailableWeeklyPurchase.payload.order_id)
+    );
+    gateway.approved.set(String(unavailableWeeklyPurchase.payload.order_id), {
+      ...unavailableWeeklyGatewayOrder,
+      status: "processed",
+      transactions: {
+        payments: [{
+          ...unavailableWeeklyGatewayOrder.transactions.payments[0],
+          status: "processed",
+          status_detail: "accredited"
+        }]
+      }
+    });
+
+    const legacyBypassOrder = await createResult(
+      baseUrl,
+      legacyBypassUser,
+      "economica",
+      "legacy_bypass_closed_plan_db"
+    );
+    const legacyBypassPix = await generatePix(
+      baseUrl,
+      legacyBypassUser,
+      legacyBypassOrder.pedido_id
+    );
+    assert.equal(legacyBypassPix.response.status, 200);
+    assert.equal(
+      __mpOrdersV2Test.orderPertenceLocalmenteAoMpOrdersV2(legacyBypassPix.payload.order_id),
+      true
+    );
+    const legacyBypassLedger = readJson(MP_ORDERS_V2_FILE, {});
+    delete legacyBypassLedger.by_order_id[String(legacyBypassPix.payload.order_id)];
+    writeJson(MP_ORDERS_V2_FILE, legacyBypassLedger);
+    assert.equal(
+      __mpOrdersV2Test.orderPertenceLocalmenteAoMpOrdersV2(legacyBypassPix.payload.order_id),
+      false
+    );
+    const legacyBypassGatewayOrder = gateway.created.get(String(legacyBypassPix.payload.order_id));
+    gateway.approved.set(String(legacyBypassPix.payload.order_id), {
+      ...legacyBypassGatewayOrder,
+      status: "processed",
+      transactions: {
+        payments: [{
+          ...legacyBypassGatewayOrder.transactions.payments[0],
+          status: "processed",
+          status_detail: "accredited"
+        }]
+      }
+    });
+    await __weeklyPlansTest.closePool();
+    weeklyPlanPoolClosed = true;
+    const unavailableWeeklyWebhook = await webhook(
+      baseUrl,
+      unavailableWeeklyPurchase.payload.order_id
+    );
+    assert.equal(unavailableWeeklyWebhook.response.status, 503);
+    assert.equal(unavailableWeeklyWebhook.payload.retryable, true);
+    const legacyBypassWebhook = await webhook(baseUrl, legacyBypassPix.payload.order_id);
+    assert.equal(legacyBypassWebhook.response.status, 200, JSON.stringify(legacyBypassWebhook.payload));
+    assert.equal(readOrderStatus(legacyBypassUser, legacyBypassOrder.pedido_id), "novo");
+
     console.log(`OK - pagamentos no modo ${APP_MODE ? "app Android/TWA" : "navegador"}`);
     console.log("OK - compra de saldo por PIX e checkout aceita o app sem antecipar credito");
     console.log("OK - pagamentos exigem autenticacao e acesso ao proprio pedido");
@@ -1341,8 +1915,12 @@ async function run() {
     console.log("OK - modalidade invalida e adulteracao de preco sao rejeitadas/ignoradas");
     console.log("OK - worker nao acessa pedido economico pendente e conclui apos pagamento");
     console.log("OK - historico grava R$4 e bloqueia ajuste personalizado");
+    console.log("OK - plano semanal preserva a cota e recupera falha de gravacao sem pedido gratis");
+    console.log("OK - plano rejeita valor efetivamente pago divergente e bloqueia pedidos apos estorno");
+    console.log("OK - webhook de plano pede retry e PIX legado segue ativo com banco de planos indisponivel");
   } finally {
     await new Promise(resolve => server.close(resolve));
+    if (!weeklyPlanPoolClosed) await __weeklyPlansTest.closePool();
   }
 }
 

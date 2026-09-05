@@ -128,7 +128,7 @@ test("migration 008 runs twice and protects invitation, notification and idempot
   try {
     const adapter = pool(database);
     const applied = await migrate({ pool: adapter });
-    assert.equal(applied.at(-1), "016_match_communication.sql");
+    assert.equal(applied.at(-1), "017_weekly_image_plans.sql");
     assert.deepEqual(await migrate({ pool: adapter }), []);
     const tables = await database.query(`
       SELECT table_name FROM information_schema.tables

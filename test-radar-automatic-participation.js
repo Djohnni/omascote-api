@@ -45,7 +45,7 @@ test("active legacy accounts join automatically exactly once without optional pr
   const database = new PGlite();
   const pool = poolFor(database);
   try {
-    assert.equal((await migrate({ pool })).at(-1), "016_match_communication.sql");
+    assert.equal((await migrate({ pool })).at(-1), "017_weekly_image_plans.sql");
     assert.deepEqual(await migrate({ pool }), []);
     const repository = createRadarIdentityRepository({ pool });
     const service = createRadarIdentityService({
