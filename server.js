@@ -15,6 +15,19 @@ const productAuditService = require("./src/orders/product-audit.service");
 const resultScenarioRegistry = require("./src/orders/result-scenario-registry");
 const uploadContentHash = require("./src/orders/upload-content-hash");
 const billingService = require("./src/billing/billing.service");
+const { createWeeklyPlansRepository } = require("./src/plans/weekly-plans.repository");
+const {
+  WeeklyPlanError,
+  createWeeklyPlansService
+} = require("./src/plans/weekly-plans.service");
+const {
+  isWeeklyPlanEligibleProduct
+} = require("./src/plans/weekly-plans.catalog");
+const {
+  weeklyPlanPendingOperational,
+  weeklyPlansOperationallyRequired,
+  weeklyPlansReadiness
+} = require("./src/plans/weekly-plans.readiness");
 const {
   DownloadTicketStore,
   attachmentContentDisposition,
@@ -29,6 +42,7 @@ const { createCorsOriginAllowlist } = require("./src/config/cors");
 const { readJwtSecret } = require("./src/config/auth");
 const { getBuildInfo } = require("./src/config/build-info");
 const { createPool, checkDatabase, getMigrationStatus } = require("./src/db/pool");
+const { migrate } = require("./src/db/migrate");
 const { createRadarObservability } = require("./src/observability/radar-observability");
 const { createHealthRouter } = require("./src/health/health.routes");
 const { clientIp: resolveClientIp } = require("./src/security/client-ip");
@@ -91,6 +105,20 @@ function criarArquivoZip(options = {}) {
 
 const app = express();
 
+function safeAsyncRoute(handler) {
+  return function wrappedAsyncRoute(req, res, next) {
+    return Promise.resolve(handler(req, res, next)).catch(error => {
+      console.error("[async_route] falha_nao_tratada", {
+        method: req.method,
+        path: req.path,
+        erro: error?.code || error?.message || "erro"
+      });
+      if (res.headersSent) return next(error);
+      return res.status(500).json({ ok: false, error: "Erro interno" });
+    });
+  };
+}
+
 // ===== CONFIG BÁSICA =====
 const PORT = process.env.PORT || 3000;
 const JWT_SECRET = readJwtSecret();
@@ -139,6 +167,19 @@ const MP_ORDERS_V2_TIMEOUT_MS = Math.min(
 const MP_ORDERS_V2_CREATE_ENABLED = !["0", "false", "off"].includes(
   String(process.env.MP_ORDERS_V2_CREATE_ENABLED || "true").trim().toLowerCase()
 );
+const WEEKLY_PLANS_REQUESTED = ["1", "true", "on", "yes"].includes(
+  String(process.env.WEEKLY_PLANS_ENABLED || "").trim().toLowerCase()
+);
+const WEEKLY_PLAN_ENTITLEMENTS_ENABLED = Boolean(radarPool);
+const WEEKLY_PLAN_PAYMENT_PROCESSING_ENABLED = Boolean(radarPool && MP_ACCESS_TOKEN);
+const WEEKLY_PLAN_WEBHOOK_PROCESSING_ENABLED = Boolean(
+  WEEKLY_PLAN_PAYMENT_PROCESSING_ENABLED && MP_WEBHOOK_SECRET
+);
+const WEEKLY_PLAN_PURCHASES_ENABLED = Boolean(
+  WEEKLY_PLANS_REQUESTED &&
+  WEEKLY_PLAN_WEBHOOK_PROCESSING_ENABLED &&
+  MP_ORDERS_V2_CREATE_ENABLED
+);
 const TEMPO_ESTIMADO_FILE = path.join(DATA_DIR, "tempo_estimado.json");
 const ONLINE_FILE = path.join(DATA_DIR, "usuarios_online.json");
 const SUPORTE_ABERTAS_FILE = path.join(DATA_DIR, "suporte_conversas_abertas.json");
@@ -182,6 +223,25 @@ const authBrowserHandoffs = new BrowserHandoffStore({
   issueIpLimit: process.env.AUTH_BROWSER_HANDOFF_ISSUE_IP_LIMIT || 10,
   redeemIpLimit: process.env.AUTH_BROWSER_HANDOFF_REDEEM_IP_LIMIT || 20,
   identifierSecret: JWT_SECRET
+});
+
+const weeklyPlansRepository = radarPool
+  ? createWeeklyPlansRepository({ pool: radarPool })
+  : null;
+const weeklyPlansService = createWeeklyPlansService({
+  entitlementsEnabled: WEEKLY_PLAN_ENTITLEMENTS_ENABLED,
+  purchasesEnabled: WEEKLY_PLAN_PURCHASES_ENABLED,
+  paymentProcessingEnabled: WEEKLY_PLAN_PAYMENT_PROCESSING_ENABLED,
+  repository: weeklyPlansRepository,
+  provider: WEEKLY_PLAN_PAYMENT_PROCESSING_ENABLED ? {
+    createOrder: criarOrderPlanoSemanalMercadoPago,
+    getOrder: obterOrderMercadoPagoV2,
+    findOrderByExternalReference: buscarOrderPlanoSemanalPorReferencia,
+    cancelOrder: cancelarOrderPlanoSemanalMercadoPago,
+    normalizeState: normalizarEstadoPlanoSemanalMercadoPago,
+    extractPix: extrairPixPlanoSemanalMercadoPago
+  } : null,
+  onPaymentReversed: bloquearPedidosPlanoEstornados
 });
 
 const CLIENTES_TESTE = [
@@ -732,6 +792,19 @@ function writeMpOrdersV2(ledger) {
   writeJsonAtomic(MP_ORDERS_V2_FILE, ledger);
 }
 
+function orderPertenceLocalmenteAoMpOrdersV2(orderId) {
+  const id = String(orderId || "").trim();
+  if (!id) return false;
+  const ledger = readMpOrdersV2();
+  const attemptId = String(ledger.by_order_id?.[id] || "");
+  const attempt = attemptId ? ledger.attempts?.[attemptId] : null;
+  return Boolean(
+    attempt &&
+    attempt.version === MP_ORDERS_V2_VERSION &&
+    String(attempt.mp_order_id || "") === id
+  );
+}
+
 function sanitizarEventoMercadoPago(value, depth = 0) {
   if (depth > 8) return "[limite]";
   if (Array.isArray(value)) {
@@ -874,6 +947,17 @@ function getCustoPedidoComAdicionais(categoria, cliente, source = {}) {
     ? CONTRATACAO_CAMISETA_ADICIONAL
     : 0;
   return normalizarValorFinanceiro(base + adicional);
+}
+
+function pedidoElegivelPlanoSemanal(categoria, cliente, source = {}) {
+  return isWeeklyPlanEligibleProduct(categoria, {
+    hasPaidAddon: categoria === "contratacao" && contratacaoTemCamiseta(source),
+    priceCents: valorFinanceiroEmCentavos(getCustoPedidoComAdicionais(
+      categoria,
+      cliente,
+      source
+    ))
+  });
 }
 
 function validarContratoContratacao({ fields = {}, files = {}, requireVersion = false } = {}) {
@@ -1103,6 +1187,15 @@ function criarErroMpOrdersV2(code, message, options = {}) {
   return error;
 }
 
+function codigoErroMercadoPago(payload = {}) {
+  return String(
+    payload?.error ||
+    payload?.code ||
+    payload?.errors?.[0]?.code ||
+    ""
+  ).trim().toLowerCase();
+}
+
 async function requestMercadoPagoOrdersV2(endpoint, options = {}) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), MP_ORDERS_V2_TIMEOUT_MS);
@@ -1132,16 +1225,33 @@ async function requestMercadoPagoOrdersV2(endpoint, options = {}) {
   }
 
   let payload = {};
+  let parsed = false;
   try {
     payload = await response.json();
+    parsed = true;
   } catch {}
 
+  if (response.ok && !parsed) {
+    throw criarErroMpOrdersV2(
+      "MP_INVALID_RESPONSE",
+      "O Mercado Pago retornou uma resposta incompleta.",
+      { status: 503, retryable: true }
+    );
+  }
+
   if (!response.ok) {
+    const providerCode = codigoErroMercadoPago(payload);
     const retryable = response.status === 408 ||
+      response.status === 409 ||
+      response.status === 423 ||
       response.status === 429 ||
       response.status >= 500;
     throw criarErroMpOrdersV2(
-      "MP_HTTP_ERROR",
+      providerCode === "idempotency_key_already_used"
+        ? "MP_IDEMPOTENCY_KEY_ALREADY_USED"
+        : providerCode === "resource_locked"
+          ? "MP_RESOURCE_LOCKED"
+          : "MP_HTTP_ERROR",
       retryable
         ? "O Mercado Pago nao conseguiu concluir a operacao agora."
         : "O Mercado Pago recusou a operacao.",
@@ -1150,7 +1260,7 @@ async function requestMercadoPagoOrdersV2(endpoint, options = {}) {
         retryable,
         detalhe: {
           http_status: response.status,
-          error: payload?.error || payload?.message || ""
+          error: providerCode || payload?.message || ""
         }
       }
     );
@@ -1175,13 +1285,70 @@ async function obterOrderMercadoPagoV2(orderId) {
   return resultado.payload;
 }
 
+async function buscarOrderPlanoSemanalPorReferencia({ attempt }) {
+  const externalReference = String(attempt?.externalReference || "").trim();
+  const createdAt = new Date(attempt?.createdAt || "");
+  if (!externalReference || !Number.isFinite(createdAt.getTime())) return null;
+
+  const query = new URLSearchParams({
+    begin_date: new Date(createdAt.getTime() - 10 * 60 * 1000).toISOString(),
+    end_date: new Date(Math.max(
+      Date.now() + 5 * 60 * 1000,
+      createdAt.getTime() + 2 * 60 * 60 * 1000
+    )).toISOString(),
+    external_reference: externalReference,
+    type: "online",
+    page: "1",
+    page_size: "20",
+    sort_by: "created_date",
+    sort_order: "desc"
+  });
+  const resultado = await requestMercadoPagoOrdersV2(`/v1/orders?${query.toString()}`);
+  const matches = (Array.isArray(resultado.payload?.data) ? resultado.payload.data : [])
+    .filter(order => String(order?.external_reference || "").trim() === externalReference);
+  if (matches.length === 0) return null;
+  if (matches.length > 1) {
+    throw criarErroMpOrdersV2(
+      "MP_ORDER_SEARCH_AMBIGUOUS",
+      "Mais de uma Order foi encontrada para a mesma referencia.",
+      { status: 503, retryable: true }
+    );
+  }
+  return matches[0];
+}
+
+async function cancelarOrderPlanoSemanalMercadoPago({ orderId, idempotencyKey }) {
+  const id = String(orderId || "").trim();
+  if (!id) {
+    throw criarErroMpOrdersV2("ORDER_ID_AUSENTE", "Order sem identificador.", {
+      status: 400
+    });
+  }
+  try {
+    const resultado = await requestMercadoPagoOrdersV2(
+      `/v1/orders/${encodeURIComponent(id)}/cancel`,
+      {
+        method: "POST",
+        headers: { "X-Idempotency-Key": String(idempotencyKey || "") }
+      }
+    );
+    return resultado.payload;
+  } catch (error) {
+    const status = Number(error?.detalhe?.http_status || 0);
+    if ([400, 409].includes(status)) {
+      return obterOrderMercadoPagoV2(id);
+    }
+    throw error;
+  }
+}
+
 function normalizarEstadoOrderV2(order) {
   const pagamento = obterPagamentoDaOrderMercadoPago(order);
   const orderStatus = String(order?.status || "").trim().toLowerCase();
   const paymentStatus = String(pagamento?.status || "").trim().toLowerCase();
-  const statusDetail = String(
-    pagamento?.status_detail || order?.status_detail || ""
-  ).trim().toLowerCase();
+  const orderStatusDetail = String(order?.status_detail || "").trim().toLowerCase();
+  const paymentStatusDetail = String(pagamento?.status_detail || "").trim().toLowerCase();
+  const statusDetail = paymentStatusDetail || orderStatusDetail;
   const countryCode = String(order?.country_code || "").trim().toUpperCase();
   const moedaInformada = String(
     pagamento?.currency_id ||
@@ -1197,8 +1364,41 @@ function normalizarEstadoOrderV2(order) {
     "canceled",
     "expired",
     "failed",
-    "rejected"
+    "rejected",
+    "refunded",
+    "charged_back"
   ]);
+  const paymentMethodId = String(
+    pagamento?.payment_method?.id || pagamento?.payment_method_id || ""
+  ).trim().toLowerCase();
+  const paymentMethodType = String(
+    pagamento?.payment_method?.type || pagamento?.payment_type_id || ""
+  ).trim().toLowerCase();
+  const refunds = Array.isArray(order?.transactions?.refunds)
+    ? order.transactions.refunds
+    : [];
+  const refundedAmount = Math.max(
+    normalizarValorFinanceiro(order?.refunded_amount),
+    normalizarValorFinanceiro(pagamento?.refunded_amount)
+  );
+  const hasProcessedRefund = refunds.some(refund =>
+    ["processed", "refunded", "approved"].includes(
+      String(refund?.status || "").trim().toLowerCase()
+    ) && normalizarValorFinanceiro(refund?.amount) > 0
+  );
+  const reversalFields = [
+    paymentStatus,
+    orderStatus,
+    paymentStatusDetail,
+    orderStatusDetail
+  ];
+  const reversalStatus = reversalFields.includes("charged_back")
+    ? "charged_back"
+    : reversalFields.some(value => value === "refunded" || value === "partially_refunded") ||
+        refundedAmount > 0 ||
+        hasProcessedRefund
+      ? "refunded"
+      : "";
 
   return {
     order_id: String(order?.id || ""),
@@ -1206,12 +1406,19 @@ function normalizarEstadoOrderV2(order) {
     order_status: orderStatus,
     payment_status: paymentStatus,
     status_detail: statusDetail,
+    order_status_detail: orderStatusDetail,
+    payment_status_detail: paymentStatusDetail,
     total_amount: normalizarValorFinanceiro(order?.total_amount),
+    total_paid_amount: normalizarValorFinanceiro(order?.total_paid_amount),
     payment_amount: normalizarValorFinanceiro(pagamento?.amount),
+    payment_paid_amount: normalizarValorFinanceiro(pagamento?.paid_amount),
+    payment_refunded_amount: refundedAmount,
+    payment_method_id: paymentMethodId,
+    payment_method_type: paymentMethodType,
     currency,
     country_code: countryCode,
     external_reference: String(order?.external_reference || ""),
-    aprovado:
+    aprovado: !reversalStatus &&
       orderStatus === "processed" &&
       paymentStatus === "processed" &&
       statusDetail === "accredited",
@@ -1222,7 +1429,9 @@ function normalizarEstadoOrderV2(order) {
       ? paymentStatus
       : terminalStatuses.has(orderStatus)
         ? orderStatus
-        : ""
+        : "",
+    reversed: Boolean(reversalStatus),
+    reversal_status: reversalStatus
   };
 }
 
@@ -1690,6 +1899,89 @@ function extrairDadosPixOrderV2(order) {
     qr_code_base64: String(metodo?.qr_code_base64 || ""),
     ticket_url: String(metodo?.ticket_url || "")
   };
+}
+
+function normalizarEstadoPlanoSemanalMercadoPago(order) {
+  const estado = normalizarEstadoOrderV2(order);
+  return {
+    orderId: estado.order_id,
+    paymentId: estado.payment_id,
+    orderStatus: estado.order_status,
+    paymentStatus: estado.payment_status,
+    statusDetail: estado.status_detail,
+    totalAmount: estado.total_amount,
+    totalPaidAmount: estado.total_paid_amount,
+    paymentAmount: estado.payment_amount,
+    paymentPaidAmount: estado.payment_paid_amount,
+    paymentMethodId: estado.payment_method_id,
+    paymentMethodType: estado.payment_method_type,
+    currency: estado.currency,
+    externalReference: estado.external_reference,
+    approved: estado.aprovado,
+    terminal: estado.terminal,
+    terminalStatus: estado.terminal_status,
+    reversed: estado.reversed,
+    reversalStatus: estado.reversal_status
+  };
+}
+
+function extrairPixPlanoSemanalMercadoPago(order) {
+  const pix = extrairDadosPixOrderV2(order);
+  return {
+    orderId: pix.order_id,
+    paymentId: pix.payment_id,
+    copyPaste: pix.pix_copia_cola,
+    qrCodeBase64: pix.qr_code_base64,
+    ticketUrl: pix.ticket_url
+  };
+}
+
+async function criarOrderPlanoSemanalMercadoPago({ attempt }) {
+  if (!MP_ORDERS_V2_CREATE_ENABLED) {
+    throw new WeeklyPlanError(
+      "WEEKLY_PLAN_PAYMENTS_PAUSED",
+      503,
+      "A geracao de novos pagamentos esta temporariamente pausada.",
+      { retryable: true }
+    );
+  }
+
+  const valor = (attempt.expectedAmountCents / 100).toFixed(2);
+  const payerLocal = crypto
+    .createHash("sha256")
+    .update(String(attempt.customerKey))
+    .digest("hex")
+    .slice(0, 24);
+  const payerEmail = MP_SANDBOX_MODE
+    ? "test_user_br@testuser.com"
+    : `cliente-${payerLocal}@omascote.com.br`;
+  const payload = {
+    type: "online",
+    processing_mode: "automatic",
+    total_amount: valor,
+    external_reference: attempt.externalReference,
+    payer: { email: payerEmail },
+    transactions: {
+      payments: [{
+        amount: valor,
+        expiration_time: "PT30M",
+        payment_method: { id: "pix", type: "bank_transfer" }
+      }]
+    }
+  };
+  const created = await requestMercadoPagoOrdersV2("/v1/orders", {
+    method: "POST",
+    headers: { "X-Idempotency-Key": attempt.idempotencyKey },
+    body: JSON.stringify(payload)
+  });
+  if (!String(created.payload?.id || "").trim()) {
+    throw criarErroMpOrdersV2(
+      "MP_ORDER_CREATE_AMBIGUOUS",
+      "O Mercado Pago nao confirmou o identificador da Order.",
+      { status: 503, retryable: true }
+    );
+  }
+  return created.payload;
 }
 
 function aplicarDadosPixOrderV2(attempt, order, ledger) {
@@ -2332,14 +2624,21 @@ function pedidoEconomicoAguardandoPagamento(pedido) {
 }
 
 function liberarPedidoEconomicoAposPagamento(base, pedido) {
+  const regularizacaoPlano = pedido?.motivo_pagamento_pendente === "plano_estornado";
   if (
     (
+      !regularizacaoPlano &&
       pedido?.assistente_lote !== true &&
       normalizarModalidadeCriacao(pedido?.modalidade_criacao) !== MODALIDADE_CRIACAO_ECONOMICA
     ) ||
     pedido?.pagamento_pendente === true
   ) {
     return false;
+  }
+  if (regularizacaoPlano) {
+    pedido.plano_estorno_regularizado_em = new Date().toISOString();
+    pedido.status = orderStatus.ORDER_STATUS.NOVO;
+    writePedidoAtomic(base, pedido);
   }
   writeOrderStatus(base, orderStatus.ORDER_STATUS.NOVO);
   return true;
@@ -3076,9 +3375,7 @@ function criarPedidoFotoJogosBatch(req, item) {
       }
     };
 
-    try {
-      criarPedidoHandler(item.productId)(subReq, res);
-    } catch (err) {
+    Promise.resolve(criarPedidoHandler(item.productId)(subReq, res)).catch(err => {
       resolve({
         status: Number(err?.status || 500),
         payload: {
@@ -3086,7 +3383,7 @@ function criarPedidoFotoJogosBatch(req, item) {
           error: err?.message || "Falha ao criar pedido."
         }
       });
-    }
+    });
   });
 }
 
@@ -3340,6 +3637,9 @@ function buildOrderResponsePayloadFromItem(item, extra = {}) {
     modalidadeCriacao
   );
   const valorOriginal = Number(pedido.valor_original || valorProduto || 0);
+  const valorFinal = Object.prototype.hasOwnProperty.call(pedido, "valor_final")
+    ? Number(pedido.valor_final || 0)
+    : Number(pedido.valor_pendente || valorPago || valorOriginal || 0);
 
   return {
     ok: true,
@@ -3351,9 +3651,13 @@ function buildOrderResponsePayloadFromItem(item, extra = {}) {
     desconto: descontoInfo,
     valor_original: valorOriginal,
     valor_desconto: Number(pedido.valor_desconto || 0),
-    valor_final: Number(pedido.valor_final || pedido.valor_pendente || valorPago || valorOriginal || 0),
+    valor_final: valorFinal,
     modalidade_criacao: modalidadeCriacao,
     suporte_personalizado_incluido: modalidadeCriacao !== MODALIDADE_CRIACAO_ECONOMICA,
+    coberto_pelo_plano: pedido.pagamento_metodo === "plano_semanal",
+    plano_semanal: pedido.pagamento_metodo === "plano_semanal"
+      ? pedido.plano_semanal || null
+      : null,
     status: pedido.status || "",
     criado_em: pedido.criado_em || item?.criado_em || "",
     ...scenarioMeta,
@@ -3371,6 +3675,239 @@ function writeSaldoTransacoes(lista) {
 
 function getClienteUserId(cliente, whatsapp) {
   return String(cliente?.cliente_id || cliente?.id || whatsapp || "").trim();
+}
+
+function getWeeklyPlanCustomerKey(cliente) {
+  const perfilId = normalizarPerfilId(cliente?.perfil_id);
+  return perfilId ? `profile:${perfilId}` : "";
+}
+
+async function weeklyPlansRequiredForOperations() {
+  const customers = readClientes();
+  const requiredByLocalState = weeklyPlansOperationallyRequired({
+    requested: WEEKLY_PLANS_REQUESTED,
+    customers
+  });
+  if (requiredByLocalState || !weeklyPlansRepository) return requiredByLocalState;
+  try {
+    const persistedObligations = await weeklyPlansRepository.hasOperationalRecords({
+      now: new Date()
+    });
+    return weeklyPlansOperationallyRequired({
+      requested: false,
+      customers: {},
+      persistedObligations
+    });
+  } catch (error) {
+    if (error?.code === "42P01") return false;
+    throw error;
+  }
+}
+
+function isWeeklyPlanProviderOrder(order) {
+  return /^omplan_[0-9a-f]{24}$/.test(String(order?.external_reference || "").trim());
+}
+
+function bloquearPedidoPlanoEstornado(orderId, reason = "refunded", at = new Date()) {
+  const base = getPedidoBaseGlobal(String(orderId || ""));
+  if (!base) return false;
+  const pedido = readPedido(base);
+  if (!pedido || pedido.pagamento_metodo !== "plano_semanal") return false;
+
+  const blockedAt = at instanceof Date ? at.toISOString() : new Date(at).toISOString();
+  const normalizedReason = String(reason || "refunded").slice(0, 40);
+  const pendingValue = normalizarValorFinanceiro(
+    pedido.valor_coberto_plano || pedido.valor_original || pedido.valor_com_suporte || 0
+  );
+  pedido.pagamento_pendente = true;
+  pedido.valor_pendente = pendingValue;
+  pedido.valor_final = pendingValue;
+  pedido.motivo_pagamento_pendente = "plano_estornado";
+  pedido.payment_flow_version = MP_ORDERS_V2_VERSION;
+  pedido.payment_flow_created_at = pedido.payment_flow_created_at || blockedAt;
+  pedido.plano_pagamento_estornado = true;
+  pedido.plano_estorno_motivo = normalizedReason;
+  pedido.plano_estornado_em = pedido.plano_estornado_em || blockedAt;
+  pedido.status = orderStatus.ORDER_STATUS.ERRO;
+  pedido.mensagens_cliente = Array.isArray(pedido.mensagens_cliente)
+    ? pedido.mensagens_cliente
+    : [];
+  if (!pedido.mensagens_cliente.some(message => message?.tipo === "plano_estornado")) {
+    pedido.mensagens_cliente.push({
+      id: `msg_plano_estornado_${String(pedido.plano_semanal?.uso_id || orderId)}`,
+      tipo: "plano_estornado",
+      titulo: "Pagamento do plano estornado",
+      texto: "Este pedido foi pausado. Para continuar, regularize o pagamento da imagem.",
+      lida: false,
+      criado_em: blockedAt
+    });
+  }
+  writePedidoAtomic(base, pedido);
+  writeOrderStatus(base, orderStatus.ORDER_STATUS.ERRO);
+  return true;
+}
+
+async function bloquearPedidosPlanoEstornados({ orderIds, reason, at }) {
+  let blocked = 0;
+  for (const orderId of Array.isArray(orderIds) ? orderIds : []) {
+    if (bloquearPedidoPlanoEstornado(orderId, reason, at)) blocked += 1;
+  }
+  return blocked;
+}
+
+async function verificarAutorizacaoPedidoPlano(base, pedido = null) {
+  const current = pedido || readPedido(base);
+  if (!current || current.pagamento_metodo !== "plano_semanal") {
+    return Object.freeze({ ok: true, plan: false });
+  }
+  try {
+    const authorization = await weeklyPlansService.authorizeOrderUsage({
+      orderId: String(current.id || path.basename(base) || "")
+    });
+    const identifiersMatch = authorization.authorized === true &&
+      String(authorization.usageId || "") === String(current.plano_semanal?.uso_id || "") &&
+      String(authorization.subscriptionId || "") === String(current.plano_semanal?.assinatura_id || "");
+    if (identifiersMatch) {
+      return Object.freeze({ ok: true, plan: true, authorization });
+    }
+    bloquearPedidoPlanoEstornado(
+      current.id || path.basename(base),
+      authorization.reason || "authorization_revoked"
+    );
+    return Object.freeze({
+      ok: false,
+      plan: true,
+      temporary: false,
+      reason: authorization.reason || "authorization_revoked"
+    });
+  } catch (error) {
+    return Object.freeze({
+      ok: false,
+      plan: true,
+      temporary: true,
+      reason: error?.code || "weekly_plan_database_unavailable"
+    });
+  }
+}
+
+function weeklyPlanOrderAccessError(res, verification) {
+  if (verification?.temporary) {
+    return res.status(503).json({
+      ok: false,
+      code: "WEEKLY_PLAN_AUTHORIZATION_UNAVAILABLE",
+      error: "Nao foi possivel validar este pedido agora. Tente novamente.",
+      retryable: true
+    });
+  }
+  return res.status(403).json({
+    ok: false,
+    code: "WEEKLY_PLAN_PAYMENT_REVERSED",
+    error: "O pagamento deste plano foi estornado. Regularize a imagem para continuar."
+  });
+}
+
+function ensureWeeklyPlanCustomerKey(clientes, whatsapp) {
+  const cliente = clientes?.[whatsapp];
+  if (!cliente) return "";
+  const existente = getWeeklyPlanCustomerKey(cliente);
+  if (existente) return existente;
+  const perfil = ensurePerfilCliente(clientes, whatsapp);
+  return perfil?.perfil_id ? `profile:${perfil.perfil_id}` : "";
+}
+
+function clearWeeklyPlanPendingFields(cliente, expectedAttemptId = "") {
+  if (!cliente || typeof cliente !== "object") return;
+  const expected = String(expectedAttemptId || "").trim();
+  if (
+    expected &&
+    String(cliente.plano_semanal_tentativa_pendente_id || "") !== expected
+  ) return false;
+  delete cliente.plano_semanal_pagamento_pendente;
+  delete cliente.plano_semanal_tentativa_pendente_id;
+  delete cliente.plano_semanal_pix_expira_em;
+  return true;
+}
+
+function markWeeklyPlanPendingByWhatsapp(whatsapp, pix) {
+  const clientes = readClientes();
+  const cliente = clientes?.[whatsapp];
+  if (!cliente) return false;
+  cliente.plano_semanal_pagamento_pendente = true;
+  cliente.plano_semanal_tentativa_pendente_id = String(pix?.tentativa_id || "");
+  cliente.plano_semanal_pix_expira_em = String(pix?.expira_em || "");
+  clientes[whatsapp] = cliente;
+  writeClientes(clientes);
+  return true;
+}
+
+function clearWeeklyPlanPendingByWhatsapp(whatsapp, attemptId = "") {
+  const clientes = readClientes();
+  const cliente = clientes?.[whatsapp];
+  if (!cliente) return false;
+  if (!clearWeeklyPlanPendingFields(cliente, attemptId)) return false;
+  clientes[whatsapp] = cliente;
+  writeClientes(clientes);
+  return true;
+}
+
+function markWeeklyPlanParticipantByWhatsapp(whatsapp, attemptId = "") {
+  const clientes = readClientes();
+  const cliente = clientes?.[whatsapp];
+  if (!cliente) return false;
+  cliente.plano_semanal_participante = true;
+  cliente.plano_semanal_participante_em =
+    cliente.plano_semanal_participante_em || new Date().toISOString();
+  if (attemptId) clearWeeklyPlanPendingFields(cliente, attemptId);
+  clientes[whatsapp] = cliente;
+  writeClientes(clientes);
+  return true;
+}
+
+function markWeeklyPlanParticipantByCustomerKey(customerKey, attemptId = "") {
+  const perfilId = String(customerKey || "").startsWith("profile:")
+    ? String(customerKey).slice("profile:".length)
+    : "";
+  if (!perfilId) return false;
+  const clientes = readClientes();
+  const entry = Object.entries(clientes).find(([, cliente]) =>
+    normalizarPerfilId(cliente?.perfil_id) === perfilId
+  );
+  if (!entry) return false;
+  const [whatsapp, cliente] = entry;
+  cliente.plano_semanal_participante = true;
+  cliente.plano_semanal_participante_em =
+    cliente.plano_semanal_participante_em || new Date().toISOString();
+  if (attemptId) clearWeeklyPlanPendingFields(cliente, attemptId);
+  clientes[whatsapp] = cliente;
+  writeClientes(clientes);
+  return true;
+}
+
+function clearWeeklyPlanPendingByCustomerKey(customerKey, attemptId = "") {
+  const perfilId = String(customerKey || "").startsWith("profile:")
+    ? String(customerKey).slice("profile:".length)
+    : "";
+  if (!perfilId) return false;
+  const clientes = readClientes();
+  const entry = Object.entries(clientes).find(([, cliente]) =>
+    normalizarPerfilId(cliente?.perfil_id) === perfilId
+  );
+  if (!entry) return false;
+  const [whatsapp, cliente] = entry;
+  if (!clearWeeklyPlanPendingFields(cliente, attemptId)) return false;
+  clientes[whatsapp] = cliente;
+  writeClientes(clientes);
+  return true;
+}
+
+function weeklyPlanErrorResponse(res, error) {
+  const known = error instanceof WeeklyPlanError;
+  return res.status(known ? error.status : 503).json({
+    ok: false,
+    code: known ? error.code : "WEEKLY_PLANS_UNAVAILABLE",
+    error: known ? error.message : "Os planos estao temporariamente indisponiveis.",
+    retryable: known ? error.retryable === true : true
+  });
 }
 
 function findSaldoDebitTransaction(userId, clientRequestId, valor) {
@@ -5730,28 +6267,67 @@ function galeriaItemPublicoResponse(item, perfilSlug = "") {
   };
 }
 
-function listarPedidosGaleriaPerfilCliente(clienteId) {
-  const cliente = String(clienteId || "").trim();
-  if (!cliente) return [];
+async function listarPedidosGaleriaPerfisClientes(clienteIds = []) {
+  const clientes = [...new Set((Array.isArray(clienteIds) ? clienteIds : [])
+    .map(clienteId => String(clienteId || "").trim())
+    .filter(Boolean))];
+  const candidatesByCustomer = new Map(clientes.map(clienteId => [
+    clienteId,
+    listPedidoBasesByWhatsapp(clienteId).filter(pedidoLiberadoParaGaleria)
+  ]));
+  const planCandidates = [...candidatesByCustomer.values()]
+    .flat()
+    .filter(item => item.pedido?.pagamento_metodo === "plano_semanal");
+  if (!planCandidates.length) return candidatesByCustomer;
 
-  return listPedidoBasesByWhatsapp(cliente)
-    .filter(pedidoLiberadoParaGaleria);
+  let authorizations;
+  try {
+    authorizations = await weeklyPlansService.authorizeOrderUsages({
+      orderIds: planCandidates.map(item => item.id)
+    });
+  } catch {
+    return new Map([...candidatesByCustomer.entries()].map(([clienteId, candidates]) => [
+      clienteId,
+      candidates.filter(item => item.pedido?.pagamento_metodo !== "plano_semanal")
+    ]));
+  }
+
+  return new Map([...candidatesByCustomer.entries()].map(([clienteId, candidates]) => [
+    clienteId,
+    candidates.filter(item => {
+      if (item.pedido?.pagamento_metodo !== "plano_semanal") return true;
+      const authorization = authorizations.get(String(item.id));
+      const authorized = authorization?.authorized === true &&
+        String(authorization.usageId || "") === String(item.pedido.plano_semanal?.uso_id || "") &&
+        String(authorization.subscriptionId || "") === String(item.pedido.plano_semanal?.assinatura_id || "");
+      if (!authorized) {
+        bloquearPedidoPlanoEstornado(
+          item.id,
+          authorization?.reason || "usage_not_found"
+        );
+      }
+      return authorized;
+    })
+  ]));
 }
 
-function listarGaleriaPerfilCliente(clienteId, { perfilSlug = "", modo = "privado", limit = 50 } = {}) {
+async function listarPedidosGaleriaPerfilCliente(clienteId) {
+  const cliente = String(clienteId || "").trim();
+  if (!cliente) return [];
+  const porCliente = await listarPedidosGaleriaPerfisClientes([cliente]);
+  return porCliente.get(cliente) || [];
+}
+
+async function listarGaleriaPerfilCliente(clienteId, { perfilSlug = "", modo = "privado", limit = 50 } = {}) {
   const maxItens = Math.max(1, Math.min(Number(limit || 50) || 50, 50));
-  const itens = listarPedidosGaleriaPerfilCliente(clienteId).slice(0, maxItens);
+  const itens = (await listarPedidosGaleriaPerfilCliente(clienteId)).slice(0, maxItens);
 
   return modo === "publico"
     ? itens.map(item => galeriaItemPublicoResponse(item, perfilSlug))
     : itens.map(item => galeriaItemResponse(item, perfilSlug, modo));
 }
 
-function contarArtesPerfilCliente(clienteId) {
-  return listarPedidosGaleriaPerfilCliente(clienteId).length;
-}
-
-function servirImagemGaleriaPedido(req, res, clienteId, pedidoId) {
+async function servirImagemGaleriaPedido(req, res, clienteId, pedidoId) {
   const cliente = String(clienteId || "").trim();
   const id = String(pedidoId || "").trim();
 
@@ -5770,6 +6346,8 @@ function servirImagemGaleriaPedido(req, res, clienteId, pedidoId) {
   if (!pedidoLiberadoParaGaleria(item)) {
     return res.status(403).json({ ok: false, error: "Imagem indisponivel para galeria" });
   }
+  const verification = await verificarAutorizacaoPedidoPlano(base, pedido);
+  if (!verification.ok) return weeklyPlanOrderAccessError(res, verification);
 
   const arquivo = path.join(base, "resultado_final.png");
 
@@ -7108,6 +7686,24 @@ const ORDER_PRE_SCENARIO_V2_COMPAT_PRODUCTS = new Set([
   "escalacao"
 ]);
 const orderCreateDedupe = new Map();
+const customerOrderMutationLocks = new Map();
+
+async function withCustomerOrderMutationLock(customerId, task) {
+  const key = String(customerId || "unknown");
+  const previous = customerOrderMutationLocks.get(key) || Promise.resolve();
+  let releaseCurrent;
+  const current = new Promise(resolve => { releaseCurrent = resolve; });
+  customerOrderMutationLocks.set(key, current);
+  await previous.catch(() => {});
+  try {
+    return await task();
+  } finally {
+    releaseCurrent();
+    if (customerOrderMutationLocks.get(key) === current) {
+      customerOrderMutationLocks.delete(key);
+    }
+  }
+}
 
 function stableOrderJson(value) {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
@@ -7638,7 +8234,20 @@ app.use(createHealthRouter({
   config: radarConfig,
   buildInfo,
   checkDatabase: () => checkDatabase(radarPool),
-  getMigrationStatus: () => getMigrationStatus(radarPool)
+  getMigrationStatus: () => getMigrationStatus(radarPool),
+  additionalReadiness: async () => {
+    const operationallyRequired = await weeklyPlansRequiredForOperations();
+    const database = operationallyRequired
+      ? await checkDatabase(radarPool)
+      : { ok: false, reason: "not_required" };
+    return weeklyPlansReadiness({
+      requested: operationallyRequired,
+      database,
+      paymentProcessingEnabled: WEEKLY_PLAN_PAYMENT_PROCESSING_ENABLED,
+      webhookProcessingEnabled: WEEKLY_PLAN_WEBHOOK_PROCESSING_ENABLED,
+      purchasesEnabled: WEEKLY_PLAN_PURCHASES_ENABLED
+    });
+  }
 }));
 app.use(radarObservability.metricsRouter({
   enabled: radarConfig.metricsEnabled && radarConfig.metricsConfigured,
@@ -8874,7 +9483,7 @@ function carregarPerfilPublicoPorSlug(slugParam) {
   return null;
 }
 
-function carregarPerfilTimePublico(req, res) {
+async function carregarPerfilTimePublico(req, res) {
   try {
     const perfilInfo = carregarPerfilPublicoPorSlug(req.params.slug);
     if (!perfilInfo) {
@@ -8902,7 +9511,7 @@ function carregarPerfilTimePublico(req, res) {
       titulares: (escalacaoPrivada.titulares || []).map(escalacaoPublicaItem),
       reservas: (escalacaoPrivada.reservas || []).map(escalacaoPublicaItem)
     };
-    const galeria = listarGaleriaPerfilCliente(perfilInfo.cliente_id, {
+    const galeria = await listarGaleriaPerfilCliente(perfilInfo.cliente_id, {
       perfilSlug: perfilInfo.perfil.slug,
       modo: "publico",
       limit: 50
@@ -9098,13 +9707,14 @@ function ordenarRankingAtividade(lista, limit = 20) {
     }));
 }
 
-function carregarRankingTimes(req, res) {
+async function carregarRankingTimes(req, res) {
   res.setHeader("Cache-Control", "no-store");
 
   try {
     ensureDir(PERFIS_DIR);
 
     const itens = [];
+    const perfisRanking = [];
     const entradas = fs.readdirSync(PERFIS_DIR, { withFileTypes: true });
 
     for (const entrada of entradas) {
@@ -9129,7 +9739,33 @@ function carregarRankingTimes(req, res) {
       const estatisticas = calcularEstatisticasPerfil(jogos);
       const patrocinadores = readPerfilPatrocinadores(perfilId);
       const divisoes = readPerfilDivisoes(perfilId);
-      const artesTotal = clienteId ? contarArtesPerfilCliente(clienteId) : 0;
+      perfisRanking.push({
+        perfil,
+        clienteId,
+        jogadores,
+        escalacao,
+        jogos,
+        estatisticas,
+        patrocinadores,
+        divisoes
+      });
+    }
+
+    const galeriasPorCliente = await listarPedidosGaleriaPerfisClientes(
+      perfisRanking.map(item => item.clienteId)
+    );
+    for (const item of perfisRanking) {
+      const {
+        perfil,
+        clienteId,
+        jogadores,
+        escalacao,
+        jogos,
+        estatisticas,
+        patrocinadores,
+        divisoes
+      } = item;
+      const artesTotal = clienteId ? (galeriasPorCliente.get(clienteId) || []).length : 0;
       const perfilPublico = perfilPublicoResponse(perfil);
       const atividade = calcularAtividadeRankingTime({
         perfil,
@@ -9260,14 +9896,14 @@ function servirLogoPatrocinadorPublico(req, res) {
   }
 }
 
-function servirImagemGaleriaPublica(req, res) {
+async function servirImagemGaleriaPublica(req, res) {
   try {
     const perfilInfo = carregarPerfilPublicoPorSlug(req.params.slug);
     if (!perfilInfo || !perfilInfo.cliente_id) {
       return res.status(404).json({ ok: false, error: "Perfil publico nao encontrado" });
     }
 
-    return servirImagemGaleriaPedido(req, res, perfilInfo.cliente_id, req.params.pedidoId);
+    return await servirImagemGaleriaPedido(req, res, perfilInfo.cliente_id, req.params.pedidoId);
   } catch (err) {
     console.warn("[perfil_publico] falha ao servir galeria", {
       slug: req.params.slug || "",
@@ -9282,11 +9918,11 @@ function servirImagemGaleriaPublica(req, res) {
   }
 }
 
-app.get("/ranking/times", carregarRankingTimes);
-app.get("/time/:slug", carregarPerfilTimePublico);
+app.get("/ranking/times", safeAsyncRoute(carregarRankingTimes));
+app.get("/time/:slug", safeAsyncRoute(carregarPerfilTimePublico));
 app.get("/time/:slug/escudo/imagem", (req, res) => servirImagemPerfilPublica(req, res, "escudo"));
 app.get("/time/:slug/mascote/imagem", (req, res) => servirImagemPerfilPublica(req, res, "mascote"));
-app.get("/time/:slug/galeria/:pedidoId/imagem", servirImagemGaleriaPublica);
+app.get("/time/:slug/galeria/:pedidoId/imagem", safeAsyncRoute(servirImagemGaleriaPublica));
 app.get("/time/:slug/patrocinadores/:id/logo", servirLogoPatrocinadorPublico);
 
 app.get("/me/perfil", auth, carregarPerfilTimePrivado);
@@ -9298,14 +9934,14 @@ app.get("/me/time/perfil/mascote/imagem", auth, (req, res) => servirImagemPerfil
 app.post("/me/time/perfil/escudo", auth, uploadComErroControlado(uploadPerfilImagem.single("imagem")), uploadImagemPerfilPrivada("escudo"));
 app.post("/me/time/perfil/mascote", auth, uploadComErroControlado(uploadPerfilImagem.single("imagem")), uploadImagemPerfilPrivada("mascote"));
 
-app.get("/me/time/galeria", auth, (req, res) => {
+app.get("/me/time/galeria", auth, safeAsyncRoute(async (req, res) => {
   registrarOnline(req, { ultima_acao: "perfil_time_galeria" });
 
   const clientes = readClientes();
 
   try {
     ensurePerfilCliente(clientes, req.user.whatsapp);
-    const galeria = listarGaleriaPerfilCliente(req.user.whatsapp, {
+    const galeria = await listarGaleriaPerfilCliente(req.user.whatsapp, {
       modo: "privado",
       limit: 50
     });
@@ -9323,11 +9959,11 @@ app.get("/me/time/galeria", auth, (req, res) => {
       error: status === 404 ? "Cliente nao encontrado" : "Falha ao carregar galeria"
     });
   }
-});
+}));
 
-app.get("/me/time/galeria/:pedidoId/imagem", auth, (req, res) => {
-  return servirImagemGaleriaPedido(req, res, req.user.whatsapp, req.params.pedidoId);
-});
+app.get("/me/time/galeria/:pedidoId/imagem", auth, safeAsyncRoute(async (req, res) => {
+  return await servirImagemGaleriaPedido(req, res, req.user.whatsapp, req.params.pedidoId);
+}));
 
 app.get("/me/time/patrocinadores", auth, (req, res) => {
   registrarOnline(req, { ultima_acao: "perfil_time_patrocinadores" });
@@ -11459,6 +12095,95 @@ app.get("/cartas-app/:id/imagem", auth, (req, res) => {
   }
 });
 
+// ===== PLANOS SEMANAIS (RENOVACAO MANUAL VIA PIX) =====
+app.get("/planos-semanais", (req, res) => {
+  res.setHeader("Cache-Control", "public, max-age=60");
+  return res.json({ ok: true, ...weeklyPlansService.catalog() });
+});
+
+app.get("/me/plano-semanal", auth, safeAsyncRoute(async (req, res) => {
+  res.setHeader("Cache-Control", "private, no-store");
+  try {
+    const clientes = readClientes();
+    const cliente = clientes[req.user.whatsapp];
+    if (!cliente) {
+      return res.status(404).json({ ok: false, error: "Cliente nao encontrado" });
+    }
+    const customerKey = ensureWeeklyPlanCustomerKey(clientes, req.user.whatsapp);
+    const planoSemanal = await weeklyPlansService.summary(customerKey);
+    if (planoSemanal.ativa || planoSemanal.proximo_plano) {
+      markWeeklyPlanParticipantByWhatsapp(req.user.whatsapp);
+    }
+    return res.json({ ok: true, plano_semanal: planoSemanal });
+  } catch (error) {
+    return weeklyPlanErrorResponse(res, error);
+  }
+}));
+
+app.post("/me/plano-semanal/gerar-pix", auth, safeAsyncRoute(async (req, res) => {
+  res.setHeader("Cache-Control", "private, no-store");
+  try {
+    const clientes = readClientes();
+    const cliente = clientes[req.user.whatsapp];
+    if (!cliente) {
+      return res.status(404).json({ ok: false, error: "Cliente nao encontrado" });
+    }
+    if (!cliente.ativo) {
+      return res.status(403).json({
+        ok: false,
+        code: "WEEKLY_PLAN_ACCOUNT_INACTIVE",
+        error: "Sua conta precisa estar ativa antes de comprar um plano."
+      });
+    }
+    const customerKey = ensureWeeklyPlanCustomerKey(clientes, req.user.whatsapp);
+    const clientRequestId = getRequestIdempotencyKey(req);
+    const pix = await weeklyPlansService.createPix({
+      customerKey,
+      planCode: req.body?.plano_id,
+      clientRequestId
+    });
+    markWeeklyPlanPendingByWhatsapp(req.user.whatsapp, pix);
+    return res.json({ ok: true, ...pix });
+  } catch (error) {
+    return weeklyPlanErrorResponse(res, error);
+  }
+}));
+
+app.get("/me/plano-semanal/pagamentos/:id", auth, safeAsyncRoute(async (req, res) => {
+  res.setHeader("Cache-Control", "private, no-store");
+  try {
+    const clientes = readClientes();
+    const cliente = clientes[req.user.whatsapp];
+    if (!cliente) {
+      return res.status(404).json({ ok: false, error: "Cliente nao encontrado" });
+    }
+    const customerKey = getWeeklyPlanCustomerKey(cliente);
+    if (!customerKey) {
+      return res.status(404).json({ ok: false, error: "Pagamento nao encontrado" });
+    }
+    const status = await weeklyPlansService.paymentStatus({
+      customerKey,
+      attemptId: String(req.params.id || "").trim()
+    });
+    if (status.confirmado) {
+      markWeeklyPlanParticipantByWhatsapp(req.user.whatsapp, status.tentativa_id);
+    } else if ([
+      "expired",
+      "cancelled",
+      "rejected",
+      "divergent",
+      "failed",
+      "refunded",
+      "charged_back"
+    ].includes(status.status)) {
+      clearWeeklyPlanPendingByWhatsapp(req.user.whatsapp, status.tentativa_id);
+    }
+    return res.json({ ok: true, ...status });
+  } catch (error) {
+    return weeklyPlanErrorResponse(res, error);
+  }
+}));
+
 // ===== MERCADO PAGO =====
 app.post("/comprar-creditos", auth, async (req, res) => {
   try {
@@ -11624,13 +12349,24 @@ app.post("/webhook/mercadopago", async (req, res) => {
     }
 
     const body = req.body || {};
+    const tipoNotificacao = String(body?.type || req.query?.type || "").toLowerCase();
+    const notificacaoChargebackLegada = [
+      "topic_chargebacks_wh",
+      "chargebacks"
+    ].includes(tipoNotificacao);
+    if (notificacaoChargebackLegada) {
+      return res.json({
+        ok: true,
+        ignored: true,
+        reason: "legacy_chargeback_requires_authoritative_case_lookup"
+      });
+    }
     const paymentId =
-      body?.data?.id ||
-      body?.id ||
       req.query?.["data.id"] ||
       req.query?.data_id ||
+      body?.data?.id ||
+      body?.id ||
       req.query?.id;
-    const tipoNotificacao = String(body?.type || req.query?.type || "").toLowerCase();
     const notificacaoOrder =
       tipoNotificacao === "order" ||
       String(paymentId || "").toUpperCase().startsWith("ORD");
@@ -11653,8 +12389,82 @@ app.post("/webhook/mercadopago", async (req, res) => {
       });
 
       try {
+        let prefetchedOrder = null;
+        const legacyOrderKnown = orderPertenceLocalmenteAoMpOrdersV2(paymentId);
+        if (!legacyOrderKnown && MP_ACCESS_TOKEN) {
+          prefetchedOrder = await obterOrderMercadoPagoV2(String(paymentId));
+        }
+
+        if (!legacyOrderKnown && isWeeklyPlanProviderOrder(prefetchedOrder)) {
+          if (!WEEKLY_PLAN_WEBHOOK_PROCESSING_ENABLED) {
+            throw new WeeklyPlanError(
+              "WEEKLY_PLAN_WEBHOOK_UNAVAILABLE",
+              503,
+              "Nao foi possivel processar este pagamento agora.",
+              { retryable: true }
+            );
+          }
+          let planoResultado;
+          try {
+            planoResultado = await weeklyPlansService.processProviderOrder({
+              orderId: String(paymentId),
+              prefetchedOrder
+            });
+          } catch (error) {
+            if (error instanceof WeeklyPlanError) throw error;
+            throw new WeeklyPlanError(
+              "WEEKLY_PLAN_WEBHOOK_UNAVAILABLE",
+              503,
+              "Nao foi possivel processar este pagamento agora.",
+              { retryable: true }
+            );
+          }
+          if (!planoResultado.handled) {
+            throw new WeeklyPlanError(
+              "WEEKLY_PLAN_WEBHOOK_UNAVAILABLE",
+              503,
+              "Nao foi possivel processar este pagamento agora.",
+              { retryable: true }
+            );
+          }
+          if (planoResultado.confirmed && planoResultado.customerKey) {
+            markWeeklyPlanParticipantByCustomerKey(
+              planoResultado.customerKey,
+              planoResultado.attemptId
+            );
+          } else if (
+            planoResultado.customerKey &&
+            (planoResultado.terminal || planoResultado.rejected || planoResultado.reversed)
+          ) {
+            clearWeeklyPlanPendingByCustomerKey(
+              planoResultado.customerKey,
+              planoResultado.attemptId
+            );
+          }
+          return res.json({
+            ok: true,
+            tipo: "plano_semanal",
+            pending: planoResultado.pending === true,
+            confirmed: planoResultado.confirmed === true,
+            terminal: planoResultado.terminal === true,
+            reversed: planoResultado.reversed === true,
+            rejected: planoResultado.rejected === true,
+            reason: planoResultado.reason || ""
+          });
+        }
+
+        if (!legacyOrderKnown && !prefetchedOrder && await weeklyPlansRequiredForOperations()) {
+          throw new WeeklyPlanError(
+            "WEEKLY_PLAN_WEBHOOK_UNAVAILABLE",
+            503,
+            "Nao foi possivel processar este pagamento agora.",
+            { retryable: true }
+          );
+        }
+
         const resultado = await processarOrderV2(paymentId, {
-          source: "webhook"
+          source: "webhook",
+          prefetchedOrder
         });
         return res.json({
           ok: true,
@@ -12148,11 +12958,11 @@ app.post("/webhook/mercadopago", async (req, res) => {
 });
 
 // ===== CRIA PEDIDO =====
-function criarPedidoHandler(categoria) {
-  return (req, res) => {
+function criarPedidoHandlerAsync(categoria) {
+  return async (req, res) => {
     const whatsapp = req.user.whatsapp;
-    const clientes = readClientes();
-    const c = clientes[whatsapp];
+    let clientes = readClientes();
+    let c = clientes[whatsapp];
 
     if (!c || !c.ativo) {
       return res.status(403).json({ ok: false, error: "Mensalidade inativa" });
@@ -12250,6 +13060,73 @@ function criarPedidoHandler(categoria) {
             code: "IDEMPOTENCY_CONFLICT",
             error: "A chave deste pedido ja foi usada com outro conteudo."
           });
+        }
+
+        const replayStatus = readOrderStatus(pedidoExistente.base, "");
+        if (
+          pedidoExistente.pedido?.pagamento_metodo === "plano_semanal" &&
+          (!replayStatus || replayStatus === "preparando_pagamento")
+        ) {
+          let replayReservation;
+          try {
+            const replayCustomerKey = getWeeklyPlanCustomerKey(c);
+            if (!replayCustomerKey) {
+              throw new WeeklyPlanError(
+                "WEEKLY_PLAN_CUSTOMER_KEY_MISSING",
+                503,
+                "Nao foi possivel validar sua cota agora. Tente novamente.",
+                { retryable: true }
+              );
+            }
+            replayReservation = await weeklyPlansService.reserve({
+              customerKey: replayCustomerKey,
+              orderId: String(pedidoExistente.id || pedidoExistente.pedido?.id || ""),
+              clientRequestId: dedupeMeta.clientRequestId || dedupeMeta.key,
+              payloadHash: dedupeMeta.payloadHash,
+              productId: categoria
+            });
+          } catch (error) {
+            return weeklyPlanErrorResponse(res, error);
+          }
+          const sameReservation = replayReservation?.used === true &&
+            String(replayReservation.orderId || "") === String(pedidoExistente.id || pedidoExistente.pedido?.id || "") &&
+            String(replayReservation.usageId || "") === String(pedidoExistente.pedido?.plano_semanal?.uso_id || "") &&
+            String(replayReservation.subscriptionId || "") === String(pedidoExistente.pedido?.plano_semanal?.assinatura_id || "");
+          if (!sameReservation) {
+            logOrderRequestEvent(req, "plano_replay_sem_reserva", {
+              categoria,
+              client_request_id: dedupeMeta.clientRequestId,
+              pedido_id: pedidoExistente.id || pedidoExistente.pedido?.id || "",
+              status_code: 409,
+              idempotent_replay: true,
+              ...scenarioLogMeta,
+              idempotency_payload_hash: dedupeMeta.payloadHash,
+              idempotency_payload_hash_version: dedupeMeta.payloadVersion,
+              detalhe: replayReservation?.reason || "reservation_mismatch"
+            });
+            return res.status(409).json({
+              ok: false,
+              code: "WEEKLY_PLAN_USAGE_UNAVAILABLE",
+              error: "A cota deste pedido nao esta mais disponivel. Regularize o pagamento para continuar."
+            });
+          }
+          writeOrderStatus(pedidoExistente.base, orderStatus.ORDER_STATUS.NOVO);
+          const recoveredPayload = buildOrderResponsePayloadFromItem(pedidoExistente, {
+            idempotent_replay: true,
+            encontrado_por_client_request_id: true,
+            recuperado_apos_interrupcao: true
+          });
+          logOrderRequestEvent(req, "plano_replay_recuperado", {
+            categoria,
+            client_request_id: dedupeMeta.clientRequestId,
+            pedido_id: recoveredPayload.pedido_id,
+            status_code: 200,
+            idempotent_replay: true,
+            ...scenarioLogMeta,
+            idempotency_payload_hash: dedupeMeta.payloadHash,
+            idempotency_payload_hash_version: dedupeMeta.payloadVersion
+          });
+          return res.json(recoveredPayload);
         }
 
         const payload = buildOrderResponsePayloadFromItem(pedidoExistente, {
@@ -12401,10 +13278,227 @@ function criarPedidoHandler(categoria) {
 
     const cupomAplicado = resultadoCupom.cupomAplicado === true;
     let custoEfetivoPedido = brindeEscudo3dApp ? 0 : resultadoCupom.valorFinal;
+    const pedidoElegivelPlano = pedidoElegivelPlanoSemanal(categoria, c, fields);
 
     const pedidoAssistente = req.fotoJogosBatchItem === true || req.body?.assistente_lote === true;
+    if (!orderService.hasRequiredOrderFields(fields)) {
+      if (cupomLockAtivo) liberarLockCupomJogadorEscudo();
+      return res.status(400).json({
+        ok: false,
+        error: "rodada e data são obrigatórios"
+      });
+    }
+
+    let idPlanejado = orderStorage.newPedidoId();
+    const dedupeEntry = beginOrderCreateDedupe(dedupeMeta.key, dedupeMeta.payloadHash);
+    let planoReserva = null;
+    const weeklyPlanCustomerKey = getWeeklyPlanCustomerKey(c);
+    const hadWeeklyPlanPendingMarker = c.plano_semanal_pagamento_pendente === true;
+    let pendingWeeklyPlanOperational = pedidoElegivelPlano && weeklyPlanPendingOperational(c);
+    if (
+      pedidoElegivelPlano &&
+      hadWeeklyPlanPendingMarker &&
+      c.plano_semanal_participante !== true
+    ) {
+      try {
+        if (!weeklyPlanCustomerKey || !c.plano_semanal_tentativa_pendente_id) {
+          throw new WeeklyPlanError(
+            "WEEKLY_PLAN_PENDING_IDENTITY_MISSING",
+            503,
+            "Nao foi possivel validar o PIX do plano agora. Tente novamente.",
+            { retryable: true }
+          );
+        }
+        const pendingStatus = await weeklyPlansService.paymentStatus({
+          customerKey: weeklyPlanCustomerKey,
+          attemptId: String(c.plano_semanal_tentativa_pendente_id)
+        });
+        if (pendingStatus.confirmado) {
+          markWeeklyPlanParticipantByWhatsapp(whatsapp, pendingStatus.tentativa_id);
+        } else if ([
+          "expired", "cancelled", "rejected", "divergent",
+          "failed", "refunded", "charged_back"
+        ].includes(pendingStatus.status)) {
+          clearWeeklyPlanPendingByWhatsapp(whatsapp, pendingStatus.tentativa_id);
+        }
+        clientes = readClientes();
+        c = clientes[whatsapp];
+        if (!c || !c.ativo) {
+          throw new WeeklyPlanError(
+            "WEEKLY_PLAN_CUSTOMER_CHANGED",
+            403,
+            "Conta indisponivel."
+          );
+        }
+        billingService.ensureCurrentBillingCycle(c, mesAtual);
+        pendingWeeklyPlanOperational = weeklyPlanPendingOperational(c);
+        if (
+          !pendingStatus.confirmado &&
+          ["creating", "pending"].includes(String(pendingStatus.status || ""))
+        ) {
+          throw new WeeklyPlanError(
+            "WEEKLY_PLAN_PAYMENT_PENDING",
+            409,
+            "Seu PIX do plano ainda esta sendo confirmado. Aguarde antes de criar a arte."
+          );
+        }
+      } catch (error) {
+        limparUploadsTemporarios(req.files);
+        rejectOrderCreateDedupe(dedupeMeta.key, dedupeEntry, error);
+        if (cupomLockAtivo) liberarLockCupomJogadorEscudo();
+        return weeklyPlanErrorResponse(res, error);
+      }
+    }
+    let weeklyPlanAccount = pedidoElegivelPlano && (
+      c.plano_semanal_participante === true ||
+      pendingWeeklyPlanOperational
+    );
+    if (
+      pedidoElegivelPlano &&
+      custoEfetivoPedido > 0 &&
+      !cupomAplicado &&
+      !weeklyPlanAccount &&
+      weeklyPlanCustomerKey
+    ) {
+      try {
+        const customerPlanState = await weeklyPlansService.customerOperationalState({
+          customerKey: weeklyPlanCustomerKey
+        });
+        if (customerPlanState.paymentPending) {
+          throw new WeeklyPlanError(
+            "WEEKLY_PLAN_PAYMENT_PENDING",
+            409,
+            "Seu PIX do plano ainda esta sendo confirmado. Aguarde antes de criar a arte."
+          );
+        }
+        clientes = readClientes();
+        c = clientes[whatsapp];
+        if (!c || !c.ativo) {
+          throw new WeeklyPlanError(
+            "WEEKLY_PLAN_CUSTOMER_CHANGED",
+            403,
+            "Conta indisponivel."
+          );
+        }
+        billingService.ensureCurrentBillingCycle(c, mesAtual);
+        if (weeklyPlanPendingOperational(c)) {
+          throw new WeeklyPlanError(
+            "WEEKLY_PLAN_PAYMENT_PENDING",
+            409,
+            "Seu PIX do plano ainda esta sendo confirmado. Aguarde antes de criar a arte."
+          );
+        }
+        weeklyPlanAccount = customerPlanState.hasEntitlement ||
+          c.plano_semanal_participante === true;
+      } catch (error) {
+        if (error instanceof WeeklyPlanError) {
+          limparUploadsTemporarios(req.files);
+          rejectOrderCreateDedupe(dedupeMeta.key, dedupeEntry, error);
+          if (cupomLockAtivo) liberarLockCupomJogadorEscudo();
+          return weeklyPlanErrorResponse(res, error);
+        }
+        console.warn("[plano_semanal] consulta oportunista indisponivel", {
+          customer_key: weeklyPlanCustomerKey,
+          erro: error?.code || error?.message || "erro"
+        });
+        clientes = readClientes();
+        c = clientes[whatsapp];
+        if (!c || !c.ativo) {
+          limparUploadsTemporarios(req.files);
+          rejectOrderCreateDedupe(dedupeMeta.key, dedupeEntry, error);
+          if (cupomLockAtivo) liberarLockCupomJogadorEscudo();
+          return res.status(403).json({ ok: false, error: "Conta indisponivel" });
+        }
+        billingService.ensureCurrentBillingCycle(c, mesAtual);
+        if (weeklyPlanPendingOperational(c)) {
+          const pendingError = new WeeklyPlanError(
+            "WEEKLY_PLAN_PAYMENT_PENDING",
+            409,
+            "Seu PIX do plano ainda esta sendo confirmado. Aguarde antes de criar a arte."
+          );
+          limparUploadsTemporarios(req.files);
+          rejectOrderCreateDedupe(dedupeMeta.key, dedupeEntry, pendingError);
+          if (cupomLockAtivo) liberarLockCupomJogadorEscudo();
+          return weeklyPlanErrorResponse(res, pendingError);
+        }
+      }
+    }
+
+    if (
+      pedidoElegivelPlano &&
+      custoEfetivoPedido > 0 &&
+      !cupomAplicado &&
+      weeklyPlanAccount
+    ) {
+      try {
+        if (!weeklyPlanCustomerKey) {
+          throw new WeeklyPlanError(
+            "WEEKLY_PLAN_CUSTOMER_KEY_MISSING",
+            503,
+            "Nao foi possivel consultar sua cota agora. Tente novamente.",
+            { retryable: true }
+          );
+        }
+        planoReserva = await weeklyPlansService.reserve({
+          customerKey: weeklyPlanCustomerKey,
+          orderId: idPlanejado,
+          clientRequestId: dedupeMeta.clientRequestId || dedupeMeta.key,
+          payloadHash: dedupeMeta.payloadHash,
+          productId: categoria
+        });
+        if (planoReserva?.reason === "payment_pending") {
+          throw new WeeklyPlanError(
+            "WEEKLY_PLAN_PAYMENT_PENDING",
+            409,
+            "Seu PIX do plano ainda esta sendo confirmado. Aguarde antes de criar a arte."
+          );
+        }
+        if (planoReserva?.used && planoReserva.orderId) {
+          idPlanejado = String(planoReserva.orderId);
+        }
+        if (
+          planoReserva?.used === true ||
+          ["weekly_limit_reached", "cycle_limit_reached"].includes(planoReserva?.reason)
+        ) {
+          markWeeklyPlanParticipantByWhatsapp(whatsapp);
+        }
+      } catch (error) {
+        limparUploadsTemporarios(req.files);
+        rejectOrderCreateDedupe(dedupeMeta.key, dedupeEntry, error);
+        if (cupomLockAtivo) liberarLockCupomJogadorEscudo();
+        return weeklyPlanErrorResponse(res, error);
+      }
+    }
+
+    if (weeklyPlanAccount) {
+      clientes = readClientes();
+      c = clientes[whatsapp];
+      if (!c || !c.ativo) {
+        if (planoReserva?.used) {
+          try {
+            await weeklyPlansService.release({
+              customerKey: weeklyPlanCustomerKey,
+              orderId: idPlanejado,
+              reason: "customer_changed_during_reservation"
+            });
+          } catch {}
+        }
+        limparUploadsTemporarios(req.files);
+        rejectOrderCreateDedupe(
+          dedupeMeta.key,
+          dedupeEntry,
+          new Error("customer_changed_during_reservation")
+        );
+        if (cupomLockAtivo) liberarLockCupomJogadorEscudo();
+        return res.status(403).json({ ok: false, error: "Conta indisponivel" });
+      }
+      billingService.ensureCurrentBillingCycle(c, mesAtual);
+    }
+
+    const cobertoPeloPlano = planoReserva?.used === true;
     const pagamentoAntecipadoObrigatorio =
       custoEfetivoPedido > 0 &&
+      !cobertoPeloPlano &&
       (pedidoAssistente || modalidadeCriacao === MODALIDADE_CRIACAO_ECONOMICA);
     const transacaoSaldoExistente = pagamentoAntecipadoObrigatorio
       ? null
@@ -12420,8 +13514,15 @@ function criarPedidoHandler(categoria) {
     const previewLimiterIdentifiers = getPreviewLimiterIdentifiers(req, c, whatsapp);
     const previewLimiterState = getPreviewLimiterState(previewLimiterIdentifiers);
 
-    if (!pagamentoAntecipadoObrigatorio && !temSaldoSuficiente && previewLimiterState.total >= PREVIEW_LIMITER_MAX) {
+    if (!cobertoPeloPlano && !pagamentoAntecipadoObrigatorio && !temSaldoSuficiente && previewLimiterState.total >= PREVIEW_LIMITER_MAX) {
       console.warn(`[PREVIEW_LIMIT] bloqueado identificador=${previewLimiterState.identificador} total=${previewLimiterState.total} motivo=3_previews_sem_pagamento`);
+
+      rejectOrderCreateDedupe(
+        dedupeMeta.key,
+        dedupeEntry,
+        new Error("preview_limit_reached")
+      );
+      if (cupomLockAtivo) liberarLockCupomJogadorEscudo();
 
       return res.status(429).json({
         ok: false,
@@ -12430,15 +13531,31 @@ function criarPedidoHandler(categoria) {
       });
     }
 
-    if (!orderService.hasRequiredOrderFields(fields)) {
-      return res.status(400).json({
-        ok: false,
-        error: "rodada e data são obrigatórios"
-      });
-    }
+    const batchIdPedido = pedidoAssistente
+      ? normalizarFotoJogosBatchId(req.body?.batch_id || "")
+      : "";
+    const camisetaTimeAdicional = categoria === "contratacao" && contratacaoTemCamiseta(fields);
+    const valorAdicionalCamiseta = camisetaTimeAdicional
+      ? CONTRATACAO_CAMISETA_ADICIONAL
+      : 0;
+    const planoConfirmadoEm = cobertoPeloPlano ? new Date().toISOString() : "";
+    const planoOrderPatch = cobertoPeloPlano
+      ? buildWeeklyPlanCoveredOrderPatch({
+          orderId: idPlanejado,
+          whatsapp,
+          reservation: planoReserva,
+          coveredValue: custoEfetivoPedido,
+          valueWithSupport: custoPedidoComSuporte,
+          modalidade: modalidadeCriacao,
+          assistantBatch: pedidoAssistente,
+          batchId: batchIdPedido,
+          shirtIncluded: camisetaTimeAdicional,
+          shirtAdditionalValue: valorAdicionalCamiseta,
+          confirmedAt: planoConfirmadoEm
+        })
+      : null;
 
     let draft;
-    const dedupeEntry = beginOrderCreateDedupe(dedupeMeta.key, dedupeMeta.payloadHash);
 
     try {
       draft = orderService.createOrderDraft({
@@ -12452,7 +13569,10 @@ function criarPedidoHandler(categoria) {
         idempotencyKey: dedupeMeta.key,
         idempotencyPayloadHash: dedupeMeta.payloadHash,
         idempotencyPayloadHashVersion: dedupeMeta.payloadVersion,
-        idempotencyInputFiles: dedupeMeta.filesFingerprint
+        idempotencyInputFiles: dedupeMeta.filesFingerprint,
+        orderId: idPlanejado,
+        initialStatus: "preparando_pagamento",
+        initialOrderPatch: planoOrderPatch
       });
     } catch (e) {
       console.error("[pedido] erro ao criar pedido", {
@@ -12463,6 +13583,50 @@ function criarPedidoHandler(categoria) {
       });
 
       rejectOrderCreateDedupe(dedupeMeta.key, dedupeEntry, e);
+
+      let persistedPlanDraft = false;
+      if (cobertoPeloPlano) {
+        try {
+          const plannedBase = orderService.buildOrderBasePath({
+            pedidosDir: PEDIDOS_DIR,
+            whatsapp,
+            mesAtual,
+            id: idPlanejado
+          });
+          const plannedOrder = readPedido(plannedBase);
+          persistedPlanDraft = Boolean(
+            plannedOrder?.pagamento_metodo === "plano_semanal" &&
+            String(plannedOrder?.plano_semanal?.uso_id || "") === String(planoReserva?.usageId || "") &&
+            String(plannedOrder?.idempotency_payload_hash || "") === String(dedupeMeta.payloadHash || "")
+          );
+        } catch {}
+      }
+
+      if (cobertoPeloPlano && !persistedPlanDraft) {
+        try {
+          await weeklyPlansService.release({
+            customerKey: weeklyPlanCustomerKey,
+            orderId: idPlanejado,
+            reason: "order_draft_failed"
+          });
+        } catch (releaseError) {
+          console.error("[plano_semanal] falha ao devolver cota", {
+            pedido_id: idPlanejado,
+            erro: releaseError?.message || "erro"
+          });
+        }
+      }
+
+      limparUploadsTemporarios(req.files);
+
+      if (persistedPlanDraft) {
+        return res.status(503).json({
+          ok: false,
+          code: "WEEKLY_PLAN_ORDER_RECOVERY_REQUIRED",
+          error: "O pedido foi salvo e sera retomado com segurança. Tente novamente.",
+          retryable: true
+        });
+      }
 
       return res.status(400).json({
         ok: false,
@@ -12483,15 +13647,11 @@ function criarPedidoHandler(categoria) {
     draft.pedido.idempotency_input_files = dedupeMeta.filesFingerprint;
     draft.pedido.modalidade_criacao = modalidadeCriacao;
     draft.pedido.assistente_lote = pedidoAssistente;
-    draft.pedido.batch_id = pedidoAssistente
-      ? normalizarFotoJogosBatchId(req.body?.batch_id || "")
-      : "";
+    draft.pedido.batch_id = batchIdPedido;
     draft.pedido.suporte_personalizado_incluido = modalidadeCriacao !== MODALIDADE_CRIACAO_ECONOMICA;
     if (categoria === "contratacao") {
-      draft.pedido.camiseta_time_adicional = contratacaoTemCamiseta(fields);
-      draft.pedido.valor_adicional_camiseta = draft.pedido.camiseta_time_adicional
-        ? CONTRATACAO_CAMISETA_ADICIONAL
-        : 0;
+      draft.pedido.camiseta_time_adicional = camisetaTimeAdicional;
+      draft.pedido.valor_adicional_camiseta = valorAdicionalCamiseta;
     }
     draft.pedido.valor_com_suporte = normalizarValorFinanceiro(custoPedidoComSuporte);
     draft.pedido.valor_original = cupomAplicado
@@ -12503,7 +13663,10 @@ function criarPedidoHandler(categoria) {
     draft.pedido.valor_final = normalizarValorFinanceiro(custoEfetivoPedido);
     registrarAuditoriaProdutoPedido({ categoria, fields, files, pedidoId: id, request:req });
 
-    if (temSaldoSuficiente) {
+    if (cobertoPeloPlano) {
+      Object.assign(draft.pedido, planoOrderPatch);
+      orderService.orderStorage.writeOrder(draft.base, draft.pedido);
+    } else if (temSaldoSuficiente) {
       const saldoChargeInfo = aplicarCobrancaPedidoComLedger({
         cliente: c,
         whatsapp,
@@ -12638,6 +13801,9 @@ function criarPedidoHandler(categoria) {
     }
 
     orderService.orderStorage.writeOrder(draft.base, draft.pedido);
+    if (!pagamentoAntecipadoObrigatorio) {
+      writeOrderStatus(draft.base, orderStatus.ORDER_STATUS.NOVO);
+    }
 
     clientes[whatsapp] = c;
     writeClientes(clientes);
@@ -12656,7 +13822,9 @@ function criarPedidoHandler(categoria) {
       desconto: cupomAplicado ? resultadoCupom.resumo : null,
       valor_original: cupomAplicado ? resultadoCupom.valorOriginal : Number(custoPedido || 0),
       valor_desconto: cupomAplicado ? resultadoCupom.desconto : 0,
-      valor_final: cupomAplicado ? resultadoCupom.valorFinal : Number(custoEfetivoPedido || 0),
+      valor_final: Number(draft.pedido.valor_final || 0),
+      coberto_pelo_plano: cobertoPeloPlano,
+      plano_semanal: cobertoPeloPlano ? draft.pedido.plano_semanal : null,
       modalidade_criacao: modalidadeCriacao,
       camiseta_time_adicional: draft.pedido.camiseta_time_adicional === true,
       valor_adicional_camiseta: Number(draft.pedido.valor_adicional_camiseta || 0),
@@ -12665,7 +13833,9 @@ function criarPedidoHandler(categoria) {
       assistente_lote: draft.pedido.assistente_lote === true,
       client_request_id: dedupeMeta.clientRequestId,
       ...scenarioLogMeta,
-      mensagem: cupomAplicado
+      mensagem: cobertoPeloPlano
+        ? "Imagem incluída na sua cota semanal."
+        : cupomAplicado
         ? `Cupom ${resultadoCupom.resumo.codigo} aplicado. Valor final: R$ ${resultadoCupom.valorFinal.toFixed(2).replace(".", ",")}.`
         : undefined
     };
@@ -12684,6 +13854,81 @@ function criarPedidoHandler(categoria) {
 
     return res.json(responsePayload);
   };
+}
+
+function buildWeeklyPlanCoveredOrderPatch({
+  orderId,
+  whatsapp,
+  reservation,
+  coveredValue,
+  valueWithSupport,
+  modalidade,
+  assistantBatch,
+  batchId,
+  shirtIncluded = false,
+  shirtAdditionalValue = 0,
+  confirmedAt
+}) {
+  const value = normalizarValorFinanceiro(coveredValue);
+  const confirmation = String(confirmedAt || new Date().toISOString());
+  const usageId = String(reservation?.usageId || "");
+  return {
+    modalidade_criacao: modalidade,
+    assistente_lote: assistantBatch === true,
+    batch_id: assistantBatch === true ? String(batchId || "") : "",
+    suporte_personalizado_incluido: modalidade !== MODALIDADE_CRIACAO_ECONOMICA,
+    camiseta_time_adicional: shirtIncluded === true,
+    valor_adicional_camiseta: normalizarValorFinanceiro(shirtAdditionalValue),
+    valor_com_suporte: normalizarValorFinanceiro(valueWithSupport),
+    valor_original: value,
+    valor_desconto: 0,
+    valor_final: 0,
+    pagamento_pendente: false,
+    pagamento_metodo: "plano_semanal",
+    pagamento_confirmado_em: confirmation,
+    valor_coberto_plano: value,
+    valor_pendente: 0,
+    plano_semanal: {
+      assinatura_id: reservation.subscriptionId,
+      uso_id: reservation.usageId,
+      codigo: reservation.planCode,
+      nome: reservation.planName,
+      imagens_por_semana: reservation.weeklyLimit,
+      semana_do_ciclo: reservation.weekIndex + 1
+    },
+    pagamento_info: {
+      tipo: "plano_semanal",
+      status: "approved",
+      valor_pago: 0,
+      valor_coberto: value,
+      payment_id: "",
+      whatsapp,
+      pedido_id: orderId,
+      confirmado_em: confirmation,
+      assinatura_id: reservation.subscriptionId,
+      uso_id: reservation.usageId,
+      plano_codigo: reservation.planCode
+    },
+    mensagens_cliente: [{
+      id: `msg_plano_${usageId}`,
+      tipo: "pagamento_confirmado",
+      titulo: "Imagem incluída no plano",
+      texto: "Uma imagem da sua cota semanal foi usada neste pedido.",
+      lida: false,
+      criado_em: confirmation
+    }]
+  };
+}
+
+function criarPedidoHandler(categoria) {
+  const handler = criarPedidoHandlerAsync(categoria);
+  return (req, res, next) => withCustomerOrderMutationLock(
+    req.user?.whatsapp,
+    () => handler(req, res)
+  ).catch(error => {
+    if (typeof next === "function") return next(error);
+    throw error;
+  });
 }
 
 // ===== CRIAR PEDIDO =====
@@ -12829,21 +14074,21 @@ app.post(
     { name: "referencia", maxCount: 1 },
     { name: "camiseta", maxCount: 1 }
   ])),
-  (req, res) => {
+  (req, res, next) => {
     const flyer_tipo = (req.body?.flyer_tipo || "").toLowerCase();
     const productFromRegistry = productsRegistry.getProductByFlyerTipo(flyer_tipo);
 
-    if (productFromRegistry) return criarPedidoHandler(productFromRegistry.id)(req, res);
+    if (productFromRegistry) return criarPedidoHandler(productFromRegistry.id)(req, res, next);
 
-    if (flyer_tipo === "escudo3d") return criarPedidoHandler("escudo3d")(req, res);
-    if (flyer_tipo === "zz1fs") return criarPedidoHandler("escalacao")(req, res);
-    if (flyer_tipo === "zz1fm") return criarPedidoHandler("contratacao")(req, res);
-    if (flyer_tipo === "zz1ft") return criarPedidoHandler("proximo_jogo")(req, res);
-    if (flyer_tipo === "zz1fj") return criarPedidoHandler("patrocinador")(req, res);
-    if (flyer_tipo === "jog_proximo") return criarPedidoHandler("proximo_jogo_jogador")(req, res);
-    if (flyer_tipo === "jog_resultado") return criarPedidoHandler("resultado_jogo_jogador")(req, res);
-    if (flyer_tipo === "jog_escudo") return criarPedidoHandler("jogador_escudo")(req, res);
-    if (flyer_tipo === "mascote_uniforme") return criarPedidoHandler("mascote_uniforme")(req, res);
+    if (flyer_tipo === "escudo3d") return criarPedidoHandler("escudo3d")(req, res, next);
+    if (flyer_tipo === "zz1fs") return criarPedidoHandler("escalacao")(req, res, next);
+    if (flyer_tipo === "zz1fm") return criarPedidoHandler("contratacao")(req, res, next);
+    if (flyer_tipo === "zz1ft") return criarPedidoHandler("proximo_jogo")(req, res, next);
+    if (flyer_tipo === "zz1fj") return criarPedidoHandler("patrocinador")(req, res, next);
+    if (flyer_tipo === "jog_proximo") return criarPedidoHandler("proximo_jogo_jogador")(req, res, next);
+    if (flyer_tipo === "jog_resultado") return criarPedidoHandler("resultado_jogo_jogador")(req, res, next);
+    if (flyer_tipo === "jog_escudo") return criarPedidoHandler("jogador_escudo")(req, res, next);
+    if (flyer_tipo === "mascote_uniforme") return criarPedidoHandler("mascote_uniforme")(req, res, next);
 
     limparUploadsTemporarios(req.files);
     console.warn("[pedido] flyer_tipo desconhecido bloqueado", {
@@ -12884,12 +14129,13 @@ app.post(
 );
 
 // ===== BOT ADMIN: LISTAR NOVOS DE TODOS OS CLIENTES =====
-app.get("/bot/pedidos/novos", auth, (req, res) => {
+app.get("/bot/pedidos/novos", auth, safeAsyncRoute(async (req, res) => {
   if (!isBotAdmin(req)) {
     return res.status(403).json({ ok: false, error: "Acesso negado" });
   }
 
   const pedidos = [];
+  let planosAdiados = 0;
 
   if (!fs.existsSync(PEDIDOS_DIR)) {
     return res.json({ ok: true, pedidos: [] });
@@ -12918,16 +14164,21 @@ app.get("/bot/pedidos/novos", auth, (req, res) => {
           (statusPedido === "novo" || statusPedido === "ajuste_pendente") &&
           !pedidoEconomicoAguardandoPagamento(pedido)
         ) {
+          const verification = await verificarAutorizacaoPedidoPlano(base, pedido);
+          if (!verification.ok) {
+            if (verification.temporary) planosAdiados += 1;
+            continue;
+          }
           pedidos.push({ id, whatsapp, mes, status: statusPedido });
         }
       }
     }
   }
 
-  return res.json({ ok: true, pedidos });
-});
+  return res.json({ ok: true, pedidos, planos_adiados: planosAdiados });
+}));
 
-app.get("/bot/pedidos/:id/zip", auth, (req, res) => {
+app.get("/bot/pedidos/:id/zip", auth, safeAsyncRoute(async (req, res) => {
   if (!isBotAdmin(req)) {
     return res.status(403).json({ ok: false, error: "Acesso negado" });
   }
@@ -12938,7 +14189,11 @@ app.get("/bot/pedidos/:id/zip", auth, (req, res) => {
     return res.status(404).json({ ok: false, error: "Pedido não encontrado" });
   }
 
-  if (pedidoEconomicoAguardandoPagamento(readPedido(base))) {
+  const pedido = readPedido(base);
+  const verification = await verificarAutorizacaoPedidoPlano(base, pedido);
+  if (!verification.ok) return weeklyPlanOrderAccessError(res, verification);
+
+  if (pedidoEconomicoAguardandoPagamento(pedido)) {
     return res.status(403).json({
       ok: false,
       error: "Pagamento PIX pendente. O pedido economico ainda nao foi liberado para criacao."
@@ -12955,9 +14210,9 @@ app.get("/bot/pedidos/:id/zip", auth, (req, res) => {
   archive.pipe(res);
   archive.directory(base, false);
   archive.finalize();
-});
+}));
 
-app.post("/bot/pedidos/:id/status", auth, (req, res) => {
+app.post("/bot/pedidos/:id/status", auth, safeAsyncRoute(async (req, res) => {
   if (!isBotAdmin(req)) {
     return res.status(403).json({ ok: false, error: "Acesso negado" });
   }
@@ -12970,7 +14225,11 @@ app.post("/bot/pedidos/:id/status", auth, (req, res) => {
 
   const { status } = req.body || {};
 
-  if (pedidoEconomicoAguardandoPagamento(readPedido(base))) {
+  const pedido = readPedido(base);
+  const verification = await verificarAutorizacaoPedidoPlano(base, pedido);
+  if (!verification.ok) return weeklyPlanOrderAccessError(res, verification);
+
+  if (pedidoEconomicoAguardandoPagamento(pedido)) {
     return res.status(403).json({
       ok: false,
       error: "Pagamento PIX pendente. O pedido economico ainda nao foi liberado."
@@ -12984,10 +14243,10 @@ app.post("/bot/pedidos/:id/status", auth, (req, res) => {
   writeOrderStatus(base, status);
 
   return res.json({ ok: true });
-});
+}));
 
 // ===== LISTAR NOVOS =====
-app.get("/pedidos/novos", auth, (req, res) => {
+app.get("/pedidos/novos", auth, safeAsyncRoute(async (req, res) => {
   const whatsapp = req.user.whatsapp;
   const mesAtual = nowYYYYMM();
   const dir = path.join(PEDIDOS_DIR, whatsapp, mesAtual);
@@ -13001,16 +14260,18 @@ app.get("/pedidos/novos", auth, (req, res) => {
   for (const id of fs.readdirSync(dir)) {
     const pdir = path.join(dir, id);
 
+    const pedido = readPedido(pdir);
     if (
       readOrderStatus(pdir, "") === "novo" &&
-      !pedidoEconomicoAguardandoPagamento(readPedido(pdir))
+      !pedidoEconomicoAguardandoPagamento(pedido) &&
+      (await verificarAutorizacaoPedidoPlano(pdir, pedido)).ok
     ) {
       pedidos.push({ id });
     }
   }
 
   return res.json({ ok: true, pedidos });
-});
+}));
 
 app.get("/meus-pedidos", auth, (req, res) => {
   res.setHeader("Cache-Control", "private, no-store");
@@ -13062,7 +14323,11 @@ app.get("/meus-pedidos", auth, (req, res) => {
         imagemPronta &&
         !aprovadoCliente &&
         !ajusteUsado &&
-        status === "pronto"
+        status === "pronto",
+      coberto_pelo_plano: item.pedido.pagamento_metodo === "plano_semanal",
+      plano_semanal: item.pedido.pagamento_metodo === "plano_semanal"
+        ? item.pedido.plano_semanal || null
+        : null
     };
   });
 
@@ -13446,7 +14711,7 @@ app.post("/pedidos/:id/solicitar-ajuste", auth, (req, res) => {
   });
 });
 
-app.post("/pedidos/:id/download-ticket", auth, async (req, res) => {
+app.post("/pedidos/:id/download-ticket", auth, safeAsyncRoute(async (req, res) => {
   const startedAt = Date.now();
   const pedidoId = String(req.params.id || "");
   const formato = String(req.body?.formato || "resultado").toLowerCase();
@@ -13460,6 +14725,15 @@ app.post("/pedidos/:id/download-ticket", auth, async (req, res) => {
     pedidoId,
     "cliente_download"
   );
+
+  const planBase = getPedidoBase(req.user.whatsapp, pedidoId);
+  if (planBase) {
+    const verification = await verificarAutorizacaoPedidoPlano(planBase, readPedido(planBase));
+    if (!verification.ok) {
+      setPrivateDownloadHeaders(res);
+      return weeklyPlanOrderAccessError(res, verification);
+    }
+  }
 
   const validated = validateOrderDownload(req.user.whatsapp, pedidoId, {
     requireResult: formato === "resultado"
@@ -13502,9 +14776,9 @@ app.post("/pedidos/:id/download-ticket", auth, async (req, res) => {
     expires_in: Math.ceil(issued.expiresInMs / 1000),
     download_path: `/pedidos/${encodeURIComponent(pedidoId)}/download-direto/${formato}`
   });
-});
+}));
 
-app.post("/pedidos/:id/download-direto/:formato", (req, res) => {
+app.post("/pedidos/:id/download-direto/:formato", safeAsyncRoute(async (req, res) => {
   const startedAt = Date.now();
   const pedidoId = String(req.params.id || "");
   const formato = String(req.params.formato || "").toLowerCase();
@@ -13545,6 +14819,9 @@ app.post("/pedidos/:id/download-direto/:formato", (req, res) => {
     });
     return res.status(validated.status).json({ ok: false, error: validated.error });
   }
+
+  const verification = await verificarAutorizacaoPedidoPlano(validated.base, validated.pedido);
+  if (!verification.ok) return weeklyPlanOrderAccessError(res, verification);
 
   validated.pedido.baixado_cliente = true;
   validated.pedido.baixado_em = new Date().toISOString();
@@ -13595,9 +14872,9 @@ app.post("/pedidos/:id/download-direto/:formato", (req, res) => {
     attachmentContentDisposition(`${pedidoId}_resultado.png`)
   );
   return res.sendFile(validated.arquivo);
-});
+}));
 
-app.get("/pedidos/:id/download-resultado", auth, (req, res) => {
+app.get("/pedidos/:id/download-resultado", auth, safeAsyncRoute(async (req, res) => {
   const whatsapp = req.user.whatsapp;
   const base = getPedidoBase(whatsapp, req.params.id);
 
@@ -13607,6 +14884,9 @@ app.get("/pedidos/:id/download-resultado", auth, (req, res) => {
 
   const pedidoPath = path.join(base, "pedido.json");
   const pedido = safeReadJson(pedidoPath) || {};
+
+  const verification = await verificarAutorizacaoPedidoPlano(base, pedido);
+  if (!verification.ok) return weeklyPlanOrderAccessError(res, verification);
 
   if (pedido.pagamento_pendente === true) {
     return res.status(403).json({
@@ -13639,7 +14919,7 @@ app.get("/pedidos/:id/download-resultado", auth, (req, res) => {
   res.setHeader("Content-Disposition", `attachment; filename="${req.params.id}_resultado.png"`);
 
   return res.sendFile(arquivo);
-});
+}));
 
 // ===== INFO DO PEDIDO =====
 app.get("/pedidos/:id/info", auth, (req, res) => {
@@ -13738,7 +15018,7 @@ app.get("/pedidos/:id/preview", (req, res) => {
 });
 
 // ===== BAIXAR ZIP =====
-app.get("/pedidos/:id/zip", auth, (req, res) => {
+app.get("/pedidos/:id/zip", auth, safeAsyncRoute(async (req, res) => {
   const whatsapp = req.user.whatsapp;
   const base = getPedidoBase(whatsapp, req.params.id);
 
@@ -13748,6 +15028,9 @@ app.get("/pedidos/:id/zip", auth, (req, res) => {
 
   const pedidoPath = path.join(base, "pedido.json");
   const pedido = safeReadJson(pedidoPath) || {};
+
+  const verification = await verificarAutorizacaoPedidoPlano(base, pedido);
+  if (!verification.ok) return weeklyPlanOrderAccessError(res, verification);
 
   if (pedido.pagamento_pendente === true) {
     return res.status(403).json({
@@ -13773,7 +15056,7 @@ app.get("/pedidos/:id/zip", auth, (req, res) => {
   archive.pipe(res);
   archive.directory(base, false);
   archive.finalize();
-});
+}));
 
 // ===== ATUALIZAR STATUS =====
 app.post("/pedidos/:id/status", auth, (req, res) => {
@@ -13803,7 +15086,7 @@ app.post(
     { name: "resultado", maxCount: 1 },
     { name: "preview", maxCount: 1 }
   ])),
-  (req, res) => {
+  safeAsyncRoute(async (req, res) => {
 
     const descricao_instagram = req.body?.descricao_instagram || "";
     if (!isBotAdmin(req)) {
@@ -13816,7 +15099,14 @@ app.post(
       return res.status(404).json({ ok: false, error: "Pedido não encontrado" });
     }
 
-    if (pedidoEconomicoAguardandoPagamento(readPedido(base))) {
+    const pedidoAtual = readPedido(base);
+    const verification = await verificarAutorizacaoPedidoPlano(base, pedidoAtual);
+    if (!verification.ok) {
+      limparUploadsRequest(req);
+      return weeklyPlanOrderAccessError(res, verification);
+    }
+
+    if (pedidoEconomicoAguardandoPagamento(pedidoAtual)) {
       limparUploadsRequest(req);
       return res.status(403).json({
         ok: false,
@@ -13874,7 +15164,7 @@ app.post(
         error: "Falha ao salvar resultado"
       });
     }
-  }
+  })
 );
 
 // ===== SUPORTE CHAT =====
@@ -14384,7 +15674,7 @@ app.get("/bot/online", auth, (req, res) => {
   }
 });
 
-app.post("/bot/suporte/erro-pedido", auth, (req, res) => {
+app.post("/bot/suporte/erro-pedido", auth, safeAsyncRoute(async (req, res) => {
   try {
     if (!isBotAdmin(req)) {
       return res.status(403).json({ ok:false, error:"Acesso negado" });
@@ -14415,6 +15705,33 @@ app.post("/bot/suporte/erro-pedido", auth, (req, res) => {
           JSON.stringify(pedidoData, null, 2),
           "utf8"
         );
+
+        const motivoNormalizado = String(motivo || "erro_pipeline").trim().toLowerCase();
+        const falhaTecnica = [
+          "erro_pipeline",
+          "falha_pipeline",
+          "erro_openai",
+          "timeout",
+          "erro_upload_resultado"
+        ].some(codigo => motivoNormalizado.includes(codigo));
+        if (
+          falhaTecnica &&
+          pedidoData.pagamento_metodo === "plano_semanal" &&
+          weeklyPlansService.entitlementsEnabled
+        ) {
+          const cliente = readClientes()[whatsapp];
+          const customerKey = getWeeklyPlanCustomerKey(cliente);
+          if (customerKey) {
+            const devolvida = await weeklyPlansService.release({
+              customerKey,
+              orderId: String(pedido_id),
+              reason: motivoNormalizado
+            });
+            pedidoData.plano_cota_devolvida = devolvida === true;
+            if (devolvida) pedidoData.plano_cota_devolvida_em = new Date().toISOString();
+            writePedidoAtomic(basePedido, pedidoData);
+          }
+        }
       } catch {}
     }
 
@@ -14446,7 +15763,7 @@ app.post("/bot/suporte/erro-pedido", auth, (req, res) => {
   } catch (e) {
     return res.status(500).json({ ok:false, error:"erro_avisar_suporte" });
   }
-});
+}));
 
 function resolverWhatsappDestinoSuporte(destino) {
   destino = String(destino || "").trim();
@@ -14771,6 +16088,24 @@ module.exports = {
     resetHooks() {
       mpOrdersV2TestHooks = {};
     },
-    processarOrderV2
+    processarOrderV2,
+    orderPertenceLocalmenteAoMpOrdersV2
+  },
+  __weeklyPlansTest: {
+    flags: Object.freeze({
+      requested: WEEKLY_PLANS_REQUESTED,
+      entitlementsEnabled: WEEKLY_PLAN_ENTITLEMENTS_ENABLED,
+      paymentProcessingEnabled: WEEKLY_PLAN_PAYMENT_PROCESSING_ENABLED,
+      webhookProcessingEnabled: WEEKLY_PLAN_WEBHOOK_PROCESSING_ENABLED,
+      purchasesEnabled: WEEKLY_PLAN_PURCHASES_ENABLED
+    }),
+    pedidoElegivelPlanoSemanal,
+    migrateDatabase: async () => {
+      if (!radarPool) throw new Error("WEEKLY_PLAN_DATABASE_NOT_CONFIGURED");
+      return migrate({ pool: radarPool });
+    },
+    closePool: async () => {
+      if (radarPool) await radarPool.end();
+    }
   }
 };

@@ -69,7 +69,7 @@ test("embedded local PostgreSQL runs migrations twice and is unavailable in prod
   try {
     const first = await migrate({ pool });
     const second = await migrate({ pool });
-    assert.equal(first.at(-1), "016_match_communication.sql");
+    assert.equal(first.at(-1), "017_weekly_image_plans.sql");
     assert.deepEqual(second, []);
     assert.deepEqual(await checkDatabase(pool), { ok: true });
   } finally {

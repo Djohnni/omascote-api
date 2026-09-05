@@ -2,7 +2,13 @@
 
 const express = require("express");
 
-function createHealthRouter({ config, buildInfo, checkDatabase, getMigrationStatus }) {
+function createHealthRouter({
+  config,
+  buildInfo,
+  checkDatabase,
+  getMigrationStatus,
+  additionalReadiness
+}) {
   const router = express.Router();
   const metadata = {
     service: "omascote-api",
@@ -17,13 +23,22 @@ function createHealthRouter({ config, buildInfo, checkDatabase, getMigrationStat
 
   router.get("/health/ready", async (req, res) => {
     res.set("Cache-Control", "no-store");
+    let additional = { ok: true, details: {} };
+    try {
+      if (typeof additionalReadiness === "function") {
+        additional = await additionalReadiness();
+      }
+    } catch {
+      additional = { ok: false, details: { additional_readiness: "unavailable" } };
+    }
 
     if (!config.enabled) {
-      return res.json({
-        ok: true,
+      return res.status(additional.ok === false ? 503 : 200).json({
+        ok: additional.ok !== false,
         ...metadata,
         radar_amistosos: "disabled",
-        database: "not_required"
+        database: additional.database || "not_required",
+        ...(additional.details || {})
       });
     }
 
@@ -43,12 +58,13 @@ function createHealthRouter({ config, buildInfo, checkDatabase, getMigrationStat
     const moderationConfigured = config.moderationEnabled !== true || config.moderationConfigured === true;
     const communicationConfigured = config.matchCommunicationEnabled !== true || config.matchCommunicationConfigured === true;
     const metricsConfigured = config.metricsEnabled !== true || config.metricsConfigured === true;
-    const ready = database.ok && metricsConfigured && profilePrintConfigured && searchConfigured && invitationsConfigured && matchCenterConfigured && matchResultsConfigured && matchHistoryConfigured && reputationConfigured && moderationConfigured && communicationConfigured;
+    const ready = database.ok && additional.ok !== false && metricsConfigured && profilePrintConfigured && searchConfigured && invitationsConfigured && matchCenterConfigured && matchResultsConfigured && matchHistoryConfigured && reputationConfigured && moderationConfigured && communicationConfigured;
     return res.status(ready ? 200 : 503).json({
       ok: ready,
       ...metadata,
       radar_amistosos: "enabled",
       database: database.ok ? "ready" : database.reason,
+      ...(additional.details || {}),
       radar_participation: "automatic",
       metrics: config.metricsEnabled !== true
         ? "disabled"

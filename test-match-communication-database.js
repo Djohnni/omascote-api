@@ -141,7 +141,10 @@ test("migration 016 backfills accepted matches, runs once and remains idempotent
     const alpha = await insertTeam(database, "backfill-alpha", current);
     const beta = await insertTeam(database, "backfill-beta", current);
     const matchId = await acceptedMatch(database, alpha, beta, current, "backfill");
-    assert.deepEqual(await migrate({ pool: adapter }), ["016_match_communication.sql"]);
+    assert.deepEqual(await migrate({ pool: adapter }), [
+      "016_match_communication.sql",
+      "017_weekly_image_plans.sql"
+    ]);
     assert.deepEqual(await migrate({ pool: adapter }), []);
     const conversation = await database.query(`
       SELECT conversation.id FROM radar_match_conversations conversation

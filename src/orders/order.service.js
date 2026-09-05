@@ -355,9 +355,9 @@ function buildPedidoData({
   return pedido;
 }
 
-function persistNewOrder({ base, pedido }) {
+function persistNewOrder({ base, pedido, initialStatus = orderStatus.ORDER_STATUS.NOVO }) {
   orderStorage.writeOrder(base, pedido);
-  orderStorage.writeStatus(base, orderStatus.ORDER_STATUS.NOVO);
+  orderStorage.writeStatus(base, initialStatus);
 }
 
 function createOrderDraft({
@@ -371,9 +371,12 @@ function createOrderDraft({
   idempotencyKey = "",
   idempotencyPayloadHash = "",
   idempotencyPayloadHashVersion = 0,
-  idempotencyInputFiles = []
+  idempotencyInputFiles = [],
+  orderId = "",
+  initialStatus = orderStatus.ORDER_STATUS.NOVO,
+  initialOrderPatch = null
 }) {
-  const id = orderStorage.newPedidoId();
+  const id = String(orderId || "").trim() || orderStorage.newPedidoId();
   const base = buildOrderBasePath({ pedidosDir, whatsapp, mesAtual, id });
 
   ensureOrderDirectory(base);
@@ -406,8 +409,11 @@ function createOrderDraft({
   if (Array.isArray(idempotencyInputFiles) && idempotencyInputFiles.length) {
     pedido.idempotency_input_files = idempotencyInputFiles.map(item => ({ ...item }));
   }
+  if (initialOrderPatch && typeof initialOrderPatch === "object" && !Array.isArray(initialOrderPatch)) {
+    Object.assign(pedido, initialOrderPatch);
+  }
 
-  persistNewOrder({ base, pedido });
+  persistNewOrder({ base, pedido, initialStatus });
 
   return {
     id,
