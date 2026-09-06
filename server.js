@@ -90,6 +90,7 @@ const {
   createLegacyRadarIdentityResolver,
   accountReference
 } = require("./src/friendlies/radar-identity.policy");
+const { createAtendimentoProxyRouter } = require("./src/atendimento/chat-proxy.routes");
 
 function criarArquivoZip(options = {}) {
   if (typeof archiverModule === "function") {
@@ -333,6 +334,7 @@ app.use((req, res, next) => {
 });
 app.use(express.urlencoded({ extended: false, limit: "8kb" }));
 app.use(express.static("public"));
+app.use("/atendimento", createAtendimentoProxyRouter());
 
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "";
 
