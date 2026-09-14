@@ -55,3 +55,47 @@ test("reprocessa somente rejeicao antiga causada pela lista de pacotes", () => {
     false
   );
 });
+
+test("recuperacao aceita somente pagamento Pix aprovado com pacote e valores exatos", () => {
+  const pagamento = {
+    status: "approved",
+    transaction_amount: 48,
+    external_reference: "saldo_pix|conta69|saldo_4800|1789422171309",
+    metadata: {
+      tipo: "saldo",
+      whatsapp: "conta69",
+      pacote: "saldo_4800",
+      credito: 56
+    }
+  };
+
+  assert.deepEqual(
+    __saldoPaymentTest.validarPagamentoPixSaldoParaRecuperacao(pagamento),
+    {
+      ok: true,
+      whatsapp: "conta69",
+      pacote: "saldo_4800",
+      credito: 56,
+      valor_pago: 48
+    }
+  );
+
+  for (const alteracao of [
+    { status: "pending" },
+    { transaction_amount: 8 },
+    { external_reference: "saldo_pix|outra|saldo_4800|1789422171309" },
+    { metadata: { ...pagamento.metadata, credito: 55 } },
+    { metadata: { ...pagamento.metadata, pacote: "saldo_invalido" } },
+    { metadata: { ...pagamento.metadata, tipo: "pedido_pix" } }
+  ]) {
+    const candidato = {
+      ...pagamento,
+      ...alteracao,
+      metadata: alteracao.metadata || pagamento.metadata
+    };
+    assert.equal(
+      __saldoPaymentTest.validarPagamentoPixSaldoParaRecuperacao(candidato).ok,
+      false
+    );
+  }
+});

@@ -1174,6 +1174,13 @@ const CREDITOS_SALDO_PERMITIDOS = new Set([
   5600
 ]);
 
+const PACOTES_SALDO_PIX = Object.freeze({
+  saldo_800: Object.freeze({ valor_pago: 8, credito: 10 }),
+  saldo_1800: Object.freeze({ valor_pago: 18, credito: 21 }),
+  saldo_2800: Object.freeze({ valor_pago: 28, credito: 32 }),
+  saldo_4800: Object.freeze({ valor_pago: 48, credito: 56 })
+});
+
 function normalizarValorFinanceiro(valor) {
   const numero = Number(valor || 0);
   return Number.isFinite(numero) ? Number(numero.toFixed(2)) : 0;
@@ -2268,6 +2275,41 @@ function saldoRejeitadoPodeSerReprocessado(registro) {
     registro?.status === "credito_saldo_rejeitado" &&
     registro?.motivo === "credito_fora_dos_pacotes"
   );
+}
+
+function validarPagamentoPixSaldoParaRecuperacao(pagamento) {
+  const metadata = pagamento?.metadata || {};
+  const pacote = String(metadata.pacote || "");
+  const configuracao = PACOTES_SALDO_PIX[pacote];
+  const credito = normalizarValorFinanceiro(metadata.credito);
+  const valorPago = normalizarValorFinanceiro(pagamento?.transaction_amount);
+  const whatsapp = String(metadata.whatsapp || "").trim();
+  const external = String(pagamento?.external_reference || "");
+  const partesExternal = external.split("|");
+
+  if (
+    pagamento?.status !== "approved" ||
+    metadata.tipo !== "saldo" ||
+    !configuracao ||
+    !whatsapp ||
+    credito !== configuracao.credito ||
+    valorPago !== configuracao.valor_pago ||
+    partesExternal.length !== 4 ||
+    partesExternal[0] !== "saldo_pix" ||
+    partesExternal[1] !== whatsapp ||
+    partesExternal[2] !== pacote ||
+    !/^\d{10,20}$/.test(partesExternal[3])
+  ) {
+    return { ok: false };
+  }
+
+  return {
+    ok: true,
+    whatsapp,
+    pacote,
+    credito,
+    valor_pago: valorPago
+  };
 }
 
 function calcularBonusPrimeiraCompraSeguro(pedido, pagamento) {
@@ -12985,6 +13027,106 @@ app.post("/webhook/mercadopago", async (req, res) => {
   }
 });
 
+app.post("/bot/pagamentos/reprocessar-saldo-rejeitado", auth, async (req, res) => {
+  if (!isBotAdmin(req)) {
+    return res.status(403).json({ ok: false, error: "Acesso negado" });
+  }
+
+  const paymentId = String(req.body?.payment_id || "").trim();
+  if (!/^\d{6,30}$/.test(paymentId)) {
+    return res.status(400).json({ ok: false, error: "Pagamento invalido" });
+  }
+
+  let processados = readMpProcessados();
+  if (!saldoRejeitadoPodeSerReprocessado(processados[paymentId])) {
+    return res.status(409).json({
+      ok: false,
+      error: "Pagamento nao esta elegivel para recuperacao"
+    });
+  }
+
+  try {
+    const resposta = await fetch(
+      `https://api.mercadopago.com/v1/payments/${encodeURIComponent(paymentId)}`,
+      { headers: { Authorization: `Bearer ${MP_ACCESS_TOKEN}` } }
+    );
+    const pagamento = await resposta.json();
+    const validacao = validarPagamentoPixSaldoParaRecuperacao(pagamento);
+
+    if (!resposta.ok || !validacao.ok) {
+      return res.status(409).json({
+        ok: false,
+        error: "Pagamento nao aprovado para recuperacao"
+      });
+    }
+
+    processados = readMpProcessados();
+    if (!saldoRejeitadoPodeSerReprocessado(processados[paymentId])) {
+      return res.status(409).json({
+        ok: false,
+        error: "Pagamento nao esta elegivel para recuperacao"
+      });
+    }
+
+    const clientes = readClientes();
+    const cliente = clientes[validacao.whatsapp];
+    if (!cliente) {
+      return res.status(404).json({ ok: false, error: "Cliente nao encontrado" });
+    }
+
+    const creditosAplicados = (
+      cliente.creditos_saldo_mp &&
+      typeof cliente.creditos_saldo_mp === "object" &&
+      !Array.isArray(cliente.creditos_saldo_mp)
+    ) ? cliente.creditos_saldo_mp : {};
+
+    if (creditosAplicados[paymentId]) {
+      return res.json({
+        ok: true,
+        duplicado: true,
+        saldo: billingService.getAvailableBalance(cliente)
+      });
+    }
+
+    const saldoAntes = billingService.getAvailableBalance(cliente);
+    cliente.saldo_extra = Number(
+      (Number(cliente.saldo_extra || 0) + validacao.credito).toFixed(2)
+    );
+    cliente.ativo = true;
+    creditosAplicados[paymentId] = {
+      credito: validacao.credito,
+      valor_pago: validacao.valor_pago,
+      pacote: validacao.pacote,
+      recuperado_em: new Date().toISOString()
+    };
+    cliente.creditos_saldo_mp = creditosAplicados;
+    clientes[validacao.whatsapp] = cliente;
+    writeClientes(clientes);
+
+    processados[paymentId] = {
+      whatsapp: validacao.whatsapp,
+      credito: validacao.credito,
+      status: "approved",
+      recuperado_admin: true,
+      criado_em: new Date().toISOString()
+    };
+    writeMpProcessados(processados);
+
+    return res.json({
+      ok: true,
+      payment_id: paymentId,
+      credito: validacao.credito,
+      saldo_antes: saldoAntes,
+      saldo_depois: billingService.getAvailableBalance(cliente)
+    });
+  } catch {
+    return res.status(503).json({
+      ok: false,
+      error: "Nao foi possivel recuperar o pagamento agora"
+    });
+  }
+});
+
 // ===== CRIA PEDIDO =====
 function criarPedidoHandlerAsync(categoria) {
   return async (req, res) => {
@@ -16121,7 +16263,8 @@ module.exports = {
   },
   __saldoPaymentTest: {
     validarCreditoSaldoMercadoPago,
-    saldoRejeitadoPodeSerReprocessado
+    saldoRejeitadoPodeSerReprocessado,
+    validarPagamentoPixSaldoParaRecuperacao
   },
   __weeklyPlansTest: {
     flags: Object.freeze({
