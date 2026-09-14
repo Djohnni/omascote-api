@@ -1163,7 +1163,16 @@ function validarAssinaturaWebhookMercadoPago(req) {
   );
 }
 
-const CREDITOS_SALDO_PERMITIDOS = new Set([800, 1800, 2800, 4800]);
+const CREDITOS_SALDO_PERMITIDOS = new Set([
+  800,
+  1000,
+  1800,
+  2100,
+  2800,
+  3200,
+  4800,
+  5600
+]);
 
 function normalizarValorFinanceiro(valor) {
   const numero = Number(valor || 0);
@@ -2252,6 +2261,13 @@ function validarCreditoSaldoMercadoPago(valor) {
     credito,
     acimaDoLimite: credito > 60
   };
+}
+
+function saldoRejeitadoPodeSerReprocessado(registro) {
+  return (
+    registro?.status === "credito_saldo_rejeitado" &&
+    registro?.motivo === "credito_fora_dos_pacotes"
+  );
 }
 
 function calcularBonusPrimeiraCompraSeguro(pedido, pagamento) {
@@ -12494,8 +12510,18 @@ app.post("/webhook/mercadopago", async (req, res) => {
 
     let processados = readMpProcessados();
 
-    if (processados[paymentId]) {
+    if (
+      processados[paymentId] &&
+      !saldoRejeitadoPodeSerReprocessado(processados[paymentId])
+    ) {
       return res.json({ ok: true, duplicado: true });
+    }
+
+    if (saldoRejeitadoPodeSerReprocessado(processados[paymentId])) {
+      console.warn("[MP_WEBHOOK] reprocessando_credito_saldo_rejeitado", {
+        payment_id: String(paymentId),
+        credito: processados[paymentId].credito
+      });
     }
 
     processados[paymentId] = {
@@ -16092,6 +16118,10 @@ module.exports = {
     },
     processarOrderV2,
     orderPertenceLocalmenteAoMpOrdersV2
+  },
+  __saldoPaymentTest: {
+    validarCreditoSaldoMercadoPago,
+    saldoRejeitadoPodeSerReprocessado
   },
   __weeklyPlansTest: {
     flags: Object.freeze({
