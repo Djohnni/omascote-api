@@ -91,6 +91,8 @@ const {
   accountReference
 } = require("./src/friendlies/radar-identity.policy");
 const { createAtendimentoProxyRouter } = require("./src/atendimento/chat-proxy.routes");
+const { AtendimentoChatAuditStore } = require("./src/atendimento/chat-audit.store");
+const { createChatAuditAdminRouter } = require("./src/atendimento/chat-audit.routes");
 
 function criarArquivoZip(options = {}) {
   if (typeof archiverModule === "function") {
@@ -145,6 +147,7 @@ const DATA_DIR = process.env.OMASCOTE_DATA_DIR
 
 const PEDIDOS_DIR = path.join(DATA_DIR, "pedidos");
 const CLIENTES_FILE = path.join(DATA_DIR, "clientes.json");
+const ATENDIMENTO_AUDIT_FILE = path.join(DATA_DIR, "atendimento_chat_auditoria.json");
 const BOT_ADMIN_WHATSAPP = process.env.BOT_ADMIN_WHATSAPP || "15991120599";
 const MP_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN || "";
 const MP_SANDBOX_MODE = String(
@@ -334,7 +337,16 @@ app.use((req, res, next) => {
 });
 app.use(express.urlencoded({ extended: false, limit: "8kb" }));
 app.use(express.static("public"));
-app.use("/atendimento", createAtendimentoProxyRouter());
+const atendimentoChatAuditStore = new AtendimentoChatAuditStore({
+  filePath: ATENDIMENTO_AUDIT_FILE,
+  inactivityMs: 10 * 60 * 1000
+});
+app.use("/atendimento", createAtendimentoProxyRouter({ auditStore: atendimentoChatAuditStore }));
+app.use("/bot/atendimento/auditoria", createChatAuditAdminRouter({
+  store: atendimentoChatAuditStore,
+  auth,
+  isAdmin: isBotAdmin
+}));
 
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "";
 

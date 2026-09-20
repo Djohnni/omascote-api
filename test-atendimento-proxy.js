@@ -12,13 +12,14 @@ const {
 
 const session = "00000000-0000-4000-8000-000000000001";
 
-function startServer(fetchImpl) {
+function startServer(fetchImpl, options = {}) {
   const app = express();
   app.use(express.json({ limit: "1mb" }));
   app.use("/atendimento", createAtendimentoProxyRouter({
     upstreamUrl: "https://atendimento.internal",
     fetchImpl,
-    now: () => 1_000
+    now: () => 1_000,
+    ...options
   }));
   const server = http.createServer(app);
   return new Promise(resolve => server.listen(0, "127.0.0.1", () => resolve(server)));
@@ -29,6 +30,38 @@ test("sessão e rotas do atendimento são restritas", () => {
   assert.equal(requestSession({ query: { session: "invalida" } }), null);
   assert.equal(ALLOWED_ROUTES.has("lab"), true);
   assert.equal(ALLOWED_ROUTES.has("generate"), false);
+});
+
+test("registra o histórico aceito sem alterar a resposta do atendimento", async t => {
+  const captured = [];
+  const server = await startServer(async () => new Response(JSON.stringify({ ok: true }), {
+    status: 200,
+    headers: { "Content-Type": "application/json" }
+  }), {
+    auditStore: {
+      captureLabAction(value) { captured.push(value); }
+    }
+  });
+  t.after(() => server.close());
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const body = {
+    action: "save_chat",
+    payload: {
+      conversationId: session,
+      chat: [{ id: "u1", role: "user", text: "Quero uma arte" }]
+    }
+  };
+
+  const response = await fetch(`${base}/atendimento/lab?session=${session}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { ok: true });
+  assert.equal(captured.length, 1);
+  assert.equal(captured[0].session, session);
+  assert.deepEqual(captured[0].body, body);
 });
 
 test("encaminha o chat sem expor o domínio interno ao navegador", async t => {
