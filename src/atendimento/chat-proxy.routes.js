@@ -31,6 +31,8 @@ function createAtendimentoProxyRouter(options = {}) {
   const upstream = String(options.upstreamUrl || process.env.OMASCOTE_ATENDIMENTO_BACKEND || DEFAULT_UPSTREAM).replace(/\/+$/, "");
   const fetchImpl = options.fetchImpl || fetch;
   const now = options.now || (() => Date.now());
+  const auditStore = options.auditStore || null;
+  const logger = options.logger || console;
   const aiUsage = new Map();
 
   function allowBucket(key, limit) {
@@ -101,12 +103,21 @@ function createAtendimentoProxyRouter(options = {}) {
       return res.status(502).json({ ok: false, error: "O atendimento está temporariamente indisponível." });
     }
 
+    const responseBody = Buffer.from(await upstreamResponse.arrayBuffer());
+    if (upstreamResponse.ok && route === "lab" && req.method === "POST" && auditStore) {
+      try {
+        auditStore.captureLabAction({ session, body: req.body || {} });
+      } catch (error) {
+        logger.error?.("[chat_audit] falha_captura", error?.message || error);
+      }
+    }
+
     res.status(upstreamResponse.status);
     res.set("Cache-Control", "no-store");
     res.set("X-Content-Type-Options", "nosniff");
     const responseType = upstreamResponse.headers.get("content-type");
     if (responseType) res.set("Content-Type", responseType);
-    return res.send(Buffer.from(await upstreamResponse.arrayBuffer()));
+    return res.send(responseBody);
   });
 
   return router;
