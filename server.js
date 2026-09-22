@@ -2684,90 +2684,22 @@ function isPedidoSemPagamentoConfirmado(pedido) {
   );
 }
 
-const DEMO_PAYMENT_CYCLE_VERSION = "paid_then_one_demo_v1";
-const DEMO_PAYMENT_METHODS = new Set(["pix", "saldo_ia4tube"]);
+const ART_PREPAYMENT_VERSION = "pix_before_every_art_v1";
 
-function getPedidoValorCobrado(pedido) {
-  return normalizarValorFinanceiro(
-    pedido?.pagamento_info?.valor_pago ||
-    pedido?.valor_final ||
-    pedido?.valor_pendente ||
-    pedido?.valor_original ||
-    0
-  );
-}
-
-function pedidoTemPagamentoRealConfirmado(pedido) {
-  if (!pedido || pedido.pagamento_pendente === true) return false;
-  const metodo = String(pedido.pagamento_metodo || "").trim().toLowerCase();
-  return (
-    DEMO_PAYMENT_METHODS.has(metodo) &&
-    Boolean(pedido.pagamento_confirmado_em) &&
-    getPedidoValorCobrado(pedido) > 0
-  );
-}
-
-function pedidoPendenteBloqueiaNovaDemonstracao(pedido) {
-  return isPedidoSemPagamentoConfirmado(pedido) && getPedidoValorCobrado(pedido) > 0;
-}
-
-function avaliarCicloDemonstracao(itens = []) {
-  const pedidos = (Array.isArray(itens) ? itens : [])
-    .map(item => item?.pedido || item)
-    .filter(Boolean);
-  const itemPendente = (Array.isArray(itens) ? itens : []).find(item =>
-    pedidoPendenteBloqueiaNovaDemonstracao(item?.pedido || item)
-  );
-
-  return {
-    possui_pagamento_real: pedidos.some(pedidoTemPagamentoRealConfirmado),
-    pedido_pendente: itemPendente?.pedido || itemPendente || null,
-    pedido_pendente_id: String(itemPendente?.id || itemPendente?.pedido?.id || "")
-  };
-}
-
-function decidirCicloDemonstracaoCriacao({
+function decidirPagamentoAntesDaCriacao({
   valor,
   cobertoPeloPlano,
-  temSaldoDisponivel,
-  pedidoAssistente,
-  modalidadeCriacao,
-  cicloDemonstracao
+  temSaldoDisponivel
 }) {
   const cobravel = normalizarValorFinanceiro(valor) > 0 && !cobertoPeloPlano;
-  const modalidadeEconomica =
-    normalizarModalidadeCriacao(modalidadeCriacao) === MODALIDADE_CRIACAO_ECONOMICA;
-  const primeiraArteExigePix =
-    cobravel &&
-    !temSaldoDisponivel &&
-    cicloDemonstracao?.possui_pagamento_real !== true;
-  const pagamentoAntecipadoObrigatorio =
-    cobravel && (pedidoAssistente === true || modalidadeEconomica || primeiraArteExigePix);
+  const pagamentoAntecipadoObrigatorio = cobravel;
   const temSaldoSuficiente = !pagamentoAntecipadoObrigatorio && temSaldoDisponivel === true;
 
   return {
-    primeira_arte_exige_pix: primeiraArteExigePix,
     pagamento_antecipado_obrigatorio: pagamentoAntecipadoObrigatorio,
     tem_saldo_suficiente: temSaldoSuficiente,
-    demonstracao_apos_pagamento:
-      cobravel &&
-      !pagamentoAntecipadoObrigatorio &&
-      !temSaldoSuficiente
+    demonstracao_apos_pagamento: false
   };
-}
-
-function deveBloquearNovaArtePorDemonstracaoPendente({
-  valor,
-  pedidoAssistente,
-  modalidadeCriacao,
-  cicloDemonstracao
-}) {
-  return (
-    normalizarValorFinanceiro(valor) > 0 &&
-    pedidoAssistente !== true &&
-    normalizarModalidadeCriacao(modalidadeCriacao) !== MODALIDADE_CRIACAO_ECONOMICA &&
-    Boolean(cicloDemonstracao?.pedido_pendente)
-  );
 }
 
 function pedidoAguardandoPagamentoParaCriacao(pedido) {
@@ -3818,6 +3750,7 @@ function buildOrderResponsePayloadFromItem(item, extra = {}) {
       pedido.pagamento_pendente === true,
     demonstracao_apos_pagamento: pedido.demonstracao_apos_pagamento === true,
     ciclo_demonstracao_versao: pedido.ciclo_demonstracao_versao || "",
+    regra_pagamento_versao: pedido.regra_pagamento_versao || "",
     suporte_personalizado_incluido: modalidadeCriacao !== MODALIDADE_CRIACAO_ECONOMICA,
     coberto_pelo_plano: pedido.pagamento_metodo === "plano_semanal",
     plano_semanal: pedido.pagamento_metodo === "plano_semanal"
@@ -13554,29 +13487,6 @@ function criarPedidoHandlerAsync(categoria) {
 
     const cupomAplicado = resultadoCupom.cupomAplicado === true;
     let custoEfetivoPedido = brindeEscudo3dApp ? 0 : resultadoCupom.valorFinal;
-    const cicloDemonstracao = avaliarCicloDemonstracao(
-      listPedidoBasesByWhatsapp(whatsapp)
-    );
-
-    if (deveBloquearNovaArtePorDemonstracaoPendente({
-      valor: custoEfetivoPedido,
-      pedidoAssistente,
-      modalidadeCriacao,
-      cicloDemonstracao
-    })) {
-      limparUploadsTemporarios(req.files);
-      if (cupomLockAtivo) {
-        liberarLockCupomJogadorEscudo();
-        cupomLockAtivo = false;
-      }
-      return res.status(409).json({
-        ok: false,
-        code: "DEMONSTRACAO_PENDENTE",
-        error: "Voce ja possui uma arte com pagamento pendente. Pague essa arte antes de criar outra demonstracao.",
-        pedido_id: cicloDemonstracao.pedido_pendente_id,
-        valor_pendente: getPedidoValorCobrado(cicloDemonstracao.pedido_pendente)
-      });
-    }
     const pedidoElegivelPlano = pedidoElegivelPlanoSemanal(categoria, c, fields);
 
     if (!orderService.hasRequiredOrderFields(fields)) {
@@ -13802,19 +13712,15 @@ function criarPedidoHandlerAsync(categoria) {
     const temSaldoDisponivel =
       billingService.hasEnoughBalance(c, custoEfetivoPedido) ||
       !!transacaoSaldoExistente;
-    const decisaoCicloDemonstracao = decidirCicloDemonstracaoCriacao({
+    const decisaoPagamento = decidirPagamentoAntesDaCriacao({
       valor: custoEfetivoPedido,
       cobertoPeloPlano,
-      temSaldoDisponivel,
-      pedidoAssistente,
-      modalidadeCriacao,
-      cicloDemonstracao
+      temSaldoDisponivel
     });
     const pagamentoAntecipadoObrigatorio =
-      decisaoCicloDemonstracao.pagamento_antecipado_obrigatorio;
-    const temSaldoSuficiente = decisaoCicloDemonstracao.tem_saldo_suficiente;
-    const demonstracaoAposPagamento =
-      decisaoCicloDemonstracao.demonstracao_apos_pagamento;
+      decisaoPagamento.pagamento_antecipado_obrigatorio;
+    const temSaldoSuficiente = decisaoPagamento.tem_saldo_suficiente;
+    const demonstracaoAposPagamento = false;
 
     const previewLimiterIdentifiers = getPreviewLimiterIdentifiers(req, c, whatsapp);
     const previewLimiterState = getPreviewLimiterState(previewLimiterIdentifiers);
@@ -13953,7 +13859,8 @@ function criarPedidoHandlerAsync(categoria) {
     draft.pedido.modalidade_criacao = modalidadeCriacao;
     draft.pedido.assistente_lote = pedidoAssistente;
     draft.pedido.batch_id = batchIdPedido;
-    draft.pedido.ciclo_demonstracao_versao = DEMO_PAYMENT_CYCLE_VERSION;
+    draft.pedido.ciclo_demonstracao_versao = "";
+    draft.pedido.regra_pagamento_versao = ART_PREPAYMENT_VERSION;
     draft.pedido.pagamento_previo_obrigatorio = pagamentoAntecipadoObrigatorio;
     draft.pedido.demonstracao_apos_pagamento = demonstracaoAposPagamento;
     draft.pedido.suporte_personalizado_incluido = modalidadeCriacao !== MODALIDADE_CRIACAO_ECONOMICA;
@@ -14096,16 +14003,8 @@ function criarPedidoHandlerAsync(categoria) {
       draft.pedido.payment_flow_version = MP_ORDERS_V2_VERSION;
       draft.pedido.payment_flow_created_at = new Date().toISOString();
       draft.pedido.motivo_pagamento_pendente = pagamentoAntecipadoObrigatorio
-        ? (
-          pedidoAssistente
-            ? "pix_obrigatorio_assistente"
-            : modalidadeCriacao === MODALIDADE_CRIACAO_ECONOMICA
-              ? "pix_obrigatorio_criacao_economica"
-              : "pix_obrigatorio_primeira_arte"
-        )
-        : demonstracaoAposPagamento
-          ? "demonstracao_apos_pagamento"
-          : "saldo_insuficiente";
+        ? "pix_obrigatorio_toda_arte"
+        : "saldo_insuficiente";
       aplicarResumoCupomNoPedido(draft.pedido, resultadoCupom);
       orderService.orderStorage.writeOrder(draft.base, draft.pedido);
       if (pagamentoAntecipadoObrigatorio) {
@@ -14145,8 +14044,9 @@ function criarPedidoHandlerAsync(categoria) {
       camiseta_time_adicional: draft.pedido.camiseta_time_adicional === true,
       valor_adicional_camiseta: Number(draft.pedido.valor_adicional_camiseta || 0),
       requer_pix_antes_criacao: pagamentoAntecipadoObrigatorio,
-      demonstracao_apos_pagamento: demonstracaoAposPagamento,
-      ciclo_demonstracao_versao: DEMO_PAYMENT_CYCLE_VERSION,
+      demonstracao_apos_pagamento: false,
+      ciclo_demonstracao_versao: "",
+      regra_pagamento_versao: ART_PREPAYMENT_VERSION,
       batch_id: draft.pedido.batch_id || "",
       assistente_lote: draft.pedido.assistente_lote === true,
       client_request_id: dedupeMeta.clientRequestId,
@@ -14637,6 +14537,7 @@ app.get("/meus-pedidos", auth, (req, res) => {
         item.pedido.pagamento_previo_obrigatorio === true && pagamentoPendente,
       demonstracao_apos_pagamento: item.pedido.demonstracao_apos_pagamento === true,
       ciclo_demonstracao_versao: item.pedido.ciclo_demonstracao_versao || "",
+      regra_pagamento_versao: item.pedido.regra_pagamento_versao || "",
       ajuste_automatico_usado: ajusteUsado,
       motivo_ajuste: item.pedido.motivo_ajuste || "",
       pode_baixar: imagemPronta && aprovadoCliente && !pagamentoPendente,
@@ -14672,6 +14573,14 @@ app.post("/pedidos/:id/pagar-com-saldo", auth, (req, res) => {
       ok: true,
       mensagem: "Pedido ja liberado.",
       pagamento_pendente: false
+    });
+  }
+
+  if (pedido.regra_pagamento_versao === ART_PREPAYMENT_VERSION) {
+    return res.status(409).json({
+      ok: false,
+      code: "PIX_OBRIGATORIO_PARA_ARTE",
+      error: "Este pedido deve ser pago com Pix para entrar em producao."
     });
   }
 
@@ -14891,6 +14800,7 @@ app.get("/pedidos/:id/pagamento-info", auth, (req, res) => {
       pedido.pagamento_pendente === true,
     demonstracao_apos_pagamento: pedido.demonstracao_apos_pagamento === true,
     ciclo_demonstracao_versao: pedido.ciclo_demonstracao_versao || "",
+    regra_pagamento_versao: pedido.regra_pagamento_versao || "",
     order_id: pedido.mp_order_id || "",
     payment_id: pedido.mp_payment_id || "",
     mp_payment_status: pedido.mp_payment_status || "",
@@ -15295,6 +15205,7 @@ app.get("/pedidos/:id/info", auth, (req, res) => {
       pedido.pagamento_pendente === true,
     demonstracao_apos_pagamento: pedido.demonstracao_apos_pagamento === true,
     ciclo_demonstracao_versao: pedido.ciclo_demonstracao_versao || "",
+    regra_pagamento_versao: pedido.regra_pagamento_versao || "",
     ajuste_automatico_usado: pedido.ajuste_automatico_usado === true,
     motivo_ajuste: pedido.motivo_ajuste || "",
     pode_baixar: imagem_pronta && pedido.aprovado_cliente === true && pedido.pagamento_pendente !== true,
@@ -16428,14 +16339,9 @@ module.exports = {
     saldoRejeitadoPodeSerReprocessado,
     validarPagamentoPixSaldoParaRecuperacao
   },
-  __demoPaymentCycleTest: {
-    version: DEMO_PAYMENT_CYCLE_VERSION,
-    getPedidoValorCobrado,
-    pedidoTemPagamentoRealConfirmado,
-    pedidoPendenteBloqueiaNovaDemonstracao,
-    avaliarCicloDemonstracao,
-    decidirCicloDemonstracaoCriacao,
-    deveBloquearNovaArtePorDemonstracaoPendente,
+  __artPrepaymentTest: {
+    version: ART_PREPAYMENT_VERSION,
+    decidirPagamentoAntesDaCriacao,
     pedidoAguardandoPagamentoParaCriacao
   },
   __weeklyPlansTest: {

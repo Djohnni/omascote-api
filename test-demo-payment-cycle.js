@@ -4,22 +4,12 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 
-const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "omascote-demo-cycle-"));
+const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "omascote-art-prepayment-"));
 process.env.OMASCOTE_DATA_DIR = dataDir;
-process.env.JWT_SECRET = "demo-payment-cycle-test-secret";
+process.env.JWT_SECRET = "art-prepayment-test-secret";
 process.env.NODE_ENV = "test";
 
-const { __demoPaymentCycleTest: cycle } = require("./server");
-
-function paidOrder(method = "pix") {
-  return {
-    pagamento_pendente: false,
-    pagamento_metodo: method,
-    pagamento_confirmado_em: "2026-09-21T20:00:00.000Z",
-    valor_final: 8,
-    pagamento_info: { valor_pago: 8, status: "approved" }
-  };
-}
+const { __artPrepaymentTest: prepayment } = require("./server");
 
 function pendingOrder(extra = {}) {
   return {
@@ -29,90 +19,63 @@ function pendingOrder(extra = {}) {
   };
 }
 
-test("primeira arte sem pagamento anterior ainda nao possui direito a demonstracao", () => {
-  const state = cycle.avaliarCicloDemonstracao([]);
-  assert.deepEqual(state, {
-    possui_pagamento_real: false,
-    pedido_pendente: null,
-    pedido_pendente_id: ""
-  });
-  assert.deepEqual(cycle.decidirCicloDemonstracaoCriacao({
+test("toda arte cobravel exige Pix antes da criacao", () => {
+  assert.deepEqual(prepayment.decidirPagamentoAntesDaCriacao({
     valor: 8,
     cobertoPeloPlano: false,
-    temSaldoDisponivel: false,
-    pedidoAssistente: false,
-    modalidadeCriacao: "com_suporte",
-    cicloDemonstracao: state
+    temSaldoDisponivel: false
   }), {
-    primeira_arte_exige_pix: true,
     pagamento_antecipado_obrigatorio: true,
     tem_saldo_suficiente: false,
     demonstracao_apos_pagamento: false
   });
 });
 
-test("Pix e saldo pago liberam uma demonstracao, mas cupom e plano nao", () => {
-  assert.equal(
-    cycle.avaliarCicloDemonstracao([{ id: "pix-1", pedido: paidOrder("pix") }])
-      .possui_pagamento_real,
-    true
-  );
-  assert.equal(
-    cycle.avaliarCicloDemonstracao([{ id: "saldo-1", pedido: paidOrder("saldo_ia4tube") }])
-      .possui_pagamento_real,
-    true
-  );
-
-  for (const metodo of ["cupom", "brinde_app", "plano_semanal"]) {
-    assert.equal(
-      cycle.avaliarCicloDemonstracao([{ pedido: paidOrder(metodo) }])
-        .possui_pagamento_real,
-      false,
-      `${metodo} nao deve liberar demonstracao`
-    );
-  }
-});
-
-test("uma arte pendente bloqueia a segunda demonstracao mesmo depois de outro Pix", () => {
-  const pendente = pendingOrder({ motivo_pagamento_pendente: "saldo_insuficiente" });
-  const state = cycle.avaliarCicloDemonstracao([
-    { id: "demo-pendente", pedido: pendente },
-    { id: "pix-pago-depois", pedido: paidOrder("pix") }
-  ]);
-
-  assert.equal(state.possui_pagamento_real, true);
-  assert.equal(state.pedido_pendente, pendente);
-  assert.equal(state.pedido_pendente_id, "demo-pendente");
-  assert.equal(cycle.deveBloquearNovaArtePorDemonstracaoPendente({
-    valor: 8,
-    pedidoAssistente: false,
-    modalidadeCriacao: "com_suporte",
-    cicloDemonstracao: state
-  }), true);
-});
-
-test("pagamento anterior transforma exatamente o proximo pedido sem saldo em demonstracao", () => {
-  const state = cycle.avaliarCicloDemonstracao([
-    { id: "pix-pago", pedido: paidOrder("pix") }
-  ]);
-  assert.deepEqual(cycle.decidirCicloDemonstracaoCriacao({
+test("saldo existente nao envia uma arte cobravel para producao sem Pix", () => {
+  assert.deepEqual(prepayment.decidirPagamentoAntesDaCriacao({
     valor: 8,
     cobertoPeloPlano: false,
-    temSaldoDisponivel: false,
-    pedidoAssistente: false,
-    modalidadeCriacao: "com_suporte",
-    cicloDemonstracao: state
+    temSaldoDisponivel: true
   }), {
-    primeira_arte_exige_pix: false,
-    pagamento_antecipado_obrigatorio: false,
+    pagamento_antecipado_obrigatorio: true,
     tem_saldo_suficiente: false,
-    demonstracao_apos_pagamento: true
+    demonstracao_apos_pagamento: false
   });
 });
 
-test("pedido inicial marcado para pre-pagamento nao entra na fila antes do Pix", () => {
+test("uma arte paga anteriormente nao cria demonstracao gratuita", () => {
   assert.equal(
-    cycle.pedidoAguardandoPagamentoParaCriacao(pendingOrder({
+    prepayment.decidirPagamentoAntesDaCriacao({
+      valor: 8,
+      cobertoPeloPlano: false,
+      temSaldoDisponivel: false
+    }).pagamento_antecipado_obrigatorio,
+    true
+  );
+});
+
+test("beneficio gratuito ou cota ja paga nao exige um novo Pix", () => {
+  assert.equal(
+    prepayment.decidirPagamentoAntesDaCriacao({
+      valor: 0,
+      cobertoPeloPlano: false,
+      temSaldoDisponivel: true
+    }).pagamento_antecipado_obrigatorio,
+    false
+  );
+  assert.equal(
+    prepayment.decidirPagamentoAntesDaCriacao({
+      valor: 8,
+      cobertoPeloPlano: true,
+      temSaldoDisponivel: false
+    }).pagamento_antecipado_obrigatorio,
+    false
+  );
+});
+
+test("pedido pendente com pre-pagamento nao entra na fila antes do Pix", () => {
+  assert.equal(
+    prepayment.pedidoAguardandoPagamentoParaCriacao(pendingOrder({
       pagamento_previo_obrigatorio: true,
       modalidade_criacao: "com_suporte"
     })),
@@ -120,21 +83,11 @@ test("pedido inicial marcado para pre-pagamento nao entra na fila antes do Pix",
   );
 
   assert.equal(
-    cycle.pedidoAguardandoPagamentoParaCriacao({
+    prepayment.pedidoAguardandoPagamentoParaCriacao({
       ...pendingOrder({ pagamento_previo_obrigatorio: true }),
       pagamento_pendente: false,
-      pagamento_confirmado_em: "2026-09-21T20:00:00.000Z"
+      pagamento_confirmado_em: "2026-09-22T05:00:00.000Z"
     }),
     false
   );
-});
-
-test("pendencia sem valor nao bloqueia uma nova demonstracao", () => {
-  const state = cycle.avaliarCicloDemonstracao([{
-    id: "gratuito",
-    pedido: pendingOrder({ valor_pendente: 0 })
-  }]);
-
-  assert.equal(state.pedido_pendente, null);
-  assert.equal(state.pedido_pendente_id, "");
 });
