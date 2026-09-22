@@ -5,8 +5,8 @@ const path = require("node:path");
 const test = require("node:test");
 const jwt = require("jsonwebtoken");
 
-const JWT_SECRET = "demo-cycle-integration-secret";
-const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "omascote-demo-cycle-api-"));
+const JWT_SECRET = "art-prepayment-integration-secret";
+const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "omascote-art-prepayment-api-"));
 const clientesFile = path.join(dataDir, "clientes.json");
 const pedidosDir = path.join(dataDir, "pedidos");
 const whatsapp = "5511999990001";
@@ -35,10 +35,10 @@ function writeClientes() {
       id: whatsapp,
       cliente_id: whatsapp,
       whatsapp,
-      nome_time: "Teste ciclo demonstracao",
+      nome_time: "Teste pagamento por arte",
       plano: "teste",
       ativo: true,
-      saldo_extra: 0,
+      saldo_extra: 50,
       saldo_mensal: 0,
       usados_no_ciclo: 0,
       ciclo_mes: month,
@@ -65,13 +65,13 @@ function resultForm(requestId) {
   const form = new FormData();
   form.append("client_request_id", requestId);
   form.append("rodada", "Rodada 1");
-  form.append("data", "21/09/2026");
+  form.append("data", "22/09/2026");
   form.append("hora", "20:00");
   form.append("time_principal", "Time A");
   form.append("time_adversario", "Time B");
   form.append("gols_time_principal", "2");
   form.append("gols_adversario", "1");
-  form.append("observacao", "Teste do ciclo pago e demonstracao");
+  form.append("observacao", "Teste de Pix obrigatorio para cada arte");
   form.append("escudo1", new Blob([tinyPng], { type: "image/png" }), "escudo.png");
   return form;
 }
@@ -94,7 +94,11 @@ function findOrderFile(orderId) {
   throw new Error(`pedido ${orderId} nao encontrado`);
 }
 
-test("API exige pagamento inicial e permite somente uma demonstracao depois", async t => {
+async function createOrder(baseUrl, token, requestId) {
+  return request(baseUrl, "POST", "/resultado_do_jogo", token, resultForm(requestId));
+}
+
+test("API cria um Pix por arte e nunca envia pedido nao pago ao worker", async t => {
   writeClientes();
   const server = await new Promise(resolve => {
     const instance = app.listen(0, "127.0.0.1", () => resolve(instance));
@@ -103,21 +107,36 @@ test("API exige pagamento inicial e permite somente uma demonstracao depois", as
   const baseUrl = `http://127.0.0.1:${server.address().port}`;
   const token = tokenFor(whatsapp);
 
-  const first = await request(
-    baseUrl,
-    "POST",
-    "/resultado_do_jogo",
-    token,
-    resultForm("demo_cycle_first")
-  );
+  const first = await createOrder(baseUrl, token, "prepay_every_art_first");
   assert.equal(first.response.status, 200, JSON.stringify(first.payload));
   assert.equal(first.payload.pagamento_pendente, true);
   assert.equal(first.payload.requer_pix_antes_criacao, true);
   assert.equal(first.payload.demonstracao_apos_pagamento, false);
+  assert.equal(first.payload.regra_pagamento_versao, "pix_before_every_art_v1");
 
   const firstFile = findOrderFile(first.payload.pedido_id);
   const firstBase = path.dirname(firstFile);
   assert.equal(fs.readFileSync(path.join(firstBase, "status.txt"), "utf8").trim(), "aguardando_pagamento");
+
+  const balanceAttempt = await request(
+    baseUrl,
+    "POST",
+    `/pedidos/${first.payload.pedido_id}/pagar-com-saldo`,
+    token
+  );
+  assert.equal(balanceAttempt.response.status, 409);
+  assert.equal(balanceAttempt.payload.code, "PIX_OBRIGATORIO_PARA_ARTE");
+
+  const second = await createOrder(baseUrl, token, "prepay_every_art_second");
+  assert.equal(second.response.status, 200, JSON.stringify(second.payload));
+  assert.notEqual(second.payload.pedido_id, first.payload.pedido_id);
+  assert.equal(second.payload.pagamento_pendente, true);
+  assert.equal(second.payload.requer_pix_antes_criacao, true);
+  assert.equal(second.payload.demonstracao_apos_pagamento, false);
+  assert.equal(
+    fs.readFileSync(path.join(path.dirname(findOrderFile(second.payload.pedido_id)), "status.txt"), "utf8").trim(),
+    "aguardando_pagamento"
+  );
 
   const botBeforePayment = await request(
     baseUrl,
@@ -126,54 +145,34 @@ test("API exige pagamento inicial e permite somente uma demonstracao depois", as
     tokenFor(botWhatsapp)
   );
   assert.equal(botBeforePayment.response.status, 200);
-  assert.equal(
-    botBeforePayment.payload.pedidos.some(item => item.id === first.payload.pedido_id),
-    false
-  );
-
-  const blockedBeforePayment = await request(
-    baseUrl,
-    "POST",
-    "/resultado_do_jogo",
-    token,
-    resultForm("demo_cycle_blocked_before_payment")
-  );
-  assert.equal(blockedBeforePayment.response.status, 409);
-  assert.equal(blockedBeforePayment.payload.code, "DEMONSTRACAO_PENDENTE");
-  assert.equal(blockedBeforePayment.payload.pedido_id, first.payload.pedido_id);
+  assert.equal(botBeforePayment.payload.pedidos.some(item => item.id === first.payload.pedido_id), false);
+  assert.equal(botBeforePayment.payload.pedidos.some(item => item.id === second.payload.pedido_id), false);
 
   const paid = JSON.parse(fs.readFileSync(firstFile, "utf8"));
   paid.pagamento_pendente = false;
   paid.pagamento_metodo = "pix";
-  paid.pagamento_confirmado_em = "2026-09-21T22:00:00.000Z";
+  paid.pagamento_confirmado_em = "2026-09-22T05:00:00.000Z";
   paid.pagamento_info = { tipo: "pedido_pix", status: "approved", valor_pago: 8 };
   fs.writeFileSync(firstFile, JSON.stringify(paid, null, 2), "utf8");
   fs.writeFileSync(path.join(firstBase, "status.txt"), "novo", "utf8");
 
-  const demo = await request(
+  const botAfterPayment = await request(
     baseUrl,
-    "POST",
-    "/resultado_do_jogo",
-    token,
-    resultForm("demo_cycle_one_demo")
+    "GET",
+    "/bot/pedidos/novos",
+    tokenFor(botWhatsapp)
   );
-  assert.equal(demo.response.status, 200, JSON.stringify(demo.payload));
-  assert.equal(demo.payload.pagamento_pendente, true);
-  assert.equal(demo.payload.requer_pix_antes_criacao, false);
-  assert.equal(demo.payload.demonstracao_apos_pagamento, true);
-  assert.equal(
-    fs.readFileSync(path.join(path.dirname(findOrderFile(demo.payload.pedido_id)), "status.txt"), "utf8").trim(),
-    "novo"
-  );
+  assert.equal(botAfterPayment.response.status, 200);
+  assert.equal(botAfterPayment.payload.pedidos.some(item => item.id === first.payload.pedido_id), true);
+  assert.equal(botAfterPayment.payload.pedidos.some(item => item.id === second.payload.pedido_id), false);
 
-  const blockedSecondDemo = await request(
-    baseUrl,
-    "POST",
-    "/resultado_do_jogo",
-    token,
-    resultForm("demo_cycle_blocked_second_demo")
+  const third = await createOrder(baseUrl, token, "prepay_every_art_after_paid");
+  assert.equal(third.response.status, 200, JSON.stringify(third.payload));
+  assert.equal(third.payload.pagamento_pendente, true);
+  assert.equal(third.payload.requer_pix_antes_criacao, true);
+  assert.equal(third.payload.demonstracao_apos_pagamento, false);
+  assert.equal(
+    fs.readFileSync(path.join(path.dirname(findOrderFile(third.payload.pedido_id)), "status.txt"), "utf8").trim(),
+    "aguardando_pagamento"
   );
-  assert.equal(blockedSecondDemo.response.status, 409);
-  assert.equal(blockedSecondDemo.payload.code, "DEMONSTRACAO_PENDENTE");
-  assert.equal(blockedSecondDemo.payload.pedido_id, demo.payload.pedido_id);
 });

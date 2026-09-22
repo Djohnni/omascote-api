@@ -1003,7 +1003,7 @@ async function run() {
     assert.equal(supportOrder.valor_original, 8);
     assert.equal(supportOrder.valor_final, 8);
     assert.equal(supportOrder.pagamento_info, undefined);
-    assert.equal(supportOrder.motivo_pagamento_pendente, "pix_obrigatorio_assistente");
+    assert.equal(supportOrder.motivo_pagamento_pendente, "pix_obrigatorio_toda_arte");
     assert.equal(readOrderStatus(supportUser, support.pedido_id), "aguardando_pagamento");
 
     const economic = await createResult(baseUrl, economicUser, "economica", "economic_balance", 0.01);
@@ -1017,7 +1017,7 @@ async function run() {
     assert.equal(economicOrder.valor_original, 4);
     assert.equal(economicOrder.valor_final, 4);
     assert.equal(economicOrder.pagamento_info, undefined);
-    assert.equal(economicOrder.motivo_pagamento_pendente, "pix_obrigatorio_assistente");
+    assert.equal(economicOrder.motivo_pagamento_pendente, "pix_obrigatorio_toda_arte");
     assert.equal(readOrderStatus(economicUser, economic.pedido_id), "aguardando_pagamento");
 
     const economicReplay = await createResult(baseUrl, economicUser, "economica", "economic_balance", 0.01);
@@ -1047,22 +1047,23 @@ async function run() {
       `/pedidos/${pendingEconomic.pedido_id}/pagar-com-saldo`,
       { token: tokenFor(insufficientEconomicUser) }
     );
-    assert.equal(noBalancePayment.response.status, 403);
+    assert.equal(noBalancePayment.response.status, 409);
+    assert.equal(noBalancePayment.payload.code, "PIX_OBRIGATORIO_PARA_ARTE");
     assert.equal(readOrder(insufficientEconomicUser, pendingEconomic.pedido_id).pagamento_pendente, true);
 
     setBalance(insufficientEconomicUser, 4);
-    const paidWithLaterBalance = await api(
+    const blockedWithLaterBalance = await api(
       baseUrl,
       "POST",
       `/pedidos/${pendingEconomic.pedido_id}/pagar-com-saldo`,
       { token: tokenFor(insufficientEconomicUser) }
     );
-    assert.equal(paidWithLaterBalance.response.status, 200, JSON.stringify(paidWithLaterBalance.payload));
-    assert.equal(paidWithLaterBalance.payload.valor_final, 4);
-    assert.equal((await getMe(baseUrl, insufficientEconomicUser)).saldo, 0);
-    assert.equal(readOrderStatus(insufficientEconomicUser, pendingEconomic.pedido_id), "novo");
+    assert.equal(blockedWithLaterBalance.response.status, 409, JSON.stringify(blockedWithLaterBalance.payload));
+    assert.equal(blockedWithLaterBalance.payload.code, "PIX_OBRIGATORIO_PARA_ARTE");
+    assert.equal((await getMe(baseUrl, insufficientEconomicUser)).saldo, 4);
+    assert.equal(readOrderStatus(insufficientEconomicUser, pendingEconomic.pedido_id), "aguardando_pagamento");
     const laterLedger = readJson(SALDO_TRANSACOES_FILE, []);
-    assert.equal(laterLedger.find(tx => tx.pedido_id === pendingEconomic.pedido_id).valor, 4);
+    assert.equal(laterLedger.find(tx => tx.pedido_id === pendingEconomic.pedido_id), undefined);
 
     const supportPix = await generatePix(baseUrl, insufficientSupportUser, pendingSupport.pedido_id);
     assert.equal(supportPix.response.status, 200, JSON.stringify(supportPix.payload));
@@ -1894,7 +1895,7 @@ async function run() {
     console.log("OK - assistente com suporte exige PIX de R$8 antes da criacao");
     console.log("OK - economico exige PIX antes da criacao e nao desconta saldo automaticamente");
     console.log("OK - repeticao idempotente nao duplica pedido, PIX nem desconto");
-    console.log("OK - saldo insuficiente cria pagamento pendente e pagamento posterior registra extrato");
+    console.log("OK - saldo nao substitui o PIX individual obrigatorio da arte");
     console.log("OK - PIX suporte gera R$8 com QR Code e copia e cola");
     console.log("OK - PIX economico gera R$4 e so libera a fila apos webhook aprovado");
     console.log("OK - requisicoes PIX simultaneas reutilizam a mesma cobranca");
