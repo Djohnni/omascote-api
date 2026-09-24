@@ -9,6 +9,7 @@ const testDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "omascote-download-tes
 process.env.OMASCOTE_DATA_DIR = testDataDir;
 process.env.JWT_SECRET = "download-route-test-secret";
 process.env.NODE_ENV = "test";
+process.env.BOT_ADMIN_WHATSAPP = "admin-video";
 
 function writeJson(filePath, value) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -41,13 +42,29 @@ createOrder("cliente-1", "pedido-pix", {
 createOrder("cliente-1", "pedido-saldo", {
   pagamento_info: { origem: "saldo" }
 });
+const regularVideoBase = createOrder("cliente-1", "pedido-video-regular", {
+  categoria: "proximo_jogo",
+  video_generation: { requested: true, internal_test: true, model: "lite" }
+});
+const adminVideoBase = createOrder("admin-video", "pedido-video-admin", {
+  categoria: "proximo_jogo",
+  video_generation: { requested: true, internal_test: true, model: "fast" }
+});
+const adminVideoUploadBase = createOrder("admin-video", "pedido-video-upload", {
+  categoria: "proximo_jogo",
+  video_generation: { requested: true, internal_test: true, model: "lite", status: "pending" }
+});
+const testMp4 = Buffer.from([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d]);
+fs.writeFileSync(path.join(regularVideoBase, "resultado_video.mp4"), testMp4);
+fs.writeFileSync(path.join(adminVideoBase, "resultado_video.mp4"), testMp4);
 for (let index = 1; index <= 17; index += 1) {
   createOrder("cliente-1", `pedido-historico-${String(index).padStart(2, "0")}`, {
     criado_em: new Date(Date.UTC(2026, 0, index)).toISOString()
   });
 }
 writeJson(path.join(testDataDir, "clientes.json"), {
-  "cliente-1": { nome_time: "Cliente de teste" }
+  "cliente-1": { nome_time: "Cliente de teste" },
+  "admin-video": { nome_time: "Conta interna" }
 });
 
 const cartaImagePath = path.join(testDataDir, "cartas_app_imagens", "carta-1.jpg");
@@ -98,6 +115,63 @@ test("secure direct download routes enforce ownership, state, binding and one-ti
   assert.equal(historyResponse.status, 200);
   assert.ok(historyData.pedidos.length > 15);
   assert.ok(historyData.pedidos.some(item => item.id === "pedido-historico-01"));
+  assert.equal(historyData.pedidos.find(item => item.id === "pedido-video-regular")?.video_pronto, false);
+
+  const regularMeResponse = await fetch(`${baseUrl}/me`, {
+    headers: { Authorization: bearer("cliente-1") }
+  });
+  const regularMe = await jsonResponse(regularMeResponse);
+  assert.equal(regularMe.internal_features?.next_match_veo, false);
+
+  const adminMeResponse = await fetch(`${baseUrl}/me`, {
+    headers: { Authorization: bearer("admin-video") }
+  });
+  const adminMe = await jsonResponse(adminMeResponse);
+  assert.equal(adminMe.internal_features?.next_match_veo, true);
+  assert.deepEqual(adminMe.internal_features?.veo_models?.map(item => item.key), ["lite", "fast"]);
+
+  const uploadForm = new FormData();
+  uploadForm.append("resultado", new Blob([fs.readFileSync(path.join(adminVideoUploadBase, "resultado_final.png"))], { type: "image/png" }), "resultado_final.png");
+  uploadForm.append("video", new Blob([testMp4], { type: "video/mp4" }), "resultado_video.mp4");
+  uploadForm.append("video_status", "ready");
+  const videoUploadResponse = await fetch(`${baseUrl}/bot/pedidos/pedido-video-upload/upload-resultado`, {
+    method: "POST",
+    headers: { Authorization: bearer("admin-video") },
+    body: uploadForm
+  });
+  const videoUpload = await jsonResponse(videoUploadResponse);
+  assert.equal(videoUploadResponse.status, 200);
+  assert.equal(videoUpload.video, "resultado_video.mp4");
+  assert.equal(fs.existsSync(path.join(adminVideoUploadBase, "resultado_video.mp4")), true);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(adminVideoUploadBase, "pedido.json"), "utf8")).video_generation.status, "ready");
+
+  const regularVideoTicket = await fetch(`${baseUrl}/pedidos/pedido-video-regular/download-ticket`, {
+    method: "POST",
+    headers: { Authorization: bearer("cliente-1"), "Content-Type": "application/json" },
+    body: JSON.stringify({ formato: "video" })
+  });
+  assert.equal(regularVideoTicket.status, 403);
+
+  const adminHistoryResponse = await fetch(`${baseUrl}/meus-pedidos`, {
+    headers: { Authorization: bearer("admin-video") }
+  });
+  const adminHistory = await jsonResponse(adminHistoryResponse);
+  assert.equal(adminHistory.pedidos.find(item => item.id === "pedido-video-admin")?.video_pronto, true);
+
+  const adminVideoTicketResponse = await fetch(`${baseUrl}/pedidos/pedido-video-admin/download-ticket`, {
+    method: "POST",
+    headers: { Authorization: bearer("admin-video"), "Content-Type": "application/json" },
+    body: JSON.stringify({ formato: "video" })
+  });
+  assert.equal(adminVideoTicketResponse.status, 200);
+  const adminVideoTicket = await jsonResponse(adminVideoTicketResponse);
+  const adminVideoDownload = await fetch(`${baseUrl}${adminVideoTicket.download_path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ ticket: adminVideoTicket.ticket })
+  });
+  assert.equal(adminVideoDownload.status, 200);
+  assert.equal(adminVideoDownload.headers.get("content-type"), "video/mp4");
 
   const otherUser = await fetch(`${baseUrl}/pedidos/pedido-ok/download-ticket`, {
     method: "POST",

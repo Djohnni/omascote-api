@@ -20,6 +20,7 @@ const {
   buildOrderResponsePayloadFromItem,
   buildOrderCreateDedupeMeta,
   buildFotoJogosBatchPayloadHash,
+  prepararInternalVeoPedido,
   evaluatePersistentOrderReplay,
   gerarAuditoriaGeracaoLegada,
   getUploadedFilesFingerprint
@@ -175,6 +176,39 @@ test("ausencia usa o default proprio e pedidos antigos continuam compativeis", (
     scenario_version: 0,
     scenario_source: ""
   });
+});
+
+test("Veo interno aceita Lite/Fast so para o admin e Proximo Jogo", () => {
+  const adminRequest = { user: { whatsapp: "15991120599" } };
+  const customerRequest = { user: { whatsapp: "551199990000" } };
+
+  for (const model of ["lite", "fast"]) {
+    const fields = {
+      new_model: { fields: { video_model: model } }
+    };
+    const result = prepararInternalVeoPedido(adminRequest, "proximo_jogo", fields);
+    assert.equal(result.ok, true);
+    assert.equal(result.patch.video_generation.model, model);
+    assert.equal(result.patch.video_generation.duration_seconds, 8);
+    assert.equal(result.patch.video_generation.generate_audio, false);
+    assert.equal(fields.new_model.fields.video_model, model);
+  }
+
+  const forbidden = prepararInternalVeoPedido(customerRequest, "proximo_jogo", {
+    new_model: { fields: { video_model: "lite" } }
+  });
+  assert.equal(forbidden.ok, false);
+  assert.equal(forbidden.status, 403);
+
+  const wrongProduct = prepararInternalVeoPedido(adminRequest, "resultado", {
+    new_model: { fields: { video_model: "fast" } }
+  });
+  assert.equal(wrongProduct.ok, false);
+  assert.equal(wrongProduct.status, 400);
+
+  const ordinaryOrder = { new_model: { fields: {} } };
+  const noVideo = prepararInternalVeoPedido(customerRequest, "proximo_jogo", ordinaryOrder);
+  assert.deepEqual(noVideo, { ok: true, patch: null });
 });
 
 test("matriz batch 5x8 inclui cada cenario no fingerprint canonico", () => {

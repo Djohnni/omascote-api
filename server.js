@@ -149,6 +149,21 @@ const PEDIDOS_DIR = path.join(DATA_DIR, "pedidos");
 const CLIENTES_FILE = path.join(DATA_DIR, "clientes.json");
 const ATENDIMENTO_AUDIT_FILE = path.join(DATA_DIR, "atendimento_chat_auditoria.json");
 const BOT_ADMIN_WHATSAPP = process.env.BOT_ADMIN_WHATSAPP || "15991120599";
+const INTERNAL_VEO_TEST_ENABLED = !["0", "false", "off", "no"].includes(
+  String(process.env.INTERNAL_VEO_TEST_ENABLED || "true").trim().toLowerCase()
+);
+const INTERNAL_VEO_MODELS = Object.freeze({
+  lite: Object.freeze({
+    key: "lite",
+    label: "Veo Lite",
+    model_id: "veo-3.1-lite-generate-001"
+  }),
+  fast: Object.freeze({
+    key: "fast",
+    label: "Veo Fast",
+    model_id: "veo-3.1-fast-generate-001"
+  })
+});
 const MP_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN || "";
 const MP_SANDBOX_MODE = String(
   process.env.MP_SANDBOX_MODE || ""
@@ -2643,6 +2658,76 @@ function isBotAdmin(req) {
   return req.user && req.user.whatsapp === BOT_ADMIN_WHATSAPP;
 }
 
+function internalVeoDisponivel(req) {
+  return INTERNAL_VEO_TEST_ENABLED && isBotAdmin(req);
+}
+
+function normalizarInternalVeoModel(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw || ["none", "nenhum", "off", "false", "0"].includes(raw)) return "";
+  if (raw === "veo_lite") return "lite";
+  if (raw === "veo_fast") return "fast";
+  return Object.hasOwn(INTERNAL_VEO_MODELS, raw) ? raw : null;
+}
+
+function prepararInternalVeoPedido(req, categoria, fields) {
+  const cleanFields = fields?.new_model?.fields;
+  const requestedRaw = cleanFields && typeof cleanFields === "object"
+    ? cleanFields.video_model
+    : "";
+  const modelKey = normalizarInternalVeoModel(requestedRaw);
+
+  if (modelKey === null) {
+    return {
+      ok: false,
+      status: 400,
+      error: "Opcao de video invalida. Escolha Lite, Fast ou sem video."
+    };
+  }
+
+  if (!modelKey) {
+    if (cleanFields && typeof cleanFields === "object") delete cleanFields.video_model;
+    return { ok: true, patch: null };
+  }
+
+  if (categoria !== "proximo_jogo") {
+    return {
+      ok: false,
+      status: 400,
+      error: "O teste de video esta disponivel somente para Proximo Jogo."
+    };
+  }
+
+  if (!internalVeoDisponivel(req)) {
+    return {
+      ok: false,
+      status: 403,
+      error: "O teste de video ainda esta disponivel somente para uso interno."
+    };
+  }
+
+  const selected = INTERNAL_VEO_MODELS[modelKey];
+  cleanFields.video_model = selected.key;
+  return {
+    ok: true,
+    patch: {
+      video_generation: {
+        requested: true,
+        provider: "google_vertex_ai",
+        model: selected.key,
+        model_id: selected.model_id,
+        duration_seconds: 8,
+        aspect_ratio: "9:16",
+        resolution: "720p",
+        generate_audio: false,
+        internal_test: true,
+        status: "pending",
+        requested_at: new Date().toISOString()
+      }
+    }
+  };
+}
+
 function getPedidoBaseGlobal(pedidoId) {
   return orderStorage.getPedidoBaseGlobal(PEDIDOS_DIR, pedidoId);
 }
@@ -4390,6 +4475,38 @@ function validarAssinaturaImagem(file) {
   }
 
   return { ok: true, ...detectada };
+}
+
+function validarAssinaturaVideoMp4(file) {
+  if (!file?.path) {
+    return { ok: false, error: "Arquivo de video nao enviado." };
+  }
+
+  if (Number(file.size || 0) <= 0) {
+    return { ok: false, error: "Arquivo de video vazio." };
+  }
+
+  if (String(file.mimetype || "").toLowerCase() !== "video/mp4") {
+    return { ok: false, error: "Formato de video invalido. Envie MP4." };
+  }
+
+  let fd = null;
+  try {
+    fd = fs.openSync(file.path, "r");
+    const buffer = Buffer.alloc(12);
+    const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, 0);
+    if (bytesRead < 12 || buffer.subarray(4, 8).toString("ascii") !== "ftyp") {
+      return { ok: false, error: "Arquivo de video invalido. Envie um MP4 valido." };
+    }
+  } catch {
+    return { ok: false, error: "Nao foi possivel validar o arquivo de video." };
+  } finally {
+    if (fd !== null) {
+      try { fs.closeSync(fd); } catch {}
+    }
+  }
+
+  return { ok: true, mime: "video/mp4", ext: ".mp4" };
 }
 
 function validarAssinaturaImagemPerfil(file) {
@@ -7469,9 +7586,18 @@ function validateOrderDownload(whatsapp, pedidoId, options = {}) {
     };
   }
 
-  const arquivo = path.join(base, "resultado_final.png");
+  const resultFilename = options.resultFilename === "resultado_video.mp4"
+    ? "resultado_video.mp4"
+    : "resultado_final.png";
+  const arquivo = path.join(base, resultFilename);
   if (options.requireResult !== false && !fs.existsSync(arquivo)) {
-    return { ok: false, status: 404, error: "Resultado final nao encontrado" };
+    return {
+      ok: false,
+      status: 404,
+      error: resultFilename === "resultado_video.mp4"
+        ? "Video final nao encontrado"
+        : "Resultado final nao encontrado"
+    };
   }
 
   return { ok: true, base, pedido, pedidoPath, arquivo };
@@ -7666,9 +7792,16 @@ const uploadCartaAppImagem = multer({
 const uploadResultado = multer({
   storage,
   limits: {
-    fileSize: MAX_UPLOAD_FILE_SIZE
+    fileSize: 100 * 1024 * 1024
   },
   fileFilter: (req, file, cb) => {
+    if (file.fieldname === "video") {
+      if (String(file.mimetype || "").toLowerCase() !== "video/mp4") {
+        return cb(new Error("O video do resultado deve estar em MP4."));
+      }
+      return cb(null, true);
+    }
+
     const permitidos = [
       "image/png",
       "image/jpeg",
@@ -7705,21 +7838,24 @@ const uploadPerfilImagem = multer({
   }
 });
 
-function uploadComErroControlado(middleware) {
+function uploadComErroControlado(middleware, validator = validarUploadsImagemSeguros) {
   return (req, res, next) => {
     middleware(req, res, (err) => {
-      if (!err) return validarUploadsImagemSeguros(req, res, next);
+      if (!err) return validator(req, res, next);
 
       if (err.code === "LIMIT_FILE_SIZE") {
         const isPerfilUpload = String(req.originalUrl || req.url || "").includes("/me/time/perfil/");
-        const maxMb = isPerfilUpload ? Math.round(MAX_PERFIL_IMAGE_SIZE / (1024 * 1024)) : 50;
+        const isResultadoUpload = String(req.originalUrl || req.url || "").includes("/upload-resultado");
+        const maxMb = isPerfilUpload
+          ? Math.round(MAX_PERFIL_IMAGE_SIZE / (1024 * 1024))
+          : isResultadoUpload ? 100 : 50;
         console.warn("[UPLOAD_LIMIT] arquivo_maior_50mb", {
           field: err.field || "",
           url: req.originalUrl || req.url || ""
         });
         return res.status(400).json({
           ok: false,
-          error: `Arquivo muito grande. Envie imagens com ate ${maxMb}MB.`
+          error: `Arquivo muito grande. Envie arquivos com ate ${maxMb}MB.`
         });
       }
 
@@ -8163,6 +8299,33 @@ function validarUploadsImagemSeguros(req, res, next) {
         ok: false,
         error: validacao.error || "Arquivo de imagem invalido. Envie PNG, JPG ou WEBP."
       });
+    }
+
+    file.detected_mimetype = validacao.mime;
+    file.detected_ext = validacao.ext;
+  }
+
+  return next();
+}
+
+function validarUploadsResultadoSeguros(req, res, next) {
+  const arquivos = listarArquivosUploadRequest(req);
+
+  for (const file of arquivos) {
+    const validacao = file.fieldname === "video"
+      ? validarAssinaturaVideoMp4(file)
+      : validarAssinaturaImagem(file);
+
+    if (!validacao.ok) {
+      console.warn("[RESULT_UPLOAD_SIGNATURE_INVALID]", {
+        field: file.fieldname || "",
+        originalname: file.originalname || "",
+        mimetype: file.mimetype || "",
+        size: file.size || 0,
+        erro: validacao.error
+      });
+      limparUploadsRequest(req);
+      return res.status(400).json({ ok: false, error: validacao.error });
     }
 
     file.detected_mimetype = validacao.mime;
@@ -9163,6 +9326,18 @@ app.get("/me", auth, (req, res) => {
       listPedidoBasesByWhatsapp(req.user.whatsapp).length === 0
     ),
     brinde_escudo3d_app_usado: c.brinde_escudo3d_app_usado === true,
+    internal_features: {
+      next_match_veo: internalVeoDisponivel(req),
+      veo_models: internalVeoDisponivel(req)
+        ? Object.values(INTERNAL_VEO_MODELS).map(model => ({
+            key: model.key,
+            label: model.label,
+            duration_seconds: 8,
+            resolution: "720p",
+            generate_audio: false
+          }))
+        : []
+    },
     ativo: c.ativo
   });
 });
@@ -13208,6 +13383,16 @@ function criarPedidoHandlerAsync(categoria) {
     const scenarioLogMeta = getScenarioLogMeta(scenarioResolution);
     const files = req.files || {};
 
+    const internalVeoOrder = prepararInternalVeoPedido(req, categoria, fields);
+    if (!internalVeoOrder.ok) {
+      limparUploadsTemporarios(files);
+      return res.status(internalVeoOrder.status || 400).json({
+        ok: false,
+        code: "INTERNAL_VEO_NOT_ALLOWED",
+        error: internalVeoOrder.error
+      });
+    }
+
     if (categoria === "contratacao") {
       const validacaoContratacao = validarContratoContratacao({ fields, files });
       if (!validacaoContratacao.ok) {
@@ -13765,6 +13950,10 @@ function criarPedidoHandlerAsync(categoria) {
           confirmedAt: planoConfirmadoEm
         })
       : null;
+    const initialOrderPatch = {
+      ...(planoOrderPatch || {}),
+      ...(internalVeoOrder.patch || {})
+    };
 
     let draft;
 
@@ -13783,7 +13972,7 @@ function criarPedidoHandlerAsync(categoria) {
         idempotencyInputFiles: dedupeMeta.filesFingerprint,
         orderId: idPlanejado,
         initialStatus: "preparando_pagamento",
-        initialOrderPatch: planoOrderPatch
+        initialOrderPatch
       });
     } catch (e) {
       console.error("[pedido] erro ao criar pedido", {
@@ -14506,8 +14695,10 @@ app.get("/meus-pedidos", auth, (req, res) => {
 
   const pedidos = itens.map((item) => {
     const resultadoFinalPath = path.join(item.base, "resultado_final.png");
+    const resultadoVideoPath = path.join(item.base, "resultado_video.mp4");
     const status = readOrderStatus(item.base, item.pedido.status || "novo");
     const imagemPronta = fs.existsSync(resultadoFinalPath);
+    const videoPronto = internalVeoDisponivel(req) && fs.existsSync(resultadoVideoPath);
     const aprovadoCliente = item.pedido.aprovado_cliente === true;
     const pagamentoPendente = item.pedido.pagamento_pendente === true;
     const ajusteUsado = item.pedido.ajuste_automatico_usado === true;
@@ -14522,6 +14713,10 @@ app.get("/meus-pedidos", auth, (req, res) => {
         ? `${req.protocol}://${req.get("host")}/pedidos/${item.id}/preview`
         : null,
       imagem_pronta: imagemPronta,
+      video_pronto: videoPronto,
+      video_generation: internalVeoDisponivel(req)
+        ? item.pedido.video_generation || null
+        : null,
       descricao_instagram: item.pedido.descricao_instagram || "",
       aprovado_cliente: aprovadoCliente,
       pagamento_pendente: pagamentoPendente,
@@ -14953,8 +15148,12 @@ app.post("/pedidos/:id/download-ticket", auth, safeAsyncRoute(async (req, res) =
   const pedidoId = String(req.params.id || "");
   const formato = String(req.body?.formato || "resultado").toLowerCase();
 
-  if (!["resultado", "zip"].includes(formato)) {
+  if (!["resultado", "zip", "video"].includes(formato)) {
     return res.status(400).json({ ok: false, error: "Formato de download invalido." });
+  }
+
+  if (formato === "video" && !internalVeoDisponivel(req)) {
+    return res.status(403).json({ ok: false, error: "Video ainda disponivel somente no teste interno." });
   }
 
   await tentarRecuperarOrderV2Pedido(
@@ -14973,7 +15172,8 @@ app.post("/pedidos/:id/download-ticket", auth, safeAsyncRoute(async (req, res) =
   }
 
   const validated = validateOrderDownload(req.user.whatsapp, pedidoId, {
-    requireResult: formato === "resultado"
+    requireResult: formato !== "zip",
+    resultFilename: formato === "video" ? "resultado_video.mp4" : "resultado_final.png"
   });
 
   setPrivateDownloadHeaders(res);
@@ -15023,7 +15223,7 @@ app.post("/pedidos/:id/download-direto/:formato", safeAsyncRoute(async (req, res
 
   setPrivateDownloadHeaders(res);
 
-  if (!["resultado", "zip"].includes(formato)) {
+  if (!["resultado", "zip", "video"].includes(formato)) {
     return res.status(404).json({ ok: false, error: "Download nao encontrado." });
   }
 
@@ -15042,7 +15242,8 @@ app.post("/pedidos/:id/download-direto/:formato", safeAsyncRoute(async (req, res
   }
 
   const validated = validateOrderDownload(redeemed.record.userId, pedidoId, {
-    requireResult: formato === "resultado"
+    requireResult: formato !== "zip",
+    resultFilename: formato === "video" ? "resultado_video.mp4" : "resultado_final.png"
   });
   if (!validated.ok) {
     logDownloadTechnical(req, {
@@ -15055,6 +15256,13 @@ app.post("/pedidos/:id/download-direto/:formato", safeAsyncRoute(async (req, res
       duracaoMs: Date.now() - startedAt
     });
     return res.status(validated.status).json({ ok: false, error: validated.error });
+  }
+
+  if (formato === "video") {
+    const isInternalOwner = INTERNAL_VEO_TEST_ENABLED && redeemed.record.userId === BOT_ADMIN_WHATSAPP;
+    if (!isInternalOwner || validated.pedido?.video_generation?.internal_test !== true) {
+      return res.status(403).json({ ok: false, error: "Video ainda disponivel somente no teste interno." });
+    }
   }
 
   const verification = await verificarAutorizacaoPedidoPlano(validated.base, validated.pedido);
@@ -15101,6 +15309,15 @@ app.post("/pedidos/:id/download-direto/:formato", safeAsyncRoute(async (req, res
     archive.directory(validated.base, false);
     archive.finalize();
     return;
+  }
+
+  if (formato === "video") {
+    res.setHeader("Content-Type", "video/mp4");
+    res.setHeader(
+      "Content-Disposition",
+      attachmentContentDisposition(`${pedidoId}_video_8s.mp4`)
+    );
+    return res.sendFile(validated.arquivo);
   }
 
   res.setHeader("Content-Type", "image/png");
@@ -15169,6 +15386,7 @@ app.get("/pedidos/:id/info", auth, (req, res) => {
 
   const pedidoJsonPath = path.join(base, "pedido.json");
   const resultadoFinalPath = path.join(base, "resultado_final.png");
+  const resultadoVideoPath = path.join(base, "resultado_video.mp4");
 
   let pedido = {};
   if (fs.existsSync(pedidoJsonPath)) {
@@ -15180,6 +15398,7 @@ app.get("/pedidos/:id/info", auth, (req, res) => {
   const status = readOrderStatus(base, "novo");
 
   const imagem_pronta = fs.existsSync(resultadoFinalPath);
+  const video_pronto = internalVeoDisponivel(req) && fs.existsSync(resultadoVideoPath);
 
   return res.json({
     ok: true,
@@ -15187,6 +15406,10 @@ app.get("/pedidos/:id/info", auth, (req, res) => {
     status,
     categoria: pedido.categoria || "",
     imagem_pronta,
+    video_pronto,
+    video_generation: internalVeoDisponivel(req)
+      ? pedido.video_generation || null
+      : null,
     preview_url: imagem_pronta
       ? `${req.protocol}://${req.get("host")}/pedidos/${req.params.id}/preview`
       : null,
@@ -15327,8 +15550,9 @@ app.post(
   auth,
   uploadComErroControlado(uploadResultado.fields([
     { name: "resultado", maxCount: 1 },
-    { name: "preview", maxCount: 1 }
-  ])),
+    { name: "preview", maxCount: 1 },
+    { name: "video", maxCount: 1 }
+  ]), validarUploadsResultadoSeguros),
   safeAsyncRoute(async (req, res) => {
 
     const descricao_instagram = req.body?.descricao_instagram || "";
@@ -15359,6 +15583,7 @@ app.post(
 
     const resultadoFile = req.files?.resultado?.[0] || null;
     const previewFile = req.files?.preview?.[0] || null;
+    const videoFile = req.files?.video?.[0] || null;
 
     if (!resultadoFile) {
       return res.status(400).json({ ok: false, error: "Arquivo resultado não enviado" });
@@ -15366,6 +15591,18 @@ app.post(
 
     const dest = path.join(base, "resultado_final.png");
     const previewDest = path.join(base, "preview_ia4tube.jpg");
+    const videoDest = path.join(base, "resultado_video.mp4");
+
+    const videoFoiSolicitado = pedidoAtual?.video_generation?.requested === true &&
+      pedidoAtual?.video_generation?.internal_test === true &&
+      pedidoAtual?.categoria === "proximo_jogo";
+    if (videoFile && !videoFoiSolicitado) {
+      limparUploadsRequest(req);
+      return res.status(400).json({
+        ok: false,
+        error: "Este pedido nao solicitou o teste interno de video."
+      });
+    }
 
     try {
       if (fs.existsSync(dest)) fs.unlinkSync(dest);
@@ -15374,6 +15611,11 @@ app.post(
       if (previewFile) {
         if (fs.existsSync(previewDest)) fs.unlinkSync(previewDest);
         fs.renameSync(previewFile.path, previewDest);
+      }
+
+      if (videoFile) {
+        if (fs.existsSync(videoDest)) fs.unlinkSync(videoDest);
+        fs.renameSync(videoFile.path, videoDest);
       }
 
       writeOrderStatus(base, orderStatus.ORDER_STATUS.PRONTO);
@@ -15392,6 +15634,18 @@ app.post(
           pedidoData.aprovado_cliente = false;
           pedidoData.baixado_cliente = false;
           pedidoData.resultado_enviado_em = new Date().toISOString();
+          if (videoFoiSolicitado) {
+            const reportedStatus = String(req.body?.video_status || "").trim().toLowerCase();
+            const ready = !!videoFile;
+            pedidoData.video_generation = {
+              ...(pedidoData.video_generation || {}),
+              status: ready ? "ready" : (reportedStatus === "failed" ? "failed" : "not_generated"),
+              ready,
+              error: ready ? "" : String(req.body?.video_error || "").trim().slice(0, 500),
+              completed_at: new Date().toISOString(),
+              arquivo: ready ? "resultado_video.mp4" : ""
+            };
+          }
           fs.writeFileSync(pedidoPath, JSON.stringify(pedidoData, null, 2), "utf8");
         }
       } catch (e) {}
@@ -15399,7 +15653,8 @@ app.post(
       return res.json({
         ok: true,
         arquivo: "resultado_final.png",
-        preview: previewFile ? "preview_ia4tube.jpg" : ""
+        preview: previewFile ? "preview_ia4tube.jpg" : "",
+        video: videoFile ? "resultado_video.mp4" : ""
       });
     } catch (e) {
       return res.status(500).json({
@@ -16310,6 +16565,7 @@ module.exports = {
     buildOrderResponsePayloadFromItem,
     buildOrderCreateDedupeMeta,
     buildFotoJogosBatchPayloadHash,
+    prepararInternalVeoPedido,
     evaluatePersistentOrderReplay,
     gerarAuditoriaGeracaoLegada,
     getSemanticOrderFields,
