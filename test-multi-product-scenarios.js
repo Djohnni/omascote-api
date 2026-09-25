@@ -47,12 +47,14 @@ const PRODUCTS = Object.freeze([
 const VIDEO_PRODUCTS = Object.freeze([
   { id: "proximo_jogo", price: 7 },
   { id: "resultado", price: 8 },
-  { id: "jogador_escudo", price: 6 },
-  { id: "contratacao", price: 7.8 },
   { id: "escalacao", price: 8 },
   { id: "patrocinador", price: 8 },
   { id: "escudo3d", price: 4 },
-  { id: "mascote_uniforme", price: 18 },
+  { id: "mascote_uniforme", price: 18 }
+]);
+const PERSON_VIDEO_PRODUCTS = Object.freeze([
+  { id: "jogador_escudo", price: 6 },
+  { id: "contratacao", price: 7.8 },
   { id: "proximo_jogo_jogador", price: 7 },
   { id: "resultado_jogo_jogador", price: 8 }
 ]);
@@ -190,7 +192,7 @@ test("ausencia usa o default proprio e pedidos antigos continuam compativeis", (
   });
 });
 
-test("Veo preserva o teste interno e aceita a entrega comercial nos dez produtos", () => {
+test("Veo preserva o teste interno, aceita seis produtos e bloqueia novas vendas com pessoas", () => {
   const adminRequest = { user: { whatsapp: "15991120599" } };
   const customerRequest = { user: { whatsapp: "551199990000" } };
 
@@ -223,6 +225,14 @@ test("Veo preserva o teste interno e aceita a entrega comercial nos dez produtos
     assert.equal(fields.new_model.fields.video_model, "fast", product.id);
   }
 
+  for (const product of PERSON_VIDEO_PRODUCTS) {
+    const fields = { new_model: { fields: { delivery_mode: "image_video" } } };
+    const commercial = prepararInternalVeoPedido(customerRequest, product.id, fields);
+    assert.equal(commercial.ok, false, product.id);
+    assert.equal(commercial.status, 400, product.id);
+    assert.equal(commercial.error, "A opcao de video nao esta disponivel para este produto.", product.id);
+  }
+
   const ordinaryOrder = { new_model: { fields: {} } };
   const noVideo = prepararInternalVeoPedido(customerRequest, "proximo_jogo", ordinaryOrder);
   assert.deepEqual(noVideo, { ok: true, patch: null });
@@ -239,9 +249,14 @@ test("preco de imagem permanece e imagem com video usa 14,90, exceto Mascote a 2
     assert.equal(getCustoPedidoComAdicionais(product.id, {}, imageFields), product.price, product.id);
   }
 
+  for (const product of PERSON_VIDEO_PRODUCTS) {
+    assert.equal(getCustoPedidoComAdicionais(product.id, {}, videoFields), product.price, product.id);
+    assert.equal(getCustoPedidoComAdicionais(product.id, {}, imageFields), product.price, product.id);
+  }
+
   assert.equal(getCustoPedidoComAdicionais("contratacao", {}, {
     new_model: { fields: { delivery_mode: "image_video", jersey_enabled: "true" } }
-  }), 16.9);
+  }), 9.8);
 });
 
 test("matriz batch 5x8 inclui cada cenario no fingerprint canonico", () => {

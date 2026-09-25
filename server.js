@@ -985,6 +985,17 @@ const VIDEO_DELIVERY_PRODUCTS = new Set([
   "proximo_jogo_jogador",
   "resultado_jogo_jogador"
 ]);
+// Mantem o conjunto completo para concluir e entregar videos ja contratados.
+// Novas vendas excluem produtos centrados em fotos de pessoas, que podem ser
+// bloqueados pelo provedor mesmo quando a imagem pertence ao cliente.
+const VIDEO_PURCHASE_PRODUCTS = new Set([
+  "proximo_jogo",
+  "resultado",
+  "escalacao",
+  "patrocinador",
+  "escudo3d",
+  "mascote_uniforme"
+]);
 const VIDEO_DELIVERY_PRICE = 14.90;
 const VIDEO_DELIVERY_MASCOT_PRICE = 28.00;
 
@@ -1021,7 +1032,7 @@ function pedidoPodeAcessarVideo(reqOuUsuario, pedido = {}) {
 }
 
 function getCustoPedidoComAdicionais(categoria, cliente, source = {}) {
-  const videoComercial = VIDEO_DELIVERY_PRODUCTS.has(categoria) && pedidoSolicitaVideoComercial(source);
+  const videoComercial = VIDEO_PURCHASE_PRODUCTS.has(categoria) && pedidoSolicitaVideoComercial(source);
   const base = videoComercial
     ? (categoria === "mascote_uniforme" ? VIDEO_DELIVERY_MASCOT_PRICE : VIDEO_DELIVERY_PRICE)
     : getCustoPedido(categoria, cliente);
@@ -2757,7 +2768,7 @@ function prepararInternalVeoPedido(req, categoria, fields) {
     return { ok: true, patch: null };
   }
 
-  if (commercialVideo && !VIDEO_DELIVERY_PRODUCTS.has(categoria)) {
+  if (commercialVideo && !VIDEO_PURCHASE_PRODUCTS.has(categoria)) {
     return {
       ok: false,
       status: 400,
