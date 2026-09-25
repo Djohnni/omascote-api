@@ -50,6 +50,10 @@ const commercialVideoBase = createOrder("cliente-1", "pedido-video-comercial", {
   categoria: "resultado",
   video_generation: { requested: true, commercial: true, delivery_mode: "image_video", internal_test: false, model: "fast" }
 });
+const legacyPersonVideoBase = createOrder("cliente-1", "pedido-video-comercial-atleta", {
+  categoria: "jogador_escudo",
+  video_generation: { requested: true, commercial: true, delivery_mode: "image_video", internal_test: false, model: "fast" }
+});
 const adminVideoBase = createOrder("admin-video", "pedido-video-admin", {
   categoria: "proximo_jogo",
   video_generation: { requested: true, internal_test: true, model: "fast" }
@@ -61,6 +65,7 @@ const adminVideoUploadBase = createOrder("admin-video", "pedido-video-upload", {
 const testMp4 = Buffer.from([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d]);
 fs.writeFileSync(path.join(regularVideoBase, "resultado_video.mp4"), testMp4);
 fs.writeFileSync(path.join(commercialVideoBase, "resultado_video.mp4"), testMp4);
+fs.writeFileSync(path.join(legacyPersonVideoBase, "resultado_video.mp4"), testMp4);
 fs.writeFileSync(path.join(adminVideoBase, "resultado_video.mp4"), testMp4);
 for (let index = 1; index <= 17; index += 1) {
   createOrder("cliente-1", `pedido-historico-${String(index).padStart(2, "0")}`, {
@@ -122,6 +127,7 @@ test("secure direct download routes enforce ownership, state, binding and one-ti
   assert.ok(historyData.pedidos.some(item => item.id === "pedido-historico-01"));
   assert.equal(historyData.pedidos.find(item => item.id === "pedido-video-regular")?.video_pronto, false);
   assert.equal(historyData.pedidos.find(item => item.id === "pedido-video-comercial")?.video_pronto, true);
+  assert.equal(historyData.pedidos.find(item => item.id === "pedido-video-comercial-atleta")?.video_pronto, true);
 
   const regularMeResponse = await fetch(`${baseUrl}/me`, {
     headers: { Authorization: bearer("cliente-1") }
@@ -172,6 +178,13 @@ test("secure direct download routes enforce ownership, state, binding and one-ti
   });
   assert.equal(commercialVideoDownload.status, 200);
   assert.equal(commercialVideoDownload.headers.get("content-type"), "video/mp4");
+
+  const legacyPersonVideoTicketResponse = await fetch(`${baseUrl}/pedidos/pedido-video-comercial-atleta/download-ticket`, {
+    method: "POST",
+    headers: { Authorization: bearer("cliente-1"), "Content-Type": "application/json" },
+    body: JSON.stringify({ formato: "video" })
+  });
+  assert.equal(legacyPersonVideoTicketResponse.status, 200);
 
   const adminHistoryResponse = await fetch(`${baseUrl}/meus-pedidos`, {
     headers: { Authorization: bearer("admin-video") }
