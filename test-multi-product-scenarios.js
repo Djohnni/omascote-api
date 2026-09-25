@@ -204,7 +204,7 @@ test("Veo preserva o teste interno, aceita seis produtos e bloqueia novas vendas
     assert.equal(result.ok, true);
     assert.equal(result.patch.video_generation.model, model);
     assert.equal(result.patch.video_generation.duration_seconds, 8);
-    assert.equal(result.patch.video_generation.generate_audio, false);
+    assert.equal(result.patch.video_generation.generate_audio, true);
     assert.equal(fields.new_model.fields.video_model, model);
   }
 
@@ -222,6 +222,7 @@ test("Veo preserva o teste interno, aceita seis produtos e bloqueia novas vendas
     assert.equal(commercial.patch.video_generation.commercial, true, product.id);
     assert.equal(commercial.patch.video_generation.internal_test, false, product.id);
     assert.equal(commercial.patch.video_generation.duration_seconds, 8, product.id);
+    assert.equal(commercial.patch.video_generation.generate_audio, true, product.id);
     assert.equal(fields.new_model.fields.video_model, "fast", product.id);
   }
 

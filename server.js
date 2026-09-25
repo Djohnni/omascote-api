@@ -2806,7 +2806,7 @@ function prepararInternalVeoPedido(req, categoria, fields) {
         duration_seconds: 8,
         aspect_ratio: "9:16",
         resolution: "720p",
-        generate_audio: false,
+        generate_audio: true,
         delivery_mode: commercialVideo ? "image_video" : "internal_test",
         commercial: commercialVideo,
         internal_test: legacyInternalTest,
@@ -9428,7 +9428,7 @@ app.get("/me", auth, (req, res) => {
             label: model.label,
             duration_seconds: 8,
             resolution: "720p",
-            generate_audio: false
+            generate_audio: true
           }))
         : []
     },
