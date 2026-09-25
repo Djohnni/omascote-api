@@ -152,6 +152,9 @@ const BOT_ADMIN_WHATSAPP = process.env.BOT_ADMIN_WHATSAPP || "15991120599";
 const INTERNAL_VEO_TEST_ENABLED = !["0", "false", "off", "no"].includes(
   String(process.env.INTERNAL_VEO_TEST_ENABLED || "true").trim().toLowerCase()
 );
+const VEO_VIDEO_ENABLED = !["0", "false", "off", "no"].includes(
+  String(process.env.VEO_VIDEO_ENABLED ?? process.env.INTERNAL_VEO_TEST_ENABLED ?? "true").trim().toLowerCase()
+);
 const INTERNAL_VEO_MODELS = Object.freeze({
   lite: Object.freeze({
     key: "lite",
@@ -970,8 +973,58 @@ function contratacaoTemCamiseta(source = {}) {
   return valorBooleanoPedido(fields.jersey_enabled ?? source?.jersey_enabled);
 }
 
+const VIDEO_DELIVERY_PRODUCTS = new Set([
+  "proximo_jogo",
+  "resultado",
+  "jogador_escudo",
+  "contratacao",
+  "escalacao",
+  "patrocinador",
+  "escudo3d",
+  "mascote_uniforme",
+  "proximo_jogo_jogador",
+  "resultado_jogo_jogador"
+]);
+const VIDEO_DELIVERY_PRICE = 14.90;
+const VIDEO_DELIVERY_MASCOT_PRICE = 28.00;
+
+function normalizarDeliveryMode(value) {
+  const mode = String(value || "").trim().toLowerCase();
+  if (!mode) return "";
+  if (["image", "imagem", "photo", "foto"].includes(mode)) return "image";
+  if (["image_video", "imagem_video", "foto_video", "video"].includes(mode)) return "image_video";
+  return null;
+}
+
+function pedidoSolicitaVideoComercial(source = {}) {
+  const fields = getContratacaoStructuredFields(source);
+  return normalizarDeliveryMode(fields.delivery_mode ?? source?.delivery_mode) === "image_video";
+}
+
+function pedidoTemVideoSolicitado(pedido = {}) {
+  const generation = pedido?.video_generation;
+  const contratoValido = generation?.commercial === true ||
+    generation?.delivery_mode === "image_video" ||
+    generation?.internal_test === true;
+  return generation?.requested === true && contratoValido &&
+    VIDEO_DELIVERY_PRODUCTS.has(String(pedido?.categoria || "").trim().toLowerCase());
+}
+
+function pedidoPodeAcessarVideo(reqOuUsuario, pedido = {}) {
+  if (!pedidoTemVideoSolicitado(pedido)) return false;
+  const generation = pedido.video_generation || {};
+  if (generation.commercial === true || generation.delivery_mode === "image_video") return true;
+  const userId = typeof reqOuUsuario === "string"
+    ? reqOuUsuario
+    : reqOuUsuario?.user?.whatsapp;
+  return INTERNAL_VEO_TEST_ENABLED && userId === BOT_ADMIN_WHATSAPP && generation.internal_test === true;
+}
+
 function getCustoPedidoComAdicionais(categoria, cliente, source = {}) {
-  const base = getCustoPedido(categoria, cliente);
+  const videoComercial = VIDEO_DELIVERY_PRODUCTS.has(categoria) && pedidoSolicitaVideoComercial(source);
+  const base = videoComercial
+    ? (categoria === "mascote_uniforme" ? VIDEO_DELIVERY_MASCOT_PRICE : VIDEO_DELIVERY_PRICE)
+    : getCustoPedido(categoria, cliente);
   const adicional = categoria === "contratacao" && contratacaoTemCamiseta(source)
     ? CONTRATACAO_CAMISETA_ADICIONAL
     : 0;
@@ -2672,9 +2725,19 @@ function normalizarInternalVeoModel(value) {
 
 function prepararInternalVeoPedido(req, categoria, fields) {
   const cleanFields = fields?.new_model?.fields;
-  const requestedRaw = cleanFields && typeof cleanFields === "object"
-    ? cleanFields.video_model
-    : "";
+  const structured = cleanFields && typeof cleanFields === "object" ? cleanFields : {};
+  const deliveryMode = normalizarDeliveryMode(structured.delivery_mode);
+
+  if (deliveryMode === null) {
+    return {
+      ok: false,
+      status: 400,
+      error: "Opcao de entrega invalida. Escolha imagem ou imagem com video."
+    };
+  }
+
+  const commercialVideo = deliveryMode === "image_video";
+  const requestedRaw = structured.video_model || (commercialVideo ? "fast" : "");
   const modelKey = normalizarInternalVeoModel(requestedRaw);
 
   if (modelKey === null) {
@@ -2685,29 +2748,42 @@ function prepararInternalVeoPedido(req, categoria, fields) {
     };
   }
 
-  if (!modelKey) {
-    if (cleanFields && typeof cleanFields === "object") delete cleanFields.video_model;
+  if (deliveryMode === "image" || (!deliveryMode && !modelKey)) {
+    if (cleanFields && typeof cleanFields === "object") {
+      if (deliveryMode) cleanFields.delivery_mode = deliveryMode;
+      else delete cleanFields.delivery_mode;
+      delete cleanFields.video_model;
+    }
     return { ok: true, patch: null };
   }
 
-  if (categoria !== "proximo_jogo") {
+  if (commercialVideo && !VIDEO_DELIVERY_PRODUCTS.has(categoria)) {
     return {
       ok: false,
       status: 400,
-      error: "O teste de video esta disponivel somente para Proximo Jogo."
+      error: "A opcao de video nao esta disponivel para este produto."
     };
   }
 
-  if (!internalVeoDisponivel(req)) {
+  if (commercialVideo && !VEO_VIDEO_ENABLED) {
     return {
       ok: false,
-      status: 403,
-      error: "O teste de video ainda esta disponivel somente para uso interno."
+      status: 503,
+      error: "A geracao de video esta temporariamente indisponivel."
     };
+  }
+
+  const legacyInternalTest = !commercialVideo;
+  if (legacyInternalTest && categoria !== "proximo_jogo") {
+    return { ok: false, status: 400, error: "O teste interno de video esta disponivel somente para Proximo Jogo." };
+  }
+  if (legacyInternalTest && !internalVeoDisponivel(req)) {
+    return { ok: false, status: 403, error: "O teste de video ainda esta disponivel somente para uso interno." };
   }
 
   const selected = INTERNAL_VEO_MODELS[modelKey];
-  cleanFields.video_model = selected.key;
+  structured.delivery_mode = commercialVideo ? "image_video" : "";
+  structured.video_model = selected.key;
   return {
     ok: true,
     patch: {
@@ -2720,7 +2796,9 @@ function prepararInternalVeoPedido(req, categoria, fields) {
         aspect_ratio: "9:16",
         resolution: "720p",
         generate_audio: false,
-        internal_test: true,
+        delivery_mode: commercialVideo ? "image_video" : "internal_test",
+        commercial: commercialVideo,
+        internal_test: legacyInternalTest,
         status: "pending",
         requested_at: new Date().toISOString()
       }
@@ -14698,7 +14776,8 @@ app.get("/meus-pedidos", auth, (req, res) => {
     const resultadoVideoPath = path.join(item.base, "resultado_video.mp4");
     const status = readOrderStatus(item.base, item.pedido.status || "novo");
     const imagemPronta = fs.existsSync(resultadoFinalPath);
-    const videoPronto = internalVeoDisponivel(req) && fs.existsSync(resultadoVideoPath);
+    const videoVisivel = pedidoPodeAcessarVideo(req, item.pedido);
+    const videoPronto = videoVisivel && fs.existsSync(resultadoVideoPath);
     const aprovadoCliente = item.pedido.aprovado_cliente === true;
     const pagamentoPendente = item.pedido.pagamento_pendente === true;
     const ajusteUsado = item.pedido.ajuste_automatico_usado === true;
@@ -14714,7 +14793,7 @@ app.get("/meus-pedidos", auth, (req, res) => {
         : null,
       imagem_pronta: imagemPronta,
       video_pronto: videoPronto,
-      video_generation: internalVeoDisponivel(req)
+      video_generation: videoVisivel
         ? item.pedido.video_generation || null
         : null,
       descricao_instagram: item.pedido.descricao_instagram || "",
@@ -15152,10 +15231,6 @@ app.post("/pedidos/:id/download-ticket", auth, safeAsyncRoute(async (req, res) =
     return res.status(400).json({ ok: false, error: "Formato de download invalido." });
   }
 
-  if (formato === "video" && !internalVeoDisponivel(req)) {
-    return res.status(403).json({ ok: false, error: "Video ainda disponivel somente no teste interno." });
-  }
-
   await tentarRecuperarOrderV2Pedido(
     req.user.whatsapp,
     pedidoId,
@@ -15189,6 +15264,10 @@ app.post("/pedidos/:id/download-ticket", auth, safeAsyncRoute(async (req, res) =
       duracaoMs: Date.now() - startedAt
     });
     return res.status(validated.status).json({ ok: false, error: validated.error });
+  }
+
+  if (formato === "video" && !pedidoPodeAcessarVideo(req, validated.pedido)) {
+    return res.status(403).json({ ok: false, error: "Este pedido nao inclui video." });
   }
 
   const resourceType = `pedido_${formato}`;
@@ -15259,9 +15338,8 @@ app.post("/pedidos/:id/download-direto/:formato", safeAsyncRoute(async (req, res
   }
 
   if (formato === "video") {
-    const isInternalOwner = INTERNAL_VEO_TEST_ENABLED && redeemed.record.userId === BOT_ADMIN_WHATSAPP;
-    if (!isInternalOwner || validated.pedido?.video_generation?.internal_test !== true) {
-      return res.status(403).json({ ok: false, error: "Video ainda disponivel somente no teste interno." });
+    if (!pedidoPodeAcessarVideo(redeemed.record.userId, validated.pedido)) {
+      return res.status(403).json({ ok: false, error: "Este pedido nao inclui video." });
     }
   }
 
@@ -15398,7 +15476,8 @@ app.get("/pedidos/:id/info", auth, (req, res) => {
   const status = readOrderStatus(base, "novo");
 
   const imagem_pronta = fs.existsSync(resultadoFinalPath);
-  const video_pronto = internalVeoDisponivel(req) && fs.existsSync(resultadoVideoPath);
+  const videoVisivel = pedidoPodeAcessarVideo(req, pedido);
+  const video_pronto = videoVisivel && fs.existsSync(resultadoVideoPath);
 
   return res.json({
     ok: true,
@@ -15407,7 +15486,7 @@ app.get("/pedidos/:id/info", auth, (req, res) => {
     categoria: pedido.categoria || "",
     imagem_pronta,
     video_pronto,
-    video_generation: internalVeoDisponivel(req)
+    video_generation: videoVisivel
       ? pedido.video_generation || null
       : null,
     preview_url: imagem_pronta
@@ -15593,14 +15672,12 @@ app.post(
     const previewDest = path.join(base, "preview_ia4tube.jpg");
     const videoDest = path.join(base, "resultado_video.mp4");
 
-    const videoFoiSolicitado = pedidoAtual?.video_generation?.requested === true &&
-      pedidoAtual?.video_generation?.internal_test === true &&
-      pedidoAtual?.categoria === "proximo_jogo";
+    const videoFoiSolicitado = pedidoTemVideoSolicitado(pedidoAtual);
     if (videoFile && !videoFoiSolicitado) {
       limparUploadsRequest(req);
       return res.status(400).json({
         ok: false,
-        error: "Este pedido nao solicitou o teste interno de video."
+        error: "Este pedido nao solicitou video."
       });
     }
 
