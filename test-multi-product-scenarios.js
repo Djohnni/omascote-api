@@ -12,7 +12,7 @@ process.env.JWT_SECRET = "multi-scenario-test-secret";
 delete process.env.MP_ACCESS_TOKEN;
 delete process.env.OPENAI_API_KEY;
 
-const { __resultadoScenarioTest } = require("./server");
+const { __resultadoScenarioTest, __fotoJogosTest } = require("./server");
 
 const {
   registry,
@@ -43,6 +43,18 @@ const PRODUCTS = Object.freeze([
   { id: "jogador_escudo", flyerTipo: "jog_escudo", prompt: "prompt_jogador_escudo.txt" },
   { id: "mascote_uniforme", flyerTipo: "mascote_uniforme", prompt: "prompt_mascote_uniforme.txt" },
   { id: "escalacao", flyerTipo: "zz1fs", prompt: "prompt_escalacao.txt" }
+]);
+const VIDEO_PRODUCTS = Object.freeze([
+  { id: "proximo_jogo", price: 7 },
+  { id: "resultado", price: 8 },
+  { id: "jogador_escudo", price: 6 },
+  { id: "contratacao", price: 7.8 },
+  { id: "escalacao", price: 8 },
+  { id: "patrocinador", price: 8 },
+  { id: "escudo3d", price: 4 },
+  { id: "mascote_uniforme", price: 18 },
+  { id: "proximo_jogo_jogador", price: 7 },
+  { id: "resultado_jogo_jogador", price: 8 }
 ]);
 
 function scenarioId(productId, variant) {
@@ -178,7 +190,7 @@ test("ausencia usa o default proprio e pedidos antigos continuam compativeis", (
   });
 });
 
-test("Veo interno aceita Lite/Fast so para o admin e Proximo Jogo", () => {
+test("Veo preserva o teste interno e aceita a entrega comercial nos dez produtos", () => {
   const adminRequest = { user: { whatsapp: "15991120599" } };
   const customerRequest = { user: { whatsapp: "551199990000" } };
 
@@ -200,15 +212,36 @@ test("Veo interno aceita Lite/Fast so para o admin e Proximo Jogo", () => {
   assert.equal(forbidden.ok, false);
   assert.equal(forbidden.status, 403);
 
-  const wrongProduct = prepararInternalVeoPedido(adminRequest, "resultado", {
-    new_model: { fields: { video_model: "fast" } }
-  });
-  assert.equal(wrongProduct.ok, false);
-  assert.equal(wrongProduct.status, 400);
+  for (const product of VIDEO_PRODUCTS) {
+    const fields = { new_model: { fields: { delivery_mode: "image_video" } } };
+    const commercial = prepararInternalVeoPedido(customerRequest, product.id, fields);
+    assert.equal(commercial.ok, true, product.id);
+    assert.equal(commercial.patch.video_generation.model, "fast", product.id);
+    assert.equal(commercial.patch.video_generation.commercial, true, product.id);
+    assert.equal(commercial.patch.video_generation.internal_test, false, product.id);
+    assert.equal(commercial.patch.video_generation.duration_seconds, 8, product.id);
+    assert.equal(fields.new_model.fields.video_model, "fast", product.id);
+  }
 
   const ordinaryOrder = { new_model: { fields: {} } };
   const noVideo = prepararInternalVeoPedido(customerRequest, "proximo_jogo", ordinaryOrder);
   assert.deepEqual(noVideo, { ok: true, patch: null });
+});
+
+test("preco de imagem permanece e imagem com video usa 14,90, exceto Mascote a 28", () => {
+  const { getCustoPedidoComAdicionais } = __fotoJogosTest;
+  const videoFields = { new_model: { fields: { delivery_mode: "image_video", video_model: "fast" } } };
+  const imageFields = { new_model: { fields: { delivery_mode: "image" } } };
+
+  for (const product of VIDEO_PRODUCTS) {
+    const expectedVideo = product.id === "mascote_uniforme" ? 28 : 14.9;
+    assert.equal(getCustoPedidoComAdicionais(product.id, {}, videoFields), expectedVideo, product.id);
+    assert.equal(getCustoPedidoComAdicionais(product.id, {}, imageFields), product.price, product.id);
+  }
+
+  assert.equal(getCustoPedidoComAdicionais("contratacao", {}, {
+    new_model: { fields: { delivery_mode: "image_video", jersey_enabled: "true" } }
+  }), 16.9);
 });
 
 test("matriz batch 5x8 inclui cada cenario no fingerprint canonico", () => {
