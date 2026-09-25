@@ -53,7 +53,7 @@ function writeClientes() {
       nome_time: "Bot teste",
       plano: "teste",
       ativo: true,
-      saldo_extra: 0,
+      saldo_extra: 50,
       saldo_mensal: 0,
       usados_no_ciclo: 0,
       ciclo_mes: month
@@ -85,8 +85,8 @@ async function request(baseUrl, method, endpoint, token, body) {
   return { response, payload: await response.json() };
 }
 
-function findOrderFile(orderId) {
-  const ownerRoot = path.join(pedidosDir, whatsapp);
+function findOrderFile(orderId, ownerWhatsapp = whatsapp) {
+  const ownerRoot = path.join(pedidosDir, ownerWhatsapp);
   for (const month of fs.readdirSync(ownerRoot)) {
     const candidate = path.join(ownerRoot, month, orderId, "pedido.json");
     if (fs.existsSync(candidate)) return candidate;
@@ -175,4 +175,36 @@ test("API cria um Pix por arte e nunca envia pedido nao pago ao worker", async t
     fs.readFileSync(path.join(path.dirname(findOrderFile(third.payload.pedido_id)), "status.txt"), "utf8").trim(),
     "aguardando_pagamento"
   );
+});
+
+test("API desconta automaticamente somente o saldo da conta administrativa", async t => {
+  writeClientes();
+  const server = await new Promise(resolve => {
+    const instance = app.listen(0, "127.0.0.1", () => resolve(instance));
+  });
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+
+  const created = await createOrder(
+    baseUrl,
+    tokenFor(botWhatsapp),
+    "admin_automatic_balance_test"
+  );
+
+  assert.equal(created.response.status, 200, JSON.stringify(created.payload));
+  assert.equal(created.payload.pagamento_pendente, false);
+  assert.equal(created.payload.requer_pix_antes_criacao, false);
+
+  const orderFile = findOrderFile(created.payload.pedido_id, botWhatsapp);
+  const order = JSON.parse(fs.readFileSync(orderFile, "utf8"));
+  assert.equal(order.pagamento_metodo, "saldo_ia4tube");
+  assert.equal(order.pagamento_info?.origem, "desconto_automatico_criacao");
+  assert.equal(
+    fs.readFileSync(path.join(path.dirname(orderFile), "status.txt"), "utf8").trim(),
+    "novo"
+  );
+
+  const clientes = JSON.parse(fs.readFileSync(clientesFile, "utf8"));
+  assert.equal(clientes[botWhatsapp].saldo_extra, 42);
+  assert.equal(clientes[whatsapp].saldo_extra, 50);
 });
