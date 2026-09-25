@@ -43,6 +43,32 @@ test("saldo existente nao envia uma arte cobravel para producao sem Pix", () => 
   });
 });
 
+test("conta administrativa pode usar saldo existente para testes", () => {
+  assert.deepEqual(prepayment.decidirPagamentoAntesDaCriacao({
+    valor: 14.9,
+    cobertoPeloPlano: false,
+    temSaldoDisponivel: true,
+    permitirPagamentoComSaldo: true
+  }), {
+    pagamento_antecipado_obrigatorio: false,
+    tem_saldo_suficiente: true,
+    demonstracao_apos_pagamento: false
+  });
+});
+
+test("conta administrativa sem saldo suficiente continua no Pix", () => {
+  assert.deepEqual(prepayment.decidirPagamentoAntesDaCriacao({
+    valor: 14.9,
+    cobertoPeloPlano: false,
+    temSaldoDisponivel: false,
+    permitirPagamentoComSaldo: true
+  }), {
+    pagamento_antecipado_obrigatorio: true,
+    tem_saldo_suficiente: false,
+    demonstracao_apos_pagamento: false
+  });
+});
+
 test("uma arte paga anteriormente nao cria demonstracao gratuita", () => {
   assert.equal(
     prepayment.decidirPagamentoAntesDaCriacao({

@@ -2852,10 +2852,15 @@ const ART_PREPAYMENT_VERSION = "pix_before_every_art_v1";
 function decidirPagamentoAntesDaCriacao({
   valor,
   cobertoPeloPlano,
-  temSaldoDisponivel
+  temSaldoDisponivel,
+  permitirPagamentoComSaldo = false
 }) {
   const cobravel = normalizarValorFinanceiro(valor) > 0 && !cobertoPeloPlano;
-  const pagamentoAntecipadoObrigatorio = cobravel;
+  const pagamentoComSaldoAutorizado =
+    cobravel &&
+    permitirPagamentoComSaldo === true &&
+    temSaldoDisponivel === true;
+  const pagamentoAntecipadoObrigatorio = cobravel && !pagamentoComSaldoAutorizado;
   const temSaldoSuficiente = !pagamentoAntecipadoObrigatorio && temSaldoDisponivel === true;
 
   return {
@@ -13978,7 +13983,8 @@ function criarPedidoHandlerAsync(categoria) {
     const decisaoPagamento = decidirPagamentoAntesDaCriacao({
       valor: custoEfetivoPedido,
       cobertoPeloPlano,
-      temSaldoDisponivel
+      temSaldoDisponivel,
+      permitirPagamentoComSaldo: isBotAdmin(req)
     });
     const pagamentoAntecipadoObrigatorio =
       decisaoPagamento.pagamento_antecipado_obrigatorio;
