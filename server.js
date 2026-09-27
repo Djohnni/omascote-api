@@ -14625,7 +14625,8 @@ app.post(
     { name: "escudo1", maxCount: 1 },
     { name: "escudo2", maxCount: 1 },
     { name: "mascote", maxCount: 4 },
-    { name: "patrocinadores", maxCount: 20 }
+    { name: "patrocinadores", maxCount: 20 },
+    { name: "camiseta", maxCount: 1 }
   ])),
   criarPedidoHandler("resultado")
 );
