@@ -109,7 +109,7 @@ function getUploadPermissions(categoria) {
     podeUsarMascote: ["resultado", "escalacao", "proximo_jogo", "proximo_jogo_jogador", "resultado_jogo_jogador", "jogador_escudo", "mascote_uniforme"].includes(categoria),
     podeUsarPatrocinadores: categoria === "patrocinador",
     podeUsarReferencia: categoria === "contratacao",
-    podeUsarCamiseta: categoria === "contratacao"
+    podeUsarCamiseta: ["contratacao", "proximo_jogo", "resultado"].includes(categoria)
   };
 }
 
