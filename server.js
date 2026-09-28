@@ -932,7 +932,7 @@ function getCustoPedido(categoria, cliente) {
   if (categoria === "resultado_jogo_jogador") return 8.00;
   if (categoria === "jogador_escudo") return 6.00;
   if (categoria === "mascote_uniforme") {
-    return 18.00;
+    return 9.90;
   }
 
   return 0;
@@ -998,7 +998,7 @@ const VIDEO_PURCHASE_PRODUCTS = new Set([
   "mascote_uniforme"
 ]);
 const VIDEO_DELIVERY_PRICE = 14.90;
-const VIDEO_DELIVERY_MASCOT_PRICE = 28.00;
+const VIDEO_DELIVERY_MASCOT_PRICE = 18.50;
 
 function normalizarDeliveryMode(value) {
   const mode = String(value || "").trim().toLowerCase();
