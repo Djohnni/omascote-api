@@ -47,13 +47,13 @@ const PRODUCTS = Object.freeze([
 const VIDEO_PRODUCTS = Object.freeze([
   { id: "proximo_jogo", price: 7 },
   { id: "resultado", price: 8 },
+  { id: "jogador_escudo", price: 6 },
   { id: "escalacao", price: 8 },
   { id: "patrocinador", price: 8 },
   { id: "escudo3d", price: 4 },
   { id: "mascote_uniforme", price: 18 }
 ]);
 const PERSON_VIDEO_PRODUCTS = Object.freeze([
-  { id: "jogador_escudo", price: 6 },
   { id: "contratacao", price: 7.8 },
   { id: "proximo_jogo_jogador", price: 7 },
   { id: "resultado_jogo_jogador", price: 8 }
@@ -192,7 +192,7 @@ test("ausencia usa o default proprio e pedidos antigos continuam compativeis", (
   });
 });
 
-test("Veo preserva o teste interno, aceita seis produtos e bloqueia novas vendas com pessoas", () => {
+test("Veo preserva o teste interno, restaura Jogador + Escudo e bloqueia os demais produtos com pessoas", () => {
   const adminRequest = { user: { whatsapp: "15991120599" } };
   const customerRequest = { user: { whatsapp: "551199990000" } };
 
