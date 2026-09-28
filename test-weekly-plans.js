@@ -37,7 +37,7 @@ test("weekly plan catalog fixes server-side prices and limits", () => {
     priceCents: 780,
     hasPaidAddon: true
   }), false);
-  assert.equal(isWeeklyPlanEligibleProduct("mascote_uniforme", { priceCents: 990 }), false);
+  assert.equal(isWeeklyPlanEligibleProduct("mascote_uniforme", { priceCents: 1800 }), false);
   assert.equal(isWeeklyPlanEligibleProduct("produto_futuro", { priceCents: 400 }), false);
 });
 
