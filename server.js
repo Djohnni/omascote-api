@@ -986,11 +986,12 @@ const VIDEO_DELIVERY_PRODUCTS = new Set([
   "resultado_jogo_jogador"
 ]);
 // Mantem o conjunto completo para concluir e entregar videos ja contratados.
-// Novas vendas excluem produtos centrados em fotos de pessoas, que podem ser
-// bloqueados pelo provedor mesmo quando a imagem pertence ao cliente.
+// Novas vendas excluem os demais produtos centrados em fotos de pessoas, que
+// podem ser bloqueados pelo provedor mesmo quando a imagem pertence ao cliente.
 const VIDEO_PURCHASE_PRODUCTS = new Set([
   "proximo_jogo",
   "resultado",
+  "jogador_escudo",
   "escalacao",
   "patrocinador",
   "escudo3d",
