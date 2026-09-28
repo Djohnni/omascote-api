@@ -52,7 +52,7 @@ const VIDEO_PRODUCTS = Object.freeze([
   { id: "escalacao", price: 8 },
   { id: "patrocinador", price: 8 },
   { id: "escudo3d", price: 4 },
-  { id: "mascote_uniforme", price: 18 },
+  { id: "mascote_uniforme", price: 9.9 },
   { id: "proximo_jogo_jogador", price: 7 },
   { id: "resultado_jogo_jogador", price: 8 }
 ]);
@@ -228,13 +228,13 @@ test("Veo preserva o teste interno e aceita a entrega comercial nos dez produtos
   assert.deepEqual(noVideo, { ok: true, patch: null });
 });
 
-test("preco de imagem permanece e imagem com video usa 14,90, exceto Mascote a 28", () => {
+test("preco de imagem permanece e imagem com video usa 14,90, exceto Mascote a 18,50", () => {
   const { getCustoPedidoComAdicionais } = __fotoJogosTest;
   const videoFields = { new_model: { fields: { delivery_mode: "image_video", video_model: "fast" } } };
   const imageFields = { new_model: { fields: { delivery_mode: "image" } } };
 
   for (const product of VIDEO_PRODUCTS) {
-    const expectedVideo = product.id === "mascote_uniforme" ? 28 : 14.9;
+    const expectedVideo = product.id === "mascote_uniforme" ? 18.5 : 14.9;
     assert.equal(getCustoPedidoComAdicionais(product.id, {}, videoFields), expectedVideo, product.id);
     assert.equal(getCustoPedidoComAdicionais(product.id, {}, imageFields), product.price, product.id);
   }
