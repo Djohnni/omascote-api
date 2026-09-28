@@ -83,7 +83,7 @@ const PRODUCTS = {
   mascote_uniforme: {
     id: "mascote_uniforme",
     name: "Mascote + uniforme",
-    price: 18.00,
+    price: 9.90,
     category: "time",
     flyerTipos: ["mascote_uniforme"],
     aliases: ["mascote_uniforme"]
