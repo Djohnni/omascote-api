@@ -147,6 +147,7 @@ const DATA_DIR = process.env.OMASCOTE_DATA_DIR
 
 const PEDIDOS_DIR = path.join(DATA_DIR, "pedidos");
 const CLIENTES_FILE = path.join(DATA_DIR, "clientes.json");
+const AVALIACOES_ARTES_FILE = path.join(DATA_DIR, "avaliacoes_artes.json");
 const ATENDIMENTO_AUDIT_FILE = path.join(DATA_DIR, "atendimento_chat_auditoria.json");
 const BOT_ADMIN_WHATSAPP = process.env.BOT_ADMIN_WHATSAPP || "15991120599";
 const INTERNAL_VEO_TEST_ENABLED = !["0", "false", "off", "no"].includes(
@@ -15355,6 +15356,8 @@ app.post("/pedidos/:id/download-direto/:formato", safeAsyncRoute(async (req, res
 
   validated.pedido.baixado_cliente = true;
   validated.pedido.baixado_em = new Date().toISOString();
+  if(formato === "resultado") validated.pedido.baixado_imagem_em = validated.pedido.baixado_em;
+  if(formato === "video") validated.pedido.baixado_video_em = validated.pedido.baixado_em;
   try {
     fs.writeFileSync(
       validated.pedidoPath,
@@ -15412,6 +15415,102 @@ app.post("/pedidos/:id/download-direto/:formato", safeAsyncRoute(async (req, res
   );
   return res.sendFile(validated.arquivo);
 }));
+
+function avaliacaoArtePublica(avaliacao, usuario = "") {
+  return {
+    id: avaliacao.id,
+    tipo: avaliacao.tipo,
+    nome: avaliacao.nome,
+    comentario: avaliacao.comentario,
+    criado_em: avaliacao.criado_em,
+    minha: Boolean(usuario && (
+      usuario === avaliacao.cliente_id || getPedidoBase(usuario, avaliacao.pedido_id)
+    ))
+  };
+}
+
+app.get("/avaliacoes-artes", authOpcional, (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  const limite = Math.min(20, Math.max(1, Number.parseInt(req.query.limite, 10) || 6));
+  const pagina = Math.max(0, Number.parseInt(req.query.pagina, 10) || 0);
+  const avaliacoes = readJsonArraySafe(AVALIACOES_ARTES_FILE)
+    .filter(item => item && item.ativo !== false)
+    .sort((a, b) => String(b.criado_em || "").localeCompare(String(a.criado_em || "")));
+  return res.json({
+    ok: true,
+    total: avaliacoes.length,
+    pagina,
+    avaliacoes: avaliacoes.slice(pagina * limite, (pagina + 1) * limite)
+      .map(item => avaliacaoArtePublica(item, req.user?.whatsapp))
+  });
+});
+
+app.post("/pedidos/:id/avaliacao-arte", auth, (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  const pedidoId = String(req.params.id || "");
+  const tipo = String(req.body?.tipo || "").trim().toLowerCase();
+  const nome = String(req.body?.nome || "").trim().replace(/\s+/g, " ") || "Cliente do O Mascote";
+  const comentario = String(req.body?.comentario || "").trim().replace(/\s+/g, " ");
+
+  if(!/^[a-zA-Z0-9_-]{1,100}$/.test(pedidoId) || !["imagem", "vídeo"].includes(tipo)){
+    return res.status(400).json({ ok:false, error:"Pedido ou tipo de avaliação inválido." });
+  }
+  if(req.body?.publicar !== true){
+    return res.status(400).json({ ok:false, error:"Confirme que o comentário será público." });
+  }
+  if(nome.length > 40 || /\d{8,}/.test(nome) || comentario.length < 8 || comentario.length > 400){
+    return res.status(400).json({ ok:false, error:"Use um nome de até 40 caracteres e um comentário de 8 a 400 caracteres, sem telefone no nome." });
+  }
+
+  const base = getPedidoBase(req.user.whatsapp, pedidoId);
+  if(!base) return res.status(404).json({ ok:false, error:"Pedido não encontrado." });
+  const pedido = readPedido(base) || {};
+  if(pedido.pagamento_pendente === true || pedido.aprovado_cliente !== true || pedido.baixado_cliente !== true){
+    return res.status(403).json({ ok:false, error:"A avaliação fica disponível após baixar uma arte liberada." });
+  }
+  if((tipo === "imagem" && !pedido.baixado_imagem_em) || (tipo === "vídeo" && !pedido.baixado_video_em)){
+    return res.status(403).json({ ok:false, error:"Baixe este arquivo antes de avaliá-lo." });
+  }
+  if(tipo === "vídeo" && !pedidoPodeAcessarVideo(req.user.whatsapp, pedido)){
+    return res.status(403).json({ ok:false, error:"Este pedido não inclui vídeo." });
+  }
+  const arquivo = path.join(base, tipo === "vídeo" ? "resultado_video.mp4" : "resultado_final.png");
+  if(!fs.existsSync(arquivo)){
+    return res.status(403).json({ ok:false, error:"A arte ainda não está disponível." });
+  }
+
+  const avaliacoes = readJsonArraySafe(AVALIACOES_ARTES_FILE);
+  const existente = avaliacoes.find(item => item.pedido_id === pedidoId && item.tipo === tipo);
+  const agora = new Date().toISOString();
+  const avaliacao = existente || {
+    id: crypto.randomUUID(),
+    cliente_id: req.user.whatsapp,
+    pedido_id: pedidoId,
+    tipo,
+    criado_em: agora
+  };
+  avaliacao.nome = nome;
+  avaliacao.comentario = comentario;
+  avaliacao.cliente_id = req.user.whatsapp;
+  avaliacao.ativo = true;
+  avaliacao.atualizado_em = agora;
+  if(!existente) avaliacoes.push(avaliacao);
+  writeJsonSafe(AVALIACOES_ARTES_FILE, avaliacoes);
+  return res.json({ ok:true, avaliacao:avaliacaoArtePublica(avaliacao, req.user.whatsapp) });
+});
+
+app.delete("/avaliacoes-artes/:id", auth, (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  const avaliacoes = readJsonArraySafe(AVALIACOES_ARTES_FILE);
+  const avaliacao = avaliacoes.find(item => item.id === req.params.id && item.ativo !== false && (
+    item.cliente_id === req.user.whatsapp || getPedidoBase(req.user.whatsapp, item.pedido_id)
+  ));
+  if(!avaliacao) return res.status(404).json({ ok:false, error:"Avaliação não encontrada." });
+  avaliacao.ativo = false;
+  avaliacao.atualizado_em = new Date().toISOString();
+  writeJsonSafe(AVALIACOES_ARTES_FILE, avaliacoes);
+  return res.json({ ok:true });
+});
 
 app.get("/pedidos/:id/download-resultado", auth, safeAsyncRoute(async (req, res) => {
   const whatsapp = req.user.whatsapp;
