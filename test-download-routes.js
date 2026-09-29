@@ -113,6 +113,28 @@ test("secure direct download routes enforce ownership, state, binding and one-ti
   const address = server.address();
   const baseUrl = `http://127.0.0.1:${address.port}`;
 
+  const viewPedidoPath = path.join(testDataDir, "pedidos", "cliente-1", "2026-07", "pedido-ok", "pedido.json");
+  const beforeView = fs.readFileSync(viewPedidoPath, "utf8");
+  const imageView = await fetch(`${baseUrl}/pedidos/pedido-ok/download-resultado?visualizacao=1`, {
+    headers: { Authorization: bearer("cliente-1") }
+  });
+  assert.equal(imageView.status, 200);
+  assert.match(imageView.headers.get("content-disposition"), /^inline;/);
+  assert.match(imageView.headers.get("cache-control"), /no-store/);
+  assert.equal(imageView.headers.get("x-omascote-image-view"), "1");
+  assert.equal(fs.readFileSync(viewPedidoPath, "utf8"), beforeView, "visualizar não registra download");
+  assert.deepEqual(Buffer.from(await imageView.arrayBuffer()), fs.readFileSync(path.join(path.dirname(viewPedidoPath), "resultado_final.png")));
+  for (const [orderId, userId, expected] of [
+    ["pedido-ok", null, 401], ["pedido-ok", "outro-cliente", 404],
+    ["pedido-pendente", "cliente-1", 403], ["pedido-nao-aprovado", "cliente-1", 403]
+  ]) {
+    const viewDenied = await fetch(`${baseUrl}/pedidos/${orderId}/download-resultado?visualizacao=1`, {
+      headers: userId ? { Authorization: bearer(userId) } : {}
+    });
+    assert.equal(viewDenied.status, expected);
+    await viewDenied.arrayBuffer();
+  }
+
   const noLogin = await fetch(`${baseUrl}/pedidos/pedido-ok/download-ticket`, {
     method: "POST"
   });

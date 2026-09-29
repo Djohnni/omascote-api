@@ -15525,6 +15525,7 @@ app.delete("/avaliacoes-artes/:id", auth, (req, res) => {
 });
 
 app.get("/pedidos/:id/download-resultado", auth, safeAsyncRoute(async (req, res) => {
+  const somenteVisualizacao = req.query.visualizacao === "1";
   const whatsapp = req.user.whatsapp;
   const base = getPedidoBase(whatsapp, req.params.id);
 
@@ -15558,15 +15559,18 @@ app.get("/pedidos/:id/download-resultado", auth, safeAsyncRoute(async (req, res)
     return res.status(404).json({ ok: false, error: "Resultado final não encontrado" });
   }
 
-  pedido.baixado_cliente = true;
-  pedido.baixado_em = new Date().toISOString();
+  if (!somenteVisualizacao) {
+    pedido.baixado_cliente = true;
+    pedido.baixado_em = new Date().toISOString();
+    try {
+      fs.writeFileSync(pedidoPath, JSON.stringify(pedido, null, 2), "utf8");
+    } catch {}
+  }
 
-  try {
-    fs.writeFileSync(pedidoPath, JSON.stringify(pedido, null, 2), "utf8");
-  } catch {}
-
+  setPrivateDownloadHeaders(res);
   res.setHeader("Content-Type", "image/png");
-  res.setHeader("Content-Disposition", `attachment; filename="${req.params.id}_resultado.png"`);
+  res.setHeader("Content-Disposition", `${somenteVisualizacao ? "inline" : "attachment"}; filename="${req.params.id}_resultado.png"`);
+  if (somenteVisualizacao) res.setHeader("X-Omascote-Image-View", "1");
 
   return res.sendFile(arquivo);
 }));
