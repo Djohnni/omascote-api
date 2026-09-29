@@ -113,6 +113,76 @@ test("secure direct download routes enforce ownership, state, binding and one-ti
   const address = server.address();
   const baseUrl = `http://127.0.0.1:${address.port}`;
 
+  const issueHttps = (orderId, formato = "resultado", userId = "cliente-1") => fetch(
+    `${baseUrl}/pedidos/${orderId}/download-ticket`, {
+      method: "POST", headers: { "Content-Type": "application/json", ...(userId ? { Authorization: bearer(userId) } : {}) },
+      body: JSON.stringify({ formato, transporte: "https" })
+    }
+  );
+  for (const [orderId, userId, expected] of [
+    ["pedido-ok", null, 401], ["pedido-ok", "outro-cliente", 404],
+    ["pedido-pendente", "cliente-1", 403], ["pedido-nao-aprovado", "cliente-1", 403]
+  ]) {
+    const denied = await issueHttps(orderId, "resultado", userId);
+    assert.equal(denied.status, expected);
+    await denied.arrayBuffer();
+  }
+  const nativeReply = await issueHttps("pedido-ok");
+  assert.equal(nativeReply.status, 200);
+  assert.match(nativeReply.headers.get("cache-control"), /no-store/);
+  const native = await nativeReply.json();
+  assert.equal(native.transporte, "https");
+  assert.equal(native.expires_in, 300);
+  assert.equal(native.ticket, undefined);
+  const nativeUrl = `${baseUrl}${native.download_path}`;
+  const nativePedidoPath = path.join(testDataDir, "pedidos", "cliente-1", "2026-07", "pedido-ok", "pedido.json");
+  const beforeHead = fs.readFileSync(nativePedidoPath, "utf8");
+  const head = await fetch(nativeUrl, { method: "HEAD" });
+  assert.equal(head.status, 200);
+  assert.equal(fs.readFileSync(nativePedidoPath, "utf8"), beforeHead);
+  for (let i = 0; i < 2; i++) {
+    const downloaded = await fetch(nativeUrl);
+    assert.equal(downloaded.status, 200);
+    assert.match(downloaded.headers.get("content-disposition"), /^attachment;/);
+    assert.match(downloaded.headers.get("cache-control"), /no-store/);
+    assert.equal(downloaded.headers.get("referrer-policy"), "no-referrer");
+    assert.deepEqual(Buffer.from(await downloaded.arrayBuffer()), fs.readFileSync(path.join(path.dirname(nativePedidoPath), "resultado_final.png")));
+  }
+  for (const badUrl of [
+    nativeUrl.replace("pedido-ok", "pedido-pendente"), nativeUrl.replace("/resultado?", "/video?"),
+    nativeUrl.replace(/chave=.*/, "chave=invalida"), nativeUrl.split("?")[0]
+  ]) {
+    const denied = await fetch(badUrl);
+    assert.equal(denied.status, 403);
+    await denied.arrayBuffer();
+  }
+  const changedOrder = JSON.parse(fs.readFileSync(nativePedidoPath));
+  writeJson(nativePedidoPath, { ...changedOrder, pagamento_pendente: true });
+  const revoked = await fetch(nativeUrl);
+  assert.equal(revoked.status, 403, "revalidate paid state after issuing link");
+  await revoked.arrayBuffer();
+  writeJson(nativePedidoPath, changedOrder);
+  const nativeVideoDenied = await issueHttps("pedido-video-regular", "video");
+  assert.equal(nativeVideoDenied.status, 403);
+  const videoNative = await (await issueHttps("pedido-video-comercial", "video")).json();
+  const videoUrl = `${baseUrl}${videoNative.download_path}`;
+  for (const [range, expected] of [["bytes=0-3", testMp4.subarray(0, 4)], ["bytes=4-", testMp4.subarray(4)]]) {
+    const partial = await fetch(videoUrl, { headers: { Range: range } });
+    assert.equal(partial.status, 206);
+    assert.equal(partial.headers.get("accept-ranges"), "bytes");
+    assert.deepEqual(Buffer.from(await partial.arrayBuffer()), expected);
+  }
+  const nativeFullVideo = await fetch(videoUrl);
+  assert.equal(nativeFullVideo.status, 200);
+  assert.deepEqual(Buffer.from(await nativeFullVideo.arrayBuffer()), testMp4);
+  process.env.DOWNLOAD_HTTPS_ENABLED = "false";
+  const disabled = await issueHttps("pedido-ok");
+  assert.ok((await disabled.json()).ticket, "kill switch preserves legacy POST tickets");
+  const disabledGet = await fetch(nativeUrl);
+  assert.equal(disabledGet.status, 403);
+  await disabledGet.arrayBuffer();
+  delete process.env.DOWNLOAD_HTTPS_ENABLED;
+
   const viewPedidoPath = path.join(testDataDir, "pedidos", "cliente-1", "2026-07", "pedido-ok", "pedido.json");
   const beforeView = fs.readFileSync(viewPedidoPath, "utf8");
   const imageView = await fetch(`${baseUrl}/pedidos/pedido-ok/download-resultado?visualizacao=1`, {
