@@ -33,6 +33,7 @@ const {
   attachmentContentDisposition,
   safeDownloadFilename
 } = require("./src/download/download-ticket");
+const { DownloadLinkStore } = require("./src/download/download-link");
 const {
   BrowserHandoffStore,
   BrowserHandoffStoreError
@@ -135,6 +136,7 @@ const DOWNLOAD_TICKET_TTL_MS = Math.min(
   5 * 60 * 1000
 );
 const downloadTickets = new DownloadTicketStore({ ttlMs: DOWNLOAD_TICKET_TTL_MS });
+const downloadLinks = new DownloadLinkStore();
 
 // ===== DATA STORAGE (RENDER DISK) =====
 const isRender = process.env.RENDER || process.env.NODE_ENV === "production";
@@ -15291,6 +15293,22 @@ app.post("/pedidos/:id/download-ticket", auth, safeAsyncRoute(async (req, res) =
   }
 
   const resourceType = `pedido_${formato}`;
+  if (req.body?.transporte === "https" && formato !== "zip" && process.env.DOWNLOAD_HTTPS_ENABLED !== "false") {
+    let link;
+    try {
+      link = downloadLinks.issue({ userId: req.user.whatsapp, resourceId: pedidoId, format: formato });
+    } catch {
+      return res.status(503).json({ ok: false, error: "Download ocupado. Tente novamente em instantes." });
+    }
+    logDownloadTechnical(req, {
+      evento: "link_emitido", recurso: resourceType, pedidoId,
+      rota: "pedido_link_https", status: 200, duracaoMs: Date.now() - startedAt
+    });
+    return res.json({
+      ok: true, transporte: "https", expires_in: Math.ceil(link.expiresInMs / 1000),
+      download_path: `/pedidos/${encodeURIComponent(pedidoId)}/download-arquivo/${formato}?chave=${encodeURIComponent(link.token)}`
+    });
+  }
   const issued = downloadTickets.issue({
     resourceType,
     resourceId: pedidoId,
@@ -15312,6 +15330,63 @@ app.post("/pedidos/:id/download-ticket", auth, safeAsyncRoute(async (req, res) =
     expires_in: Math.ceil(issued.expiresInMs / 1000),
     download_path: `/pedidos/${encodeURIComponent(pedidoId)}/download-direto/${formato}`
   });
+}));
+
+// Capability URL contains no account JWT and only authorizes this exact file.
+// Browser/OS downloads may retry and use HEAD/Range without the site's session.
+app.get("/pedidos/:id/download-arquivo/:formato", safeAsyncRoute(async (req, res) => {
+  const startedAt = Date.now();
+  const pedidoId = String(req.params.id || "");
+  const formato = String(req.params.formato || "");
+  setPrivateDownloadHeaders(res);
+  res.setHeader("X-Robots-Tag", "noindex, nofollow, noarchive");
+  const record = process.env.DOWNLOAD_HTTPS_ENABLED === "false" ? null
+    : downloadLinks.resolve(req.query.chave, { resourceId: pedidoId, format: formato });
+  if (!record) {
+    logDownloadTechnical(req, { evento: "link_recusado", pedidoId, rota: "pedido_link_https", status: 403 });
+    return res.status(403).type("text/plain").send("Link inválido ou expirado. Volte ao O Mascote e toque novamente em Baixar. Não há nova cobrança.");
+  }
+  const validated = validateOrderDownload(record.userId, pedidoId, {
+    resultFilename: formato === "video" ? "resultado_video.mp4" : "resultado_final.png"
+  });
+  if (!validated.ok) return res.status(validated.status).json({ ok: false, error: validated.error });
+  if (formato === "video" && !pedidoPodeAcessarVideo(record.userId, validated.pedido)) {
+    return res.status(403).json({ ok: false, error: "Este pedido nao inclui video." });
+  }
+  const verification = await verificarAutorizacaoPedidoPlano(validated.base, validated.pedido);
+  if (!verification.ok) return weeklyPlanOrderAccessError(res, verification);
+  res.setHeader("Content-Type", formato === "video" ? "video/mp4" : "image/png");
+  res.setHeader("Content-Disposition", attachmentContentDisposition(
+    `${pedidoId}_${formato === "video" ? "video_8s.mp4" : "imagem.png"}`
+  ));
+  res.on("finish", () => {
+    // Transfer completion is not proof of saving to the phone. Preserve legacy
+    // fields for review eligibility, without treating HEAD as a real transfer.
+    if (req.method === "GET" && res.statusCode === 200) {
+      try {
+        const current = safeReadJson(validated.pedidoPath);
+        if (current) {
+          const timestamp = new Date().toISOString();
+          current.baixado_cliente = true;
+          current.baixado_em = timestamp;
+          current[formato === "video" ? "baixado_video_em" : "baixado_imagem_em"] = timestamp;
+          fs.writeFileSync(validated.pedidoPath, JSON.stringify(current, null, 2), "utf8");
+        }
+      } catch {}
+    }
+    logDownloadTechnical(req, {
+      evento: req.method === "HEAD" ? "download_cabecalho" : "download_transferido_servidor",
+      pedidoId, recurso: `pedido_${formato}`, rota: "pedido_link_https",
+      status: res.statusCode, duracaoMs: Date.now() - startedAt
+    });
+  });
+  res.on("close", () => {
+    if (!res.writableFinished) logDownloadTechnical(req, {
+      evento: "download_interrompido", pedidoId, recurso: `pedido_${formato}`,
+      rota: "pedido_link_https", status: res.statusCode, duracaoMs: Date.now() - startedAt
+    });
+  });
+  return res.sendFile(validated.arquivo);
 }));
 
 app.post("/pedidos/:id/download-direto/:formato", safeAsyncRoute(async (req, res) => {
