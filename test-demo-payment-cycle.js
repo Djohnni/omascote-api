@@ -19,7 +19,7 @@ function pendingOrder(extra = {}) {
   };
 }
 
-test("toda arte cobravel exige Pix antes da criacao", () => {
+test("arte cobravel sem saldo suficiente exige Pix antes da criacao", () => {
   assert.deepEqual(prepayment.decidirPagamentoAntesDaCriacao({
     valor: 8,
     cobertoPeloPlano: false,
@@ -31,14 +31,14 @@ test("toda arte cobravel exige Pix antes da criacao", () => {
   });
 });
 
-test("saldo existente nao envia uma arte cobravel para producao sem Pix", () => {
+test("saldo suficiente de qualquer cliente permite criar a arte sem Pix", () => {
   assert.deepEqual(prepayment.decidirPagamentoAntesDaCriacao({
     valor: 8,
     cobertoPeloPlano: false,
     temSaldoDisponivel: true
   }), {
-    pagamento_antecipado_obrigatorio: true,
-    tem_saldo_suficiente: false,
+    pagamento_antecipado_obrigatorio: false,
+    tem_saldo_suficiente: true,
     demonstracao_apos_pagamento: false
   });
 });

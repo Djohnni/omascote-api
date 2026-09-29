@@ -2868,7 +2868,7 @@ function decidirPagamentoAntesDaCriacao({
   valor,
   cobertoPeloPlano,
   temSaldoDisponivel,
-  permitirPagamentoComSaldo = false
+  permitirPagamentoComSaldo = true
 }) {
   const cobravel = normalizarValorFinanceiro(valor) > 0 && !cobertoPeloPlano;
   const pagamentoComSaldoAutorizado =
@@ -13998,8 +13998,7 @@ function criarPedidoHandlerAsync(categoria) {
     const decisaoPagamento = decidirPagamentoAntesDaCriacao({
       valor: custoEfetivoPedido,
       cobertoPeloPlano,
-      temSaldoDisponivel,
-      permitirPagamentoComSaldo: isBotAdmin(req)
+      temSaldoDisponivel
     });
     const pagamentoAntecipadoObrigatorio =
       decisaoPagamento.pagamento_antecipado_obrigatorio;

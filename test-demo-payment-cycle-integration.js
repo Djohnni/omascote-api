@@ -28,7 +28,7 @@ function tokenFor(id) {
   return jwt.sign({ whatsapp: id, cliente_id: id }, JWT_SECRET, { expiresIn: "1h" });
 }
 
-function writeClientes() {
+function writeClientes(saldoCliente = 50) {
   const month = new Date().toISOString().slice(0, 7).replace("-", "");
   fs.writeFileSync(clientesFile, JSON.stringify({
     [whatsapp]: {
@@ -38,7 +38,7 @@ function writeClientes() {
       nome_time: "Teste pagamento por arte",
       plano: "teste",
       ativo: true,
-      saldo_extra: 50,
+      saldo_extra: saldoCliente,
       saldo_mensal: 0,
       usados_no_ciclo: 0,
       ciclo_mes: month,
@@ -98,8 +98,8 @@ async function createOrder(baseUrl, token, requestId) {
   return request(baseUrl, "POST", "/resultado_do_jogo", token, resultForm(requestId));
 }
 
-test("API cria um Pix por arte e nunca envia pedido nao pago ao worker", async t => {
-  writeClientes();
+test("API sem saldo cria um Pix por arte e nunca envia pedido nao pago ao worker", async t => {
+  writeClientes(0);
   const server = await new Promise(resolve => {
     const instance = app.listen(0, "127.0.0.1", () => resolve(instance));
   });
@@ -177,7 +177,7 @@ test("API cria um Pix por arte e nunca envia pedido nao pago ao worker", async t
   );
 });
 
-test("API desconta automaticamente somente o saldo da conta administrativa", async t => {
+test("API preserva desconto automatico da conta administrativa", async t => {
   writeClientes();
   const server = await new Promise(resolve => {
     const instance = app.listen(0, "127.0.0.1", () => resolve(instance));
@@ -207,4 +207,62 @@ test("API desconta automaticamente somente o saldo da conta administrativa", asy
   const clientes = JSON.parse(fs.readFileSync(clientesFile, "utf8"));
   assert.equal(clientes[botWhatsapp].saldo_extra, 42);
   assert.equal(clientes[whatsapp].saldo_extra, 50);
+});
+
+test("cliente comum usa saldo, repete envio sem novo desconto e nao libera pendencias antigas", async t => {
+  writeClientes(36);
+  const server = await new Promise(resolve => {
+    const instance = app.listen(0, "127.0.0.1", () => resolve(instance));
+  });
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+  const token = tokenFor(whatsapp);
+  const pendingBefore = fs.readdirSync(path.join(pedidosDir, whatsapp), { recursive: true })
+    .filter(name => name.endsWith("pedido.json"))
+    .map(name => path.join(pedidosDir, whatsapp, name))
+    .filter(file => JSON.parse(fs.readFileSync(file, "utf8")).pagamento_pendente === true)
+    .map(file => ({ file, content: fs.readFileSync(file, "utf8") }));
+  assert.ok(pendingBefore.length > 0);
+
+  const created = await createOrder(baseUrl, token, "customer_balance_first_test");
+  assert.equal(created.response.status, 200, JSON.stringify(created.payload));
+  assert.equal(created.payload.pagamento_pendente, false);
+  assert.equal(created.payload.requer_pix_antes_criacao, false);
+  const orderFile = findOrderFile(created.payload.pedido_id);
+  const order = JSON.parse(fs.readFileSync(orderFile, "utf8"));
+  assert.equal(order.pagamento_metodo, "saldo_ia4tube");
+  assert.equal(order.pagamento_info.valor_pago, 8);
+  assert.equal(fs.readFileSync(path.join(path.dirname(orderFile), "status.txt"), "utf8").trim(), "novo");
+  assert.equal(JSON.parse(fs.readFileSync(clientesFile, "utf8"))[whatsapp].saldo_extra, 28);
+
+  const repeated = await createOrder(baseUrl, token, "customer_balance_first_test");
+  assert.equal(repeated.response.status, 200);
+  assert.equal(repeated.payload.pedido_id, created.payload.pedido_id);
+  assert.equal(JSON.parse(fs.readFileSync(clientesFile, "utf8"))[whatsapp].saldo_extra, 28);
+  for (const previous of pendingBefore) {
+    assert.equal(fs.readFileSync(previous.file, "utf8"), previous.content);
+  }
+});
+
+test("saldo parcial fica intacto e solicita Pix; saldo exato libera o pedido", async t => {
+  writeClientes(7);
+  const server = await new Promise(resolve => {
+    const instance = app.listen(0, "127.0.0.1", () => resolve(instance));
+  });
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+  const token = tokenFor(whatsapp);
+  const partial = await createOrder(baseUrl, token, "customer_partial_balance_test");
+  assert.equal(partial.response.status, 200, JSON.stringify(partial.payload));
+  assert.equal(partial.payload.pagamento_pendente, true);
+  assert.equal(partial.payload.requer_pix_antes_criacao, true);
+  assert.equal(JSON.parse(fs.readFileSync(clientesFile, "utf8"))[whatsapp].saldo_extra, 7);
+  assert.equal(fs.readFileSync(path.join(path.dirname(findOrderFile(partial.payload.pedido_id)), "status.txt"), "utf8").trim(), "aguardando_pagamento");
+
+  writeClientes(8);
+  const exact = await createOrder(baseUrl, token, "customer_exact_balance_test");
+  assert.equal(exact.response.status, 200, JSON.stringify(exact.payload));
+  assert.equal(exact.payload.pagamento_pendente, false);
+  assert.equal(exact.payload.requer_pix_antes_criacao, false);
+  assert.equal(JSON.parse(fs.readFileSync(clientesFile, "utf8"))[whatsapp].saldo_extra, 0);
 });
