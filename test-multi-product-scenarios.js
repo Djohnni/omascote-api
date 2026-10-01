@@ -218,13 +218,19 @@ test("Veo preserva o teste interno, restaura Jogador + Escudo e bloqueia os dema
     const fields = { new_model: { fields: { delivery_mode: "image_video" } } };
     const commercial = prepararInternalVeoPedido(customerRequest, product.id, fields);
     assert.equal(commercial.ok, true, product.id);
-    assert.equal(commercial.patch.video_generation.model, product.id === "escudo3d" ? "omni" : "fast", product.id);
+    assert.equal(commercial.patch.video_generation.model, "fast", product.id);
     assert.equal(commercial.patch.video_generation.commercial, true, product.id);
     assert.equal(commercial.patch.video_generation.internal_test, false, product.id);
-    assert.equal(commercial.patch.video_generation.duration_seconds, product.id === "escudo3d" ? 10 : 8, product.id);
+    assert.equal(commercial.patch.video_generation.duration_seconds, 8, product.id);
     assert.equal(commercial.patch.video_generation.generate_audio, true, product.id);
-    assert.equal(fields.new_model.fields.video_model, product.id === "escudo3d" ? "omni" : "fast", product.id);
+    assert.equal(fields.new_model.fields.video_model, "fast", product.id);
   }
+
+  const omniFields = { new_model: { fields: { delivery_mode: "image_video", video_model: "omni" } } };
+  const omni = prepararInternalVeoPedido(customerRequest, "escudo3d", omniFields);
+  assert.equal(omni.ok, true);
+  assert.equal(omni.patch.video_generation.model, "omni");
+  assert.equal(omni.patch.video_generation.duration_seconds, 10);
 
   for (const product of PERSON_VIDEO_PRODUCTS) {
     const fields = { new_model: { fields: { delivery_mode: "image_video" } } };
