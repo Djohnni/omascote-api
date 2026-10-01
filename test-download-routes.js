@@ -63,6 +63,12 @@ const adminVideoUploadBase = createOrder("admin-video", "pedido-video-upload", {
   video_generation: { requested: true, internal_test: true, model: "lite", status: "pending" }
 });
 const testMp4 = Buffer.from([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d]);
+const omniVideoBase = createOrder("cliente-1", "pedido-video-omni", {
+  categoria: "escudo3d",
+  video_generation: { requested: true, commercial: true, delivery_mode: "image_video",
+    model: "omni", model_id: "gemini-omni-1.1-flash-preview", duration_seconds: 10 }
+});
+fs.writeFileSync(path.join(omniVideoBase, "resultado_video.mp4"), testMp4);
 fs.writeFileSync(path.join(regularVideoBase, "resultado_video.mp4"), testMp4);
 fs.writeFileSync(path.join(commercialVideoBase, "resultado_video.mp4"), testMp4);
 fs.writeFileSync(path.join(legacyPersonVideoBase, "resultado_video.mp4"), testMp4);
@@ -270,6 +276,25 @@ test("secure direct download routes enforce ownership, state, binding and one-ti
   });
   assert.equal(commercialVideoDownload.status, 200);
   assert.equal(commercialVideoDownload.headers.get("content-type"), "video/mp4");
+  assert.equal(commercialVideoTicket.video_duration_seconds, 8);
+
+  for (const transporte of ["https", "legacy"]) {
+    const ticketResponse = await fetch(`${baseUrl}/pedidos/pedido-video-omni/download-ticket`, {
+      method: "POST", headers: { Authorization: bearer("cliente-1"), "Content-Type": "application/json" },
+      body: JSON.stringify({ formato: "video", transporte })
+    });
+    assert.equal(ticketResponse.status, 200);
+    const ticket = await jsonResponse(ticketResponse);
+    assert.equal(ticket.video_duration_seconds, 10);
+    const downloaded = await fetch(`${baseUrl}${ticket.download_path}`, transporte === "https" ? {} : {
+      method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ ticket: ticket.ticket })
+    });
+    assert.equal(downloaded.status, 200);
+    assert.match(downloaded.headers.get("content-disposition"), /video_10s\.mp4/);
+    assert.equal(downloaded.headers.get("content-type"), "video/mp4");
+    assert.deepEqual(Buffer.from(await downloaded.arrayBuffer()), testMp4);
+  }
 
   const legacyPersonVideoTicketResponse = await fetch(`${baseUrl}/pedidos/pedido-video-comercial-atleta/download-ticket`, {
     method: "POST",

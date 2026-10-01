@@ -218,12 +218,12 @@ test("Veo preserva o teste interno, restaura Jogador + Escudo e bloqueia os dema
     const fields = { new_model: { fields: { delivery_mode: "image_video" } } };
     const commercial = prepararInternalVeoPedido(customerRequest, product.id, fields);
     assert.equal(commercial.ok, true, product.id);
-    assert.equal(commercial.patch.video_generation.model, "fast", product.id);
+    assert.equal(commercial.patch.video_generation.model, product.id === "escudo3d" ? "omni" : "fast", product.id);
     assert.equal(commercial.patch.video_generation.commercial, true, product.id);
     assert.equal(commercial.patch.video_generation.internal_test, false, product.id);
-    assert.equal(commercial.patch.video_generation.duration_seconds, 8, product.id);
+    assert.equal(commercial.patch.video_generation.duration_seconds, product.id === "escudo3d" ? 10 : 8, product.id);
     assert.equal(commercial.patch.video_generation.generate_audio, true, product.id);
-    assert.equal(fields.new_model.fields.video_model, "fast", product.id);
+    assert.equal(fields.new_model.fields.video_model, product.id === "escudo3d" ? "omni" : "fast", product.id);
   }
 
   for (const product of PERSON_VIDEO_PRODUCTS) {
