@@ -170,6 +170,13 @@ const INTERNAL_VEO_MODELS = Object.freeze({
     model_id: "veo-3.1-fast-generate-001"
   })
 });
+// Apenas pedidos novos de Escudo 3D. Não migra pedidos/operacoes existentes.
+const ESCUDO3D_OMNI_ENABLED = !["0", "false", "off", "no"].includes(
+  String(process.env.ESCUDO3D_OMNI_ENABLED ?? "true").trim().toLowerCase()
+);
+const ESCUDO3D_OMNI_MODEL = Object.freeze({
+  key: "omni", model_id: "gemini-omni-1.1-flash-preview"
+});
 const MP_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN || "";
 const MP_SANDBOX_MODE = String(
   process.env.MP_SANDBOX_MODE || ""
@@ -2735,6 +2742,7 @@ function normalizarInternalVeoModel(value) {
   if (!raw || ["none", "nenhum", "off", "false", "0"].includes(raw)) return "";
   if (raw === "veo_lite") return "lite";
   if (raw === "veo_fast") return "fast";
+  if (raw === "omni") return "omni";
   return Object.hasOwn(INTERNAL_VEO_MODELS, raw) ? raw : null;
 }
 
@@ -2761,6 +2769,10 @@ function prepararInternalVeoPedido(req, categoria, fields) {
       status: 400,
       error: "Opcao de video invalida. Escolha Lite, Fast ou sem video."
     };
+  }
+
+  if (modelKey === "omni" && (!commercialVideo || categoria !== "escudo3d" || !ESCUDO3D_OMNI_ENABLED)) {
+    return { ok: false, status: 400, error: "Omni disponivel somente para o video do Escudo 3D." };
   }
 
   if (deliveryMode === "image" || (!deliveryMode && !modelKey)) {
@@ -2796,7 +2808,8 @@ function prepararInternalVeoPedido(req, categoria, fields) {
     return { ok: false, status: 403, error: "O teste de video ainda esta disponivel somente para uso interno." };
   }
 
-  const selected = INTERNAL_VEO_MODELS[modelKey];
+  const useOmni = commercialVideo && categoria === "escudo3d" && ESCUDO3D_OMNI_ENABLED;
+  const selected = useOmni ? ESCUDO3D_OMNI_MODEL : INTERNAL_VEO_MODELS[modelKey];
   structured.delivery_mode = commercialVideo ? "image_video" : "";
   structured.video_model = selected.key;
   return {
@@ -2807,10 +2820,11 @@ function prepararInternalVeoPedido(req, categoria, fields) {
         provider: "google_vertex_ai",
         model: selected.key,
         model_id: selected.model_id,
-        duration_seconds: 8,
+        duration_seconds: useOmni ? 10 : 8,
         aspect_ratio: "9:16",
         resolution: "720p",
         generate_audio: true,
+        ...(useOmni ? { location: "global", first_last_frame_same: true } : {}),
         delivery_mode: commercialVideo ? "image_video" : "internal_test",
         commercial: commercialVideo,
         internal_test: legacyInternalTest,
@@ -15305,6 +15319,7 @@ app.post("/pedidos/:id/download-ticket", auth, safeAsyncRoute(async (req, res) =
     });
     return res.json({
       ok: true, transporte: "https", expires_in: Math.ceil(link.expiresInMs / 1000),
+      ...(formato === "video" ? { video_duration_seconds: validated.pedido?.video_generation?.model === "omni" ? 10 : 8 } : {}),
       download_path: `/pedidos/${encodeURIComponent(pedidoId)}/download-arquivo/${formato}?chave=${encodeURIComponent(link.token)}`
     });
   }
@@ -15327,6 +15342,7 @@ app.post("/pedidos/:id/download-ticket", auth, safeAsyncRoute(async (req, res) =
     ok: true,
     ticket: issued.token,
     expires_in: Math.ceil(issued.expiresInMs / 1000),
+    ...(formato === "video" ? { video_duration_seconds: validated.pedido?.video_generation?.model === "omni" ? 10 : 8 } : {}),
     download_path: `/pedidos/${encodeURIComponent(pedidoId)}/download-direto/${formato}`
   });
 }));
@@ -15356,7 +15372,7 @@ app.get("/pedidos/:id/download-arquivo/:formato", safeAsyncRoute(async (req, res
   if (!verification.ok) return weeklyPlanOrderAccessError(res, verification);
   res.setHeader("Content-Type", formato === "video" ? "video/mp4" : "image/png");
   res.setHeader("Content-Disposition", attachmentContentDisposition(
-    `${pedidoId}_${formato === "video" ? "video_8s.mp4" : "imagem.png"}`
+    `${pedidoId}_${formato === "video" ? (validated.pedido?.video_generation?.model === "omni" ? "video_10s.mp4" : "video_8s.mp4") : "imagem.png"}`
   ));
   res.on("finish", () => {
     // Transfer completion is not proof of saving to the phone. Preserve legacy
@@ -15489,7 +15505,7 @@ app.post("/pedidos/:id/download-direto/:formato", safeAsyncRoute(async (req, res
     res.setHeader("Content-Type", "video/mp4");
     res.setHeader(
       "Content-Disposition",
-      attachmentContentDisposition(`${pedidoId}_video_8s.mp4`)
+      attachmentContentDisposition(`${pedidoId}_${validated.pedido?.video_generation?.model === "omni" ? "video_10s" : "video_8s"}.mp4`)
     );
     return res.sendFile(validated.arquivo);
   }
