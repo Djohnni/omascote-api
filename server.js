@@ -1008,6 +1008,7 @@ const VIDEO_PURCHASE_PRODUCTS = new Set([
   "mascote_uniforme"
 ]);
 const VIDEO_DELIVERY_PRICE = 14.90;
+const VIDEO_DELIVERY_ESCUDO3D_OMNI_PRICE = 19.90;
 const VIDEO_DELIVERY_MASCOT_PRICE = 28.00;
 
 function normalizarDeliveryMode(value) {
@@ -1044,8 +1045,13 @@ function pedidoPodeAcessarVideo(reqOuUsuario, pedido = {}) {
 
 function getCustoPedidoComAdicionais(categoria, cliente, source = {}) {
   const videoComercial = VIDEO_PURCHASE_PRODUCTS.has(categoria) && pedidoSolicitaVideoComercial(source);
+  const videoModel = String(getContratacaoStructuredFields(source).video_model || source?.video_model || "").trim().toLowerCase();
   const base = videoComercial
-    ? (categoria === "mascote_uniforme" ? VIDEO_DELIVERY_MASCOT_PRICE : VIDEO_DELIVERY_PRICE)
+    ? (categoria === "mascote_uniforme"
+      ? VIDEO_DELIVERY_MASCOT_PRICE
+      : categoria === "escudo3d" && videoModel === "omni"
+        ? VIDEO_DELIVERY_ESCUDO3D_OMNI_PRICE
+        : VIDEO_DELIVERY_PRICE)
     : getCustoPedido(categoria, cliente);
   const adicional = categoria === "contratacao" && contratacaoTemCamiseta(source)
     ? CONTRATACAO_CAMISETA_ADICIONAL
@@ -2649,6 +2655,7 @@ function registrarUsoCupomPedido(pedido, whatsapp, options = {}) {
 
 function clienteElegivelBrindeEscudo3dApp(req, cliente, whatsapp, categoria) {
   if (categoria !== "escudo3d") return false;
+  if (pedidoSolicitaVideoComercial(req.body || {})) return false;
   if (!cliente || cliente.brinde_escudo3d_app_usado === true) return false;
 
   const origemAcesso = String(req.body?.origem_acesso || "").toLowerCase();
@@ -2771,6 +2778,10 @@ function prepararInternalVeoPedido(req, categoria, fields) {
     };
   }
 
+  if (commercialVideo && categoria === "escudo3d" && !["fast", "omni"].includes(modelKey)) {
+    return { ok: false, status: 400, error: "Escolha um dos videos disponiveis para Escudo 3D." };
+  }
+
   if (modelKey === "omni" && (!commercialVideo || categoria !== "escudo3d" || !ESCUDO3D_OMNI_ENABLED)) {
     return { ok: false, status: 400, error: "Omni disponivel somente para o video do Escudo 3D." };
   }
@@ -2808,7 +2819,7 @@ function prepararInternalVeoPedido(req, categoria, fields) {
     return { ok: false, status: 403, error: "O teste de video ainda esta disponivel somente para uso interno." };
   }
 
-  const useOmni = commercialVideo && categoria === "escudo3d" && ESCUDO3D_OMNI_ENABLED;
+  const useOmni = commercialVideo && categoria === "escudo3d" && modelKey === "omni";
   const selected = useOmni ? ESCUDO3D_OMNI_MODEL : INTERNAL_VEO_MODELS[modelKey];
   structured.delivery_mode = commercialVideo ? "image_video" : "";
   structured.video_model = selected.key;
@@ -14474,6 +14485,13 @@ app.post("/cupons/preco", (req, res) => {
 
     if (!categoria) {
       return res.status(400).json({ ok: false, error: "Produto invalido." });
+    }
+
+    if (categoria === "escudo3d" && pedidoSolicitaVideoComercial(body)) {
+      const model = normalizarInternalVeoModel(getContratacaoStructuredFields(body).video_model || "fast");
+      if (!["fast", "omni"].includes(model) || (model === "omni" && !ESCUDO3D_OMNI_ENABLED)) {
+        return res.status(400).json({ ok: false, error: "Escolha um dos videos disponiveis para Escudo 3D." });
+      }
     }
 
     const brindeEscudo3dApp = cliente
