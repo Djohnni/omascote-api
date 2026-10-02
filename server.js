@@ -2653,22 +2653,27 @@ function registrarUsoCupomPedido(pedido, whatsapp, options = {}) {
   }
 }
 
+function clienteTemLoginParaBrinde(cliente) {
+  return !!cliente && cliente.ativo === true &&
+    !(cliente.cadastro_automatico === true && cliente.conta_finalizada !== true);
+}
+
+function clienteUsouBrindeEscudo(cliente, whatsapp) {
+  if (cliente?.brinde_escudo_login_usado === true || cliente?.brinde_escudo3d_app_usado === true) return true;
+  // The persisted order is also evidence of redemption after an interrupted account write.
+  return listPedidoBasesByWhatsapp(whatsapp).some(item => {
+    const pedido = item.pedido || {};
+    return pedido.brinde_escudo_login === true || pedido.brinde_escudo3d_app === true;
+  });
+}
+
 function clienteElegivelBrindeEscudo3dApp(req, cliente, whatsapp, categoria) {
-  if (categoria !== "escudo3d") return false;
-  if (pedidoSolicitaVideoComercial(req.body || {})) return false;
-  if (!cliente || cliente.brinde_escudo3d_app_usado === true) return false;
+  return categoria === "escudo3d" && !pedidoSolicitaVideoComercial(req.body || {}) &&
+    clienteTemLoginParaBrinde(cliente) && !clienteUsouBrindeEscudo(cliente, whatsapp);
+}
 
-  const origemAcesso = String(req.body?.origem_acesso || "").toLowerCase();
-  const displayMode = String(req.body?.display_mode || "").toLowerCase();
-  const estaNoApp = origemAcesso === "pwa" || displayMode === "standalone";
-  if (!estaNoApp) return false;
-
-  if (Number(cliente.usados_no_ciclo || 0) > 0) return false;
-  if (Number(cliente.saldo_mensal || 0) + Number(cliente.saldo_extra || 0) > 0) return false;
-  if (cliente.brinde_mascote_ja_liberado === true) return false;
-  if (listPedidoBasesByWhatsapp(whatsapp).length > 0) return false;
-
-  return true;
+function pedidoSolicitaBrindeEscudo(body = {}) {
+  return body.brinde_escudo_login === true || String(body.brinde_escudo_login || "") === "1";
 }
 
 function nomeCategoriaPedido(categoria) {
@@ -9441,14 +9446,11 @@ app.get("/me", auth, (req, res) => {
     ...saldoInfo,
     usados_no_ciclo: c.usados_no_ciclo,
     brinde_mascote_disponivel: c.brinde_mascote_disponivel === true,
-    brinde_escudo3d_app_disponivel: (
-      c.brinde_escudo3d_app_usado !== true &&
-      Number(c.usados_no_ciclo || 0) === 0 &&
-      saldoInfo.saldo <= 0 &&
-      c.brinde_mascote_ja_liberado !== true &&
-      listPedidoBasesByWhatsapp(req.user.whatsapp).length === 0
-    ),
-    brinde_escudo3d_app_usado: c.brinde_escudo3d_app_usado === true,
+    conta_auto_pendente: c.cadastro_automatico === true && c.conta_finalizada !== true,
+    brinde_escudo_login_disponivel: clienteElegivelBrindeEscudo3dApp({body:{}}, c, req.user.whatsapp, "escudo3d"),
+    brinde_escudo_login_usado: clienteUsouBrindeEscudo(c, req.user.whatsapp),
+    brinde_escudo3d_app_disponivel: clienteElegivelBrindeEscudo3dApp({body:{}}, c, req.user.whatsapp, "escudo3d"),
+    brinde_escudo3d_app_usado: clienteUsouBrindeEscudo(c, req.user.whatsapp),
     internal_features: {
       next_match_veo: internalVeoDisponivel(req),
       veo_models: internalVeoDisponivel(req)
@@ -13723,6 +13725,20 @@ function criarPedidoHandlerAsync(categoria) {
 
     const temBrindeMascote = billingService.hasMascoteUniformeGift(categoria, c);
     const brindeEscudo3dApp = clienteElegivelBrindeEscudo3dApp(req, c, whatsapp, categoria);
+    if (pedidoSolicitaBrindeEscudo(req.body)) {
+      const invalidProduct = categoria !== "escudo3d" || pedidoSolicitaVideoComercial(req.body || {});
+      if (invalidProduct || !clienteTemLoginParaBrinde(c) || !brindeEscudo3dApp) {
+        limparUploadsTemporarios(req.files);
+        return res.status(invalidProduct ? 400 : !clienteTemLoginParaBrinde(c) ? 403 : 409).json({
+          ok: false,
+          code: invalidProduct ? "ESCUDO_GIFT_IMAGE_ONLY" : !clienteTemLoginParaBrinde(c) ? "ESCUDO_GIFT_LOGIN_REQUIRED" : "ESCUDO_GIFT_ALREADY_USED",
+          error: invalidProduct ? "O brinde inclui somente uma imagem de escudo." :
+            !clienteTemLoginParaBrinde(c) ? "Entre ou finalize seu cadastro para receber o escudo de brinde." :
+            "Esta conta já recebeu o escudo de brinde. Nenhum valor foi cobrado."
+        });
+      }
+    }
+
 
     const modalidadeCriacao = req.fotoJogosBatchItem === true
       ? normalizarModalidadeCriacao(req.body?.modalidade_criacao)
@@ -13731,7 +13747,7 @@ function criarPedidoHandlerAsync(categoria) {
     const custoPedido = calcularCustoPedidoPorModalidade(custoPedidoComSuporte, modalidadeCriacao);
     const pedidoAssistente = req.fotoJogosBatchItem === true || req.body?.assistente_lote === true;
     const valorBaseParaCupom = brindeEscudo3dApp ? 0 : custoPedido;
-    const cupomCodigo = normalizarCupomCodigo(req.body?.cupom_codigo);
+    const cupomCodigo = brindeEscudo3dApp ? "" : normalizarCupomCodigo(req.body?.cupom_codigo);
     let cupomLockAtivo = false;
     let cuponsJogadorEscudo = null;
     let cupomLegacyJogadorEscudo = false;
@@ -14242,25 +14258,28 @@ function criarPedidoHandlerAsync(categoria) {
       } else if (brindeEscudo3dApp) {
         const confirmadoEm = new Date().toISOString();
 
+        c.brinde_escudo_login_usado = true;
+        c.brinde_escudo_login_usado_em = confirmadoEm;
+        c.brinde_escudo_login_pedido_id = id;
         c.brinde_escudo3d_app_usado = true;
         c.brinde_escudo3d_app_usado_em = confirmadoEm;
         c.brinde_escudo3d_app_pedido_id = id;
         c.primeiro_pedido_gratis_tipo = "escudo3d";
 
         draft.pedido.pagamento_pendente = false;
-        draft.pedido.pagamento_metodo = "brinde_app";
+        draft.pedido.pagamento_metodo = "brinde_escudo_login";
         draft.pedido.pagamento_confirmado_em = confirmadoEm;
         draft.pedido.brinde_escudo3d_app = true;
-        draft.pedido.qualidade_geracao = "low";
+        draft.pedido.brinde_escudo_login = true;
         draft.pedido.pagamento_info = {
-          tipo: "brinde_app",
+          tipo: "brinde_escudo_login",
           status: "approved",
           valor_pago: 0,
           payment_id: "",
           whatsapp: whatsapp,
           pedido_id: id,
           confirmado_em: confirmadoEm,
-          origem: "escudo3d_primeiro_uso_app"
+          origem: "escudo_um_por_login"
         };
 
         orderService.orderStorage.writeOrder(draft.base, draft.pedido);
@@ -14345,6 +14364,7 @@ function criarPedidoHandlerAsync(categoria) {
       pedido_id: id,
       pagamento_pendente: draft.pedido.pagamento_pendente === true,
       valor_pendente: Number(draft.pedido.valor_pendente || 0),
+      brinde_escudo_login: draft.pedido.brinde_escudo_login === true,
       cupom_aplicado: cupomAplicado,
       desconto: cupomAplicado ? resultadoCupom.resumo : null,
       valor_original: cupomAplicado ? resultadoCupom.valorOriginal : Number(custoPedido || 0),
@@ -14499,7 +14519,7 @@ app.post("/cupons/preco", (req, res) => {
       : false;
     const custoPedido = getCustoPedidoComAdicionais(categoria, cliente, body);
     const valorOriginal = brindeEscudo3dApp ? 0 : custoPedido;
-    const cupomCodigo = normalizarCupomCodigo(body.cupom_codigo);
+    const cupomCodigo = brindeEscudo3dApp ? "" : normalizarCupomCodigo(body.cupom_codigo);
     let resultadoCupom = validarCupomPedido({
       codigo: cupomCodigo,
       categoria,
@@ -14545,6 +14565,7 @@ app.post("/cupons/preco", (req, res) => {
     return res.json({
       ok: true,
       produto: categoria,
+      brinde_escudo_login: brindeEscudo3dApp,
       cupom_aplicado: resultadoCupom.cupomAplicado === true,
       desconto: resultadoCupom.cupomAplicado ? resultadoCupom.resumo : null,
       valor_original: resultadoCupom.cupomAplicado ? resultadoCupom.valorOriginal : Number(valorOriginal || 0),
