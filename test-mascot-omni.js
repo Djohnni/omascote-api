@@ -92,6 +92,47 @@ test("Mascote continua R$28 com Omni e R$18 somente imagem", () => {
   }), 18);
 });
 
+test("Sol custa R$25 e Chuva/Ascensao Epica R$28 em todos os formatos de pedido", () => {
+  for (const [mascot_video_option, expected] of [["sol",25],["chuva",28],["ascensao_epica",28],[undefined,28]]) {
+    const values = { delivery_mode: "image_video", video_model: "omni", mascot_video_option, mascot_video_price: 1 };
+    for (const source of [values, {fields:values}, {fields_json:JSON.stringify(values)}, {new_model:{fields:values}}]) {
+      assert.equal(pricing.getCustoPedidoComAdicionais("mascote_uniforme", {}, source), expected);
+    }
+    const { fields, result } = prepare(values);
+    assert.equal(result.ok, true);
+    const pedido = orders.buildPedidoData({
+      categoria: "mascote_uniforme", id: `test-${mascot_video_option || "legacy"}`, whatsapp: "cliente-mascot-test",
+      mesAtual: "2026-10", fields, files: {}, pats: []
+    });
+    assert.equal(pedido.fields.mascot_video_option, mascot_video_option);
+    assert.equal(result.patch.video_generation.model, "omni");
+    assert.equal(result.patch.video_generation.resolution, "720p");
+    assert.equal(pricing.getCustoPedidoComAdicionais("mascote_uniforme", {}, pedido), expected);
+  }
+  assert.equal(pricing.getCustoPedidoComAdicionais("mascote_uniforme", {}, {
+    delivery_mode:"image", mascot_video_option:"sol"
+  }),18);
+});
+
+test("Cotacao HTTP usa a opcao de mascote e ignora preco enviado pelo navegador", async () => {
+  const server = app.listen(0, "127.0.0.1");
+  try {
+    await once(server, "listening");
+    for (const [mascot_video_option, expected] of [["sol",25],["chuva",28],["ascensao_epica",28]]) {
+      const response = await fetch(`http://127.0.0.1:${server.address().port}/cupons/preco`, {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({product_id:"mascote_uniforme",delivery_mode:"image_video",video_model:"omni",mascot_video_option,mascot_video_price:1})
+      });
+      assert.equal(response.status,200);
+      const quote = await response.json();
+      assert.equal(quote.valor_original,expected);
+      assert.equal(quote.valor_final,expected);
+    }
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
 test("Consulta HTTP informa R$28 para Mascote Omni e recusa modelo invalido", async () => {
   const server = app.listen(0, "127.0.0.1");
   try {

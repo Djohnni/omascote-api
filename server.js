@@ -1013,6 +1013,7 @@ const VIDEO_PURCHASE_PRODUCTS = new Set([
 const VIDEO_DELIVERY_PRICE = 14.90;
 const VIDEO_DELIVERY_ESCUDO3D_OMNI_PRICE = 19.90;
 const VIDEO_DELIVERY_MASCOT_PRICE = 28.00;
+const MASCOT_VIDEO_OPTION_PRICES = Object.freeze({ sol: 25.00, chuva: 28.00, ascensao_epica: 28.00 });
 
 function normalizarDeliveryMode(value) {
   const mode = String(value || "").trim().toLowerCase();
@@ -1048,10 +1049,14 @@ function pedidoPodeAcessarVideo(reqOuUsuario, pedido = {}) {
 
 function getCustoPedidoComAdicionais(categoria, cliente, source = {}) {
   const videoComercial = VIDEO_PURCHASE_PRODUCTS.has(categoria) && pedidoSolicitaVideoComercial(source);
-  const videoModel = String(getContratacaoStructuredFields(source).video_model || source?.video_model || "").trim().toLowerCase();
+  const structured = getContratacaoStructuredFields(source);
+  const videoModel = String(structured.video_model || source?.video_model || "").trim().toLowerCase();
+  const mascotOption = String(structured.mascot_video_option || source?.mascot_video_option || "").trim().toLowerCase();
+  const mascotPrice = Object.hasOwn(MASCOT_VIDEO_OPTION_PRICES, mascotOption)
+    ? MASCOT_VIDEO_OPTION_PRICES[mascotOption] : VIDEO_DELIVERY_MASCOT_PRICE;
   const base = videoComercial
     ? (categoria === "mascote_uniforme"
-      ? VIDEO_DELIVERY_MASCOT_PRICE
+      ? mascotPrice
       : categoria === "escudo3d" && videoModel === "omni"
         ? VIDEO_DELIVERY_ESCUDO3D_OMNI_PRICE
         : VIDEO_DELIVERY_PRICE)
