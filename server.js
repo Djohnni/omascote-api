@@ -170,11 +170,14 @@ const INTERNAL_VEO_MODELS = Object.freeze({
     model_id: "veo-3.1-fast-generate-001"
   })
 });
-// Apenas pedidos novos de Escudo 3D. Não migra pedidos/operacoes existentes.
+// Apenas pedidos novos. Não migra pedidos/operacoes existentes.
 const ESCUDO3D_OMNI_ENABLED = !["0", "false", "off", "no"].includes(
   String(process.env.ESCUDO3D_OMNI_ENABLED ?? "true").trim().toLowerCase()
 );
-const ESCUDO3D_OMNI_MODEL = Object.freeze({
+const MASCOT_OMNI_ENABLED = !["0", "false", "off", "no"].includes(
+  String(process.env.MASCOT_OMNI_ENABLED ?? "true").trim().toLowerCase()
+);
+const OMNI_VIDEO_MODEL = Object.freeze({
   key: "omni", model_id: "gemini-omni-1.1-flash-preview"
 });
 const MP_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN || "";
@@ -2773,22 +2776,32 @@ function prepararInternalVeoPedido(req, categoria, fields) {
 
   const commercialVideo = deliveryMode === "image_video";
   const requestedRaw = structured.video_model || (commercialVideo ? "fast" : "");
-  const modelKey = normalizarInternalVeoModel(requestedRaw);
+  let modelKey = normalizarInternalVeoModel(requestedRaw);
 
   if (modelKey === null) {
     return {
       ok: false,
       status: 400,
-      error: "Opcao de video invalida. Escolha Lite, Fast ou sem video."
+      error: "Opcao de video invalida. Escolha um modelo disponivel para este produto."
     };
+  }
+
+  // Clientes com a interface anterior ainda enviam Fast; todo novo video de mascote usa Omni.
+  if (commercialVideo && categoria === "mascote_uniforme") {
+    if (!MASCOT_OMNI_ENABLED) {
+      return { ok: false, status: 503, error: "O video do Mascote esta temporariamente indisponivel." };
+    }
+    modelKey = "omni";
   }
 
   if (commercialVideo && categoria === "escudo3d" && !["fast", "omni"].includes(modelKey)) {
     return { ok: false, status: 400, error: "Escolha um dos videos disponiveis para Escudo 3D." };
   }
 
-  if (modelKey === "omni" && (!commercialVideo || categoria !== "escudo3d" || !ESCUDO3D_OMNI_ENABLED)) {
-    return { ok: false, status: 400, error: "Omni disponivel somente para o video do Escudo 3D." };
+  const omniAvailable = categoria === "escudo3d" ? ESCUDO3D_OMNI_ENABLED
+    : categoria === "mascote_uniforme" && MASCOT_OMNI_ENABLED;
+  if (modelKey === "omni" && (!commercialVideo || !omniAvailable)) {
+    return { ok: false, status: 400, error: "Omni disponivel somente para os videos de Escudo 3D e Mascote." };
   }
 
   if (deliveryMode === "image" || (!deliveryMode && !modelKey)) {
@@ -2824,8 +2837,8 @@ function prepararInternalVeoPedido(req, categoria, fields) {
     return { ok: false, status: 403, error: "O teste de video ainda esta disponivel somente para uso interno." };
   }
 
-  const useOmni = commercialVideo && categoria === "escudo3d" && modelKey === "omni";
-  const selected = useOmni ? ESCUDO3D_OMNI_MODEL : INTERNAL_VEO_MODELS[modelKey];
+  const useOmni = commercialVideo && modelKey === "omni";
+  const selected = useOmni ? OMNI_VIDEO_MODEL : INTERNAL_VEO_MODELS[modelKey];
   structured.delivery_mode = commercialVideo ? "image_video" : "";
   structured.video_model = selected.key;
   return {
@@ -2840,7 +2853,7 @@ function prepararInternalVeoPedido(req, categoria, fields) {
         aspect_ratio: "9:16",
         resolution: "720p",
         generate_audio: true,
-        ...(useOmni ? { location: "global", first_last_frame_same: true } : {}),
+        ...(useOmni ? { location: "global", first_last_frame_same: categoria === "escudo3d" } : {}),
         delivery_mode: commercialVideo ? "image_video" : "internal_test",
         commercial: commercialVideo,
         internal_test: legacyInternalTest,
@@ -14511,6 +14524,14 @@ app.post("/cupons/preco", (req, res) => {
       const model = normalizarInternalVeoModel(getContratacaoStructuredFields(body).video_model || "fast");
       if (!["fast", "omni"].includes(model) || (model === "omni" && !ESCUDO3D_OMNI_ENABLED)) {
         return res.status(400).json({ ok: false, error: "Escolha um dos videos disponiveis para Escudo 3D." });
+      }
+    }
+    if (categoria === "mascote_uniforme" && pedidoSolicitaVideoComercial(body)) {
+      if (normalizarInternalVeoModel(getContratacaoStructuredFields(body).video_model || "omni") === null) {
+        return res.status(400).json({ ok: false, error: "Opcao de video invalida." });
+      }
+      if (!MASCOT_OMNI_ENABLED) {
+        return res.status(503).json({ ok: false, error: "O video do Mascote esta temporariamente indisponivel." });
       }
     }
 

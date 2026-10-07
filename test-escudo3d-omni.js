@@ -43,7 +43,7 @@ test("Escudo 3D somente imagem permanece sem video", () => {
   assert.equal(contract("escudo3d", "image").result.patch, null);
 });
 test("Outros produtos conservam Fast 8s e nao permitem Omni", () => {
-  for (const product of ["proximo_jogo", "resultado", "mascote_uniforme", "jogador_escudo", "patrocinador"]) {
+  for (const product of ["proximo_jogo", "resultado", "jogador_escudo", "patrocinador"]) {
     const { result } = contract(product);
     assert.equal(result.ok, true, product);
     assert.equal(result.patch.video_generation.model, "fast");

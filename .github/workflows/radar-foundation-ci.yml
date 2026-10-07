@@ -48,5 +48,5 @@ jobs:
           npm run db:migrate
           npm run db:migrate
       - run: npm test
-      - name: Validate Escudo 3D Omni contract and product isolation
-        run: node --test test-escudo3d-omni.js test-multi-product-scenarios.js
+      - name: Validate mascot and crest video contracts and product isolation
+        run: node --test test-escudo3d-omni.js test-mascot-omni.js test-multi-product-scenarios.js
