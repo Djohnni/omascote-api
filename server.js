@@ -372,7 +372,10 @@ const atendimentoChatAuditStore = new AtendimentoChatAuditStore({
   filePath: ATENDIMENTO_AUDIT_FILE,
   inactivityMs: 10 * 60 * 1000
 });
-app.use("/atendimento", createAtendimentoProxyRouter({ auditStore: atendimentoChatAuditStore }));
+app.use("/atendimento", createAtendimentoProxyRouter({
+  auditStore: atendimentoChatAuditStore,
+  storageRoot: path.join(DATA_DIR, "atendimento")
+}));
 app.use("/bot/atendimento/auditoria", createChatAuditAdminRouter({
   store: atendimentoChatAuditStore,
   auth,

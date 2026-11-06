@@ -1,8 +1,8 @@
 "use strict";
 
 const express = require("express");
+const { createLocalAtendimentoTransport } = require("./local-transport");
 
-const DEFAULT_UPSTREAM = "https://omascote-atendimento-teste.djohnni1.chatgpt.site";
 const SESSION_RE = /^[a-f0-9-]{36}$/;
 const ALLOWED_ROUTES = new Set([
   "assistant",
@@ -28,8 +28,9 @@ function requestIp(req) {
 
 function createAtendimentoProxyRouter(options = {}) {
   const router = express.Router();
-  const upstream = String(options.upstreamUrl || process.env.OMASCOTE_ATENDIMENTO_BACKEND || DEFAULT_UPSTREAM).replace(/\/+$/, "");
-  const fetchImpl = options.fetchImpl || fetch;
+  const configuredUpstream = String(options.upstreamUrl || process.env.OMASCOTE_ATENDIMENTO_BACKEND || "").trim();
+  const upstream = configuredUpstream.replace(/\/+$/, "") || "http://127.0.0.1";
+  const fetchImpl = options.fetchImpl || (configuredUpstream ? fetch : createLocalAtendimentoTransport(options));
   const now = options.now || (() => Date.now());
   const auditStore = options.auditStore || null;
   const logger = options.logger || console;
@@ -104,6 +105,10 @@ function createAtendimentoProxyRouter(options = {}) {
     }
 
     const responseBody = Buffer.from(await upstreamResponse.arrayBuffer());
+    const responseType = upstreamResponse.headers.get("content-type") || "";
+    if (route !== "files" && !responseType.toLowerCase().includes("application/json")) {
+      return res.status(502).json({ ok: false, error: "O atendimento está temporariamente indisponível. Tente novamente em instantes." });
+    }
     if (upstreamResponse.ok && route === "lab" && req.method === "POST" && auditStore) {
       try {
         auditStore.captureLabAction({ session, body: req.body || {} });
@@ -115,7 +120,6 @@ function createAtendimentoProxyRouter(options = {}) {
     res.status(upstreamResponse.status);
     res.set("Cache-Control", "no-store");
     res.set("X-Content-Type-Options", "nosniff");
-    const responseType = upstreamResponse.headers.get("content-type");
     if (responseType) res.set("Content-Type", responseType);
     return res.send(responseBody);
   });
