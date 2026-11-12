@@ -178,7 +178,7 @@ const MASCOT_OMNI_ENABLED = !["0", "false", "off", "no"].includes(
   String(process.env.MASCOT_OMNI_ENABLED ?? "true").trim().toLowerCase()
 );
 const OMNI_VIDEO_MODEL = Object.freeze({
-  key: "omni", model_id: "gemini-omni-1.1-flash-preview"
+  key: "omni", model_id: "gemini-omni-1.2-flash"
 });
 const MP_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN || "";
 const MP_SANDBOX_MODE = String(

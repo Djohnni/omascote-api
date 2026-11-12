@@ -35,7 +35,7 @@ test("Novos videos de mascote usam Omni 720p, inclusive navegadores que ainda en
     assert.equal(result.ok, true, video_model);
     const video = result.patch.video_generation;
     assert.equal(video.model, "omni");
-    assert.equal(video.model_id, "gemini-omni-1.1-flash-preview");
+    assert.equal(video.model_id, "gemini-omni-1.2-flash");
     assert.equal(video.provider, "google_vertex_ai");
     assert.equal(video.duration_seconds, 10);
     assert.equal(video.resolution, "720p");

@@ -29,7 +29,7 @@ test("Escudo 3D distingue Fast 8s e Omni 10s no pedido comercial", () => {
   assert.equal(result.ok, true);
   const video = result.patch.video_generation;
   assert.equal(video.model, "omni");
-  assert.equal(video.model_id, "gemini-omni-1.1-flash-preview");
+  assert.equal(video.model_id, "gemini-omni-1.2-flash");
   assert.equal(video.duration_seconds, 10);
   assert.equal(video.resolution, "720p");
   assert.equal(video.aspect_ratio, "9:16");
