@@ -37,4 +37,8 @@ test("invalid input and port are rejected without a request",async()=>{
  await assert.rejects(grantTesterAccount({email:"time@example.com",env:{...env,PORT:"443/other"},fetchImpl}),/porta/);
  assert.equal(calls,0);
 });
+test("new account without one-time credentials cannot be reported as verified",async()=>{
+ const m=mock([{ok:true,account:{created:true},bonus}]);
+ const r=await grantTesterAccount({email:"time@example.com",env,fetchImpl:m.fetchImpl});assert.equal(r.verified,false);assert.ok(r.verification_error);assert.equal(m.calls.length,1);
+});
 

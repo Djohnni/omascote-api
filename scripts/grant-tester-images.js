@@ -31,6 +31,7 @@ async function grantTesterAccount({ email, env = process.env, fetchImpl = fetch 
   if (result.bonus_pending === true) return { ...result, email: address, verified: false };
   try {
     let verification;
+    if (result.account?.created === true && !result.credentials?.password) throw new Error("A senha da nova conta nao foi recebida.");
     if (result.account?.created === true && result.credentials?.password) {
       const login = await request("/auth/login", { whatsapp: address, senha: result.credentials.password });
       if (!login.token) throw new Error("O novo acesso nao foi confirmado.");
@@ -54,6 +55,7 @@ if (require.main === module) {
   grantTesterAccount({ email: process.argv[2] }).then(result => {
     console.log("Login: " + result.email);
     if (result.account?.created && result.credentials?.password) console.log("Senha temporaria: " + result.credentials.password);
+    else if (result.account?.created) console.log("Conta nova: a senha nao foi recebida. Confira o cadastro antes de continuar.");
     else console.log(result.account?.login_type === "google" ? "Conta existente: continue entrando com Google." : "Conta existente: senha preservada.");
     if (result.verified) console.log("Artes gratis disponiveis: " + result.bonus.remaining + " de 5.");
     else { console.log(result.bonus_error || result.verification_error || "Liberacao pendente."); process.exitCode = 2; }
