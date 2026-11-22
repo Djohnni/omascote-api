@@ -6,9 +6,34 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 const bcrypt = require("bcryptjs");
-const { createTesterBonusRouter, resolveTesterBonusLogin, findCustomerByEmail } = require("./src/tester-bonus/tester-bonus.routes");
+const crypto = require("node:crypto");
+const { createTesterBonusRouter, resolveTesterBonusLogin, findCustomerByEmail, createTemporaryPassword } = require("./src/tester-bonus/tester-bonus.routes");
 
 const normalizeLegacyLogin = value => String(value || "").trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9._-]+/g, "");
+
+test("temporary passwords use a readable email prefix with eight random digits and a safe fallback", () => {
+  assert.match(createTemporaryPassword("clube@example.com"), /^Clube-\d{8}$/);
+  assert.match(createTemporaryPassword(" Clube.Social+teste@example.com "), /^Clubesocialteste-\d{8}$/);
+  for (const email of ["a@example.com", "!!!@example.com", "", undefined]) {
+    const password = createTemporaryPassword(email);
+    assert.match(password, /^Cliente-\d{8}$/);
+    assert.ok(password.length >= 10);
+  }
+  const longLocalPart = createTemporaryPassword("abcdefghijklmnopqrstuvwxyz@example.com");
+  assert.match(longLocalPart, /^Abcdefghijklmnopqrst-\d{8}$/);
+  assert.ok(Buffer.byteLength(longLocalPart, "utf8") <= 72);
+});
+
+test("the numeric password suffix comes from the cryptographic random source and preserves leading zeros", t => {
+  const random = t.mock.method(crypto, "randomInt", (minimum, maximum) => {
+    assert.equal(minimum, 0);
+    assert.equal(maximum, 100000000);
+    return 1234;
+  });
+  const password = createTemporaryPassword("clube@example.com");
+  assert.equal(password.split("-")[1], "00001234");
+  assert.equal(random.mock.callCount(), 1);
+});
 
 async function fixture(t, initialCustomers = {}) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "omascote-tester-auth-"));
@@ -92,7 +117,8 @@ test("new tester gets Gmail login, hashed random temporary password and exactly 
   const { account, credentials, bonus } = response.body;
   assert.equal(account.email, "person@gmail.com");
   assert.equal(credentials.login, "person@gmail.com");
-  assert.ok(credentials.password.length >= 20);
+  assert.match(credentials.password, /^Person-\d{8}$/);
+  assert.ok(credentials.password.length >= 10);
   assert.equal(bonus.limit, 5);
   assert.equal(bonus.remaining, 5);
   assert.equal(response.body.token, undefined);
