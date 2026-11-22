@@ -15,6 +15,8 @@ const productAuditService = require("./src/orders/product-audit.service");
 const resultScenarioRegistry = require("./src/orders/result-scenario-registry");
 const uploadContentHash = require("./src/orders/upload-content-hash");
 const billingService = require("./src/billing/billing.service");
+const { createTesterBonusStore, TESTER_BONUS_ELIGIBLE_PRODUCTS } = require("./src/tester-bonus/tester-bonus.store");
+const { createTesterBonusRouter, resolveTesterBonusLogin, findCustomerByEmail } = require("./src/tester-bonus/tester-bonus.routes");
 const { createWeeklyPlansRepository } = require("./src/plans/weekly-plans.repository");
 const {
   WeeklyPlanError,
@@ -148,6 +150,7 @@ const DATA_DIR = process.env.OMASCOTE_DATA_DIR
     : path.join(__dirname, "dados");
 
 const PEDIDOS_DIR = path.join(DATA_DIR, "pedidos");
+const testerBonusStore = createTesterBonusStore({ dataDir: DATA_DIR });
 const CLIENTES_FILE = path.join(DATA_DIR, "clientes.json");
 const AVALIACOES_ARTES_FILE = path.join(DATA_DIR, "avaliacoes_artes.json");
 const ATENDIMENTO_AUDIT_FILE = path.join(DATA_DIR, "atendimento_chat_auditoria.json");
@@ -1041,6 +1044,7 @@ function pedidoTemVideoSolicitado(pedido = {}) {
 }
 
 function pedidoPodeAcessarVideo(reqOuUsuario, pedido = {}) {
+  if (pedido.pagamento_metodo === "bonus_testador") return false;
   if (!pedidoTemVideoSolicitado(pedido)) return false;
   const generation = pedido.video_generation || {};
   if (generation.commercial === true || generation.delivery_mode === "image_video") return true;
@@ -2669,6 +2673,82 @@ function clienteTemLoginParaBrinde(cliente) {
     !(cliente.cadastro_automatico === true && cliente.conta_finalizada !== true);
 }
 
+function testerBonusCustomerKey(cliente, fallback = "") {
+  return String(cliente?.tester_bonus_customer_key || fallback || "").trim();
+}
+
+function testerBonusSummary(cliente, fallback = "") {
+  try {
+    const summary = testerBonusStore.getSummary(testerBonusCustomerKey(cliente, fallback));
+    if (cliente?.tester_bonus_customer_key && !summary.granted) {
+      throw Object.assign(new Error("TESTER_BONUS_GRANT_MISSING"), { code: "TESTER_BONUS_GRANT_MISSING", status: 503 });
+    }
+    return summary;
+  } catch (error) {
+    if (cliente?.tester_bonus_customer_key) throw error;
+    // A campaign storage outage must not change ordinary customers' paid flow.
+    return { granted: false, active: false, limit: 0, remaining: 0, available: 0, used: 0, reserved: 0, consumed: 0 };
+  }
+}
+
+function testerBonusRequestOptions(categoria, fields = {}, body = {}, patch = null) {
+  const sources = [fields, body, fields?.new_model?.fields, getContratacaoStructuredFields(body)].filter(Boolean);
+  const isVideo = patch?.video_generation?.requested === true || sources.some(source => {
+    const mode = normalizarDeliveryMode(source.delivery_mode);
+    const video = source.video_generation;
+    const modelRequested = !!String(source.video_model || "").trim() &&
+      normalizarInternalVeoModel(source.video_model) !== "";
+    return mode === "image_video" || mode === null || video?.requested === true ||
+      video?.commercial === true || video?.internal_test === true || (modelRequested && mode !== "image");
+  });
+  return {
+    category: categoria,
+    isVideo,
+    hasPaidAddon: categoria === "contratacao" && sources.some(source => contratacaoTemCamiseta(source))
+  };
+}
+
+function testerBonusErrorResponse(res, error) {
+  const conflict = Number(error?.status || error?.statusCode) === 409;
+  return res.status(conflict ? 409 : 503).json({
+    ok: false,
+    code: error?.code || "TESTER_BONUS_UNAVAILABLE",
+    error: conflict ? "Este pedido nao pode reutilizar esta reserva de imagens." :
+      "Nao foi possivel validar suas imagens de teste. Tente novamente. Nenhum pagamento foi iniciado.",
+    retryable: !conflict
+  });
+}
+
+function testerBonusOrderAuthorization(pedido, fallback = "") {
+  if (pedido?.pagamento_metodo !== "bonus_testador") return { ok: true, authorized: true };
+  const bonus = pedido.bonus_testador || {};
+  if (pedido.video_generation?.requested === true || pedidoSolicitaVideoComercial(pedido)) {
+    return { ok: false, authorized: false, reason: "image_only" };
+  }
+  return testerBonusStore.authorize({
+    customerKey: bonus.customer_key || fallback || pedido.whatsapp,
+    orderId: String(pedido.id || ""),
+    usageId: String(bonus.uso_id || "")
+  });
+}
+
+function buildTesterBonusCoveredOrderPatch({ customerKey, reservation, value }) {
+  const confirmedAt = new Date().toISOString();
+  return {
+    valor_final: 0,
+    valor_pendente: 0,
+    valor_coberto_bonus_testador: normalizarValorFinanceiro(value),
+    pagamento_pendente: false,
+    pagamento_metodo: "bonus_testador",
+    pagamento_confirmado_em: confirmedAt,
+    bonus_testador: { customer_key: customerKey, uso_id: reservation.usageId, somente_imagem: true },
+    pagamento_info: {
+      tipo: "bonus_testador", status: "approved", valor_pago: 0,
+      pedido_id: reservation.orderId, uso_id: reservation.usageId, confirmado_em: confirmedAt
+    }
+  };
+}
+
 function clienteUsouBrindeEscudo(cliente, whatsapp) {
   if (cliente?.brinde_escudo_login_usado === true || cliente?.brinde_escudo3d_app_usado === true) return true;
   // The persisted order is also evidence of redemption after an interrupted account write.
@@ -2680,7 +2760,9 @@ function clienteUsouBrindeEscudo(cliente, whatsapp) {
 
 function clienteElegivelBrindeEscudo3dApp(req, cliente, whatsapp, categoria) {
   return categoria === "escudo3d" && !pedidoSolicitaVideoComercial(req.body || {}) &&
-    clienteTemLoginParaBrinde(cliente) && !clienteUsouBrindeEscudo(cliente, whatsapp);
+    clienteTemLoginParaBrinde(cliente) &&
+    !testerBonusSummary(cliente, whatsapp).granted &&
+    !clienteUsouBrindeEscudo(cliente, whatsapp);
 }
 
 function pedidoSolicitaBrindeEscudo(body = {}) {
@@ -3987,6 +4069,10 @@ function buildOrderResponsePayloadFromItem(item, extra = {}) {
     regra_pagamento_versao: pedido.regra_pagamento_versao || "",
     suporte_personalizado_incluido: modalidadeCriacao !== MODALIDADE_CRIACAO_ECONOMICA,
     coberto_pelo_plano: pedido.pagamento_metodo === "plano_semanal",
+    coberto_pelo_bonus_testador: pedido.pagamento_metodo === "bonus_testador",
+    bonus_testador: pedido.pagamento_metodo === "bonus_testador" ? pedido.bonus_testador || null : null,
+    tester_image_bonus: pedido.pagamento_metodo === "bonus_testador"
+      ? testerBonusStore.getSummary(pedido.bonus_testador.customer_key) : undefined,
     plano_semanal: pedido.pagamento_metodo === "plano_semanal"
       ? pedido.plano_semanal || null
       : null,
@@ -4089,6 +4175,15 @@ async function bloquearPedidosPlanoEstornados({ orderIds, reason, at }) {
 
 async function verificarAutorizacaoPedidoPlano(base, pedido = null) {
   const current = pedido || readPedido(base);
+  if (current?.pagamento_metodo === "bonus_testador") {
+    try {
+      const authorization = testerBonusOrderAuthorization(current);
+      return { ok: authorization.authorized === true, plan: false, tester: true,
+        reason: authorization.reason, temporary: false };
+    } catch (error) {
+      return { ok: false, plan: false, tester: true, temporary: true, reason: error?.code };
+    }
+  }
   if (!current || current.pagamento_metodo !== "plano_semanal") {
     return Object.freeze({ ok: true, plan: false });
   }
@@ -4123,6 +4218,11 @@ async function verificarAutorizacaoPedidoPlano(base, pedido = null) {
 }
 
 function weeklyPlanOrderAccessError(res, verification) {
+  if (verification?.tester) {
+    return res.status(verification.temporary ? 503 : 403).json({ ok: false,
+      code: verification.temporary ? "TESTER_BONUS_UNAVAILABLE" : "TESTER_BONUS_USAGE_UNAVAILABLE",
+      error: "Nao foi possivel autorizar a cota desta imagem. Fale com o suporte." });
+  }
   if (verification?.temporary) {
     return res.status(503).json({
       ok: false,
@@ -6593,6 +6693,10 @@ function encontrarClienteIdPorPerfilId(perfilId) {
 
 function pedidoLiberadoParaGaleria(item) {
   if (!item || !item.base || !item.pedido) return false;
+  if (item.pedido.pagamento_metodo === "bonus_testador") {
+    try { if (!testerBonusOrderAuthorization(item.pedido).authorized) return false; }
+    catch { return false; }
+  }
 
   const categoria = categoriaPedidoGaleria(item.pedido);
   if (!PERFIL_GALERIA_PRODUTOS.has(categoria)) return false;
@@ -7718,6 +7822,15 @@ function validateOrderDownload(whatsapp, pedidoId, options = {}) {
 
   const pedidoPath = path.join(base, "pedido.json");
   const pedido = safeReadJson(pedidoPath) || {};
+  if (pedido.pagamento_metodo === "bonus_testador") {
+    try {
+      if (!testerBonusOrderAuthorization(pedido, whatsapp).authorized) {
+        return { ok: false, status: 403, error: "A cota deste pedido nao esta autorizada." };
+      }
+    } catch {
+      return { ok: false, status: 503, error: "Nao foi possivel validar a cota desta imagem." };
+    }
+  }
 
   if (pedido.pagamento_pendente === true) {
     return {
@@ -9129,11 +9242,40 @@ app.post("/auth/google", async (req, res) => {
     const google = await verificarGoogleIdToken(id_token);
     const clientes = readClientes();
 
-    const chaveCliente = "google_" + String(google.sub).replace(/[^\w\-]+/g, "");
+    let chaveCliente = "google_" + String(google.sub).replace(/[^\w\-]+/g, "");
     const nomeGoogle = google.name || google.given_name || "Meu time";
     const emailGoogle = google.email || "";
 
     let c = clientes[chaveCliente];
+    if (!c) {
+      const linked = Object.entries(clientes).filter(([, account]) =>
+        account?.login_tipo === "tester_password" && account?.tester_bonus_customer_key && account.google_id === google.sub);
+      if (linked.length > 1) return res.status(409).json({ ok: false, code: "GOOGLE_ACCOUNT_AMBIGUOUS",
+        error: "Confira a vinculacao da conta com o suporte." });
+      if (linked.length === 1) {
+        [chaveCliente, c] = linked[0];
+        if (c.ativo !== true) return res.status(403).json({ ok: false, error: "Conta inativa." });
+      }
+    }
+    if (!c && emailGoogle) {
+      const matching = findCustomerByEmail(emailGoogle, clientes);
+      if (matching?.customer?.tester_bonus_customer_key) {
+        const candidate = matching.customer;
+        if (candidate.login_tipo !== "tester_password" ||
+            !(google.email_verified === true || google.email_verified === "true") ||
+            (candidate.google_id && candidate.google_id !== google.sub)) {
+          return res.status(409).json({ ok: false, code: "TESTER_GOOGLE_LINK_NOT_VERIFIED",
+            error: "Entre com seu Gmail e senha. Nao foi possivel confirmar a vinculacao com o Google." });
+        }
+        if (candidate.ativo !== true) return res.status(403).json({ ok: false, error: "Conta inativa." });
+        chaveCliente = matching.customerKey;
+        c = candidate;
+        c.google_id = google.sub;
+        c.email_verified = true;
+        clientes[chaveCliente] = c;
+        writeClientes(clientes);
+      }
+    }
 
     if (!c) {
       c = {
@@ -9388,15 +9530,15 @@ app.post("/auth/finalizar-conta-auto", auth, async (req, res) => {
 
 app.post("/auth/login", async (req, res) => {
   const body = req.body || {};
-  const whatsapp = normalizarLoginId(body.whatsapp);
   const senha = body.senha || "";
 
-  if (!whatsapp || !senha) {
+  if (!normalizarLoginId(body.whatsapp) || !senha) {
     return res.status(400).json({ ok: false, error: "login e senha obrigatórios" });
   }
 
   const clientes = readClientes();
-  const c = clientes[whatsapp];
+  const whatsapp = resolveTesterBonusLogin(body.whatsapp, clientes, normalizarLoginId);
+  const c = whatsapp ? clientes[whatsapp] : null;
 
   if (!c) {
     return res.status(401).json({ ok: false, error: "Login não encontrado" });
@@ -9433,6 +9575,11 @@ app.post("/auth/login", async (req, res) => {
   });
 });
 
+app.use(createTesterBonusRouter({
+  auth, isBotAdmin, readClientes, writeClientes, store: testerBonusStore,
+  bcrypt, normalizarLoginId, dataDir: DATA_DIR, nowYYYYMM
+}));
+
 // Perfil
 app.get("/me", auth, (req, res) => {
   res.setHeader("Cache-Control", "private, no-store");
@@ -9458,11 +9605,18 @@ app.get("/me", auth, (req, res) => {
   }
 
   const saldoInfo = billingService.getBalanceFields(c);
+  let testerImageBonus;
+  try { testerImageBonus = testerBonusSummary(c, req.user.whatsapp); }
+  catch (error) { return testerBonusErrorResponse(res, error); }
 
   return res.json({
     ok: true,
     perfil_id: perfilId,
     nome_time: c.nome_time,
+    email: c.email || "",
+    senha_temporaria: c.senha_temporaria === true,
+    tester_bonus_admin: isBotAdmin(req),
+    tester_image_bonus: testerImageBonus,
     plano: c.plano,
     ...saldoInfo,
     usados_no_ciclo: c.usados_no_ciclo,
@@ -13496,6 +13650,11 @@ function criarPedidoHandlerAsync(categoria) {
     if (!c || !c.ativo) {
       return res.status(403).json({ ok: false, error: "Mensalidade inativa" });
     }
+    // Validate campaign state before any balance debit, including paid video.
+    if (c.tester_bonus_customer_key) {
+      try { testerBonusSummary(c, whatsapp); }
+      catch (error) { limparUploadsTemporarios(req.files); return testerBonusErrorResponse(res, error); }
+    }
 
     const jsonValidation = orderService.validateOrderJsonBody(req.body || {}, categoria);
     if (!jsonValidation.ok) {
@@ -13602,6 +13761,22 @@ function criarPedidoHandlerAsync(categoria) {
         }
 
         const replayStatus = readOrderStatus(pedidoExistente.base, "");
+        if (pedidoExistente.pedido?.pagamento_metodo === "bonus_testador") {
+          try {
+            const authorization = testerBonusOrderAuthorization(pedidoExistente.pedido, whatsapp);
+            if (!authorization.authorized) {
+              return res.status(409).json({ ok: false, code: "TESTER_BONUS_USAGE_UNAVAILABLE",
+                error: "A cota deste pedido foi devolvida. Envie um novo pedido." });
+            }
+            if (!replayStatus || replayStatus === "preparando_pagamento") {
+              const bonus = pedidoExistente.pedido.bonus_testador;
+              const consumed = await testerBonusStore.consume({ customerKey: bonus.customer_key,
+                orderId: String(pedidoExistente.id), usageId: bonus.uso_id });
+              if (!consumed.consumed) throw Object.assign(new Error("TESTER_BONUS_USAGE_UNAVAILABLE"), { status: 409 });
+              writeOrderStatus(pedidoExistente.base, orderStatus.ORDER_STATUS.NOVO);
+            }
+          } catch (error) { return testerBonusErrorResponse(res, error); }
+        }
         if (
           pedidoExistente.pedido?.pagamento_metodo === "plano_semanal" &&
           (!replayStatus || replayStatus === "preparando_pagamento")
@@ -13745,8 +13920,72 @@ function criarPedidoHandlerAsync(categoria) {
     billingService.ensureCurrentBillingCycle(c, mesAtual);
 
     const temBrindeMascote = billingService.hasMascoteUniformeGift(categoria, c);
+    if (!orderService.hasRequiredOrderFields(fields)) {
+      limparUploadsTemporarios(req.files);
+      return res.status(400).json({ ok: false, error: "rodada e data sao obrigatorios" });
+    }
+    let idPlanejado = orderStorage.newPedidoId();
+    let testerBonusReservation = null;
+    const testerCustomerKey = testerBonusCustomerKey(c, whatsapp);
+    try {
+      const bonusOptions = testerBonusRequestOptions(categoria, fields, req.body, internalVeoOrder.patch);
+      if (TESTER_BONUS_ELIGIBLE_PRODUCTS.includes(categoria) &&
+          !bonusOptions.isVideo && !bonusOptions.hasPaidAddon && testerBonusSummary(c, whatsapp).granted) {
+        testerBonusReservation = await testerBonusStore.reserve({
+          customerKey: testerCustomerKey, orderId: idPlanejado,
+          requestId: dedupeMeta.clientRequestId || dedupeMeta.key,
+          payloadHash: dedupeMeta.payloadHash, ...bonusOptions
+        });
+        if (testerBonusReservation.used) idPlanejado = testerBonusReservation.orderId;
+        if (testerBonusReservation.used && testerBonusReservation.replayed) {
+          const base = getPedidoBase(whatsapp, idPlanejado);
+          const existing = base ? readPedido(base) : null;
+          if (existing) {
+            limparUploadsTemporarios(req.files);
+            if (existing.bonus_testador?.uso_id !== testerBonusReservation.usageId ||
+                existing.idempotency_payload_hash !== dedupeMeta.payloadHash ||
+                !testerBonusOrderAuthorization(existing).authorized) {
+              return res.status(409).json({ ok: false, code: "TESTER_BONUS_USAGE_UNAVAILABLE",
+                error: "Nao foi possivel recuperar este pedido. Fale com o suporte." });
+            }
+            const consumed = await testerBonusStore.consume({ customerKey: testerCustomerKey,
+              orderId: idPlanejado, usageId: testerBonusReservation.usageId });
+            if (!consumed.consumed) throw Object.assign(new Error("TESTER_BONUS_USAGE_UNAVAILABLE"), { status: 409 });
+            const status = readOrderStatus(base, "");
+            if (!status || status === "preparando_pagamento") writeOrderStatus(base, orderStatus.ORDER_STATUS.NOVO);
+            return res.json(buildOrderResponsePayloadFromItem({ id: idPlanejado, base, pedido: existing }, {
+              idempotent_replay: true, recuperado_apos_interrupcao: true
+            }));
+          }
+        }
+        if (testerBonusReservation.reason === "released") {
+          limparUploadsTemporarios(req.files);
+          return res.status(409).json({ ok: false, code: "TESTER_BONUS_RELEASED",
+            error: "Esta tentativa foi devolvida. Envie um novo pedido para usar sua cota." });
+        }
+      }
+    } catch (error) {
+      limparUploadsTemporarios(req.files);
+      return testerBonusErrorResponse(res, error);
+    }
+    if (testerBonusReservation) {
+      clientes = readClientes();
+      c = clientes[whatsapp];
+      if (!c || c.ativo !== true) {
+        if (testerBonusReservation.used) {
+          try {
+            await testerBonusStore.release({ customerKey: testerCustomerKey, orderId: idPlanejado,
+              usageId: testerBonusReservation.usageId, reason: "customer_changed_before_draft" });
+          } catch (error) { return testerBonusErrorResponse(res, error); }
+        }
+        limparUploadsTemporarios(req.files);
+        return res.status(403).json({ ok: false, error: "Conta indisponivel." });
+      }
+      billingService.ensureCurrentBillingCycle(c, mesAtual);
+    }
+    const cobertoPeloBonusTestador = testerBonusReservation?.used === true;
     const brindeEscudo3dApp = clienteElegivelBrindeEscudo3dApp(req, c, whatsapp, categoria);
-    if (pedidoSolicitaBrindeEscudo(req.body)) {
+    if (pedidoSolicitaBrindeEscudo(req.body) && !cobertoPeloBonusTestador) {
       const invalidProduct = categoria !== "escudo3d" || pedidoSolicitaVideoComercial(req.body || {});
       if (invalidProduct || !clienteTemLoginParaBrinde(c) || !brindeEscudo3dApp) {
         limparUploadsTemporarios(req.files);
@@ -13767,8 +14006,8 @@ function criarPedidoHandlerAsync(categoria) {
     const custoPedidoComSuporte = getCustoPedidoComAdicionais(categoria, c, fields);
     const custoPedido = calcularCustoPedidoPorModalidade(custoPedidoComSuporte, modalidadeCriacao);
     const pedidoAssistente = req.fotoJogosBatchItem === true || req.body?.assistente_lote === true;
-    const valorBaseParaCupom = brindeEscudo3dApp ? 0 : custoPedido;
-    const cupomCodigo = brindeEscudo3dApp ? "" : normalizarCupomCodigo(req.body?.cupom_codigo);
+    const valorBaseParaCupom = brindeEscudo3dApp || cobertoPeloBonusTestador ? 0 : custoPedido;
+    const cupomCodigo = brindeEscudo3dApp || cobertoPeloBonusTestador ? "" : normalizarCupomCodigo(req.body?.cupom_codigo);
     let cupomLockAtivo = false;
     let cuponsJogadorEscudo = null;
     let cupomLegacyJogadorEscudo = false;
@@ -13832,7 +14071,7 @@ function criarPedidoHandlerAsync(categoria) {
 
     const cupomAplicado = resultadoCupom.cupomAplicado === true;
     let custoEfetivoPedido = brindeEscudo3dApp ? 0 : resultadoCupom.valorFinal;
-    const pedidoElegivelPlano = pedidoElegivelPlanoSemanal(categoria, c, fields);
+    const pedidoElegivelPlano = !cobertoPeloBonusTestador && pedidoElegivelPlanoSemanal(categoria, c, fields);
 
     if (!orderService.hasRequiredOrderFields(fields)) {
       if (cupomLockAtivo) liberarLockCupomJogadorEscudo();
@@ -13842,7 +14081,6 @@ function criarPedidoHandlerAsync(categoria) {
       });
     }
 
-    let idPlanejado = orderStorage.newPedidoId();
     const dedupeEntry = beginOrderCreateDedupe(dedupeMeta.key, dedupeMeta.payloadHash);
     let planoReserva = null;
     const weeklyPlanCustomerKey = getWeeklyPlanCustomerKey(c);
@@ -14112,6 +14350,9 @@ function criarPedidoHandlerAsync(categoria) {
       : null;
     const initialOrderPatch = {
       ...(planoOrderPatch || {}),
+      ...(cobertoPeloBonusTestador ? buildTesterBonusCoveredOrderPatch({
+        customerKey: testerCustomerKey, reservation: testerBonusReservation, value: custoPedido
+      }) : {}),
       ...(internalVeoOrder.patch || {})
     };
 
@@ -14143,6 +14384,20 @@ function criarPedidoHandlerAsync(categoria) {
       });
 
       rejectOrderCreateDedupe(dedupeMeta.key, dedupeEntry, e);
+
+      if (cobertoPeloBonusTestador) {
+        const plannedBase = orderService.buildOrderBasePath({ pedidosDir: PEDIDOS_DIR,
+          whatsapp, mesAtual, id: idPlanejado });
+        const persisted = readPedido(plannedBase);
+        if (persisted?.bonus_testador?.uso_id !== testerBonusReservation.usageId) {
+          try {
+            await testerBonusStore.release({ customerKey: testerCustomerKey, orderId: idPlanejado,
+              usageId: testerBonusReservation.usageId, reason: "order_draft_failed" });
+          } catch (releaseError) {
+            return testerBonusErrorResponse(res, releaseError);
+          }
+        }
+      }
 
       let persistedPlanDraft = false;
       if (cobertoPeloPlano) {
@@ -14227,7 +14482,20 @@ function criarPedidoHandlerAsync(categoria) {
     draft.pedido.valor_final = normalizarValorFinanceiro(custoEfetivoPedido);
     registrarAuditoriaProdutoPedido({ categoria, fields, files, pedidoId: id, request:req });
 
-    if (cobertoPeloPlano) {
+    if (cobertoPeloBonusTestador) {
+      Object.assign(draft.pedido, buildTesterBonusCoveredOrderPatch({
+        customerKey: testerCustomerKey, reservation: testerBonusReservation, value: custoPedido
+      }));
+      orderService.orderStorage.writeOrder(draft.base, draft.pedido);
+      try {
+        const consumed = await testerBonusStore.consume({ customerKey: testerCustomerKey, orderId: id,
+          usageId: testerBonusReservation.usageId });
+        if (consumed.consumed !== true) throw Object.assign(new Error("TESTER_BONUS_USAGE_UNAVAILABLE"), { status: 409 });
+      } catch (error) {
+        rejectOrderCreateDedupe(dedupeMeta.key, dedupeEntry, error);
+        return testerBonusErrorResponse(res, error);
+      }
+    } else if (cobertoPeloPlano) {
       Object.assign(draft.pedido, planoOrderPatch);
       orderService.orderStorage.writeOrder(draft.base, draft.pedido);
     } else if (temSaldoSuficiente) {
@@ -14372,8 +14640,12 @@ function criarPedidoHandlerAsync(categoria) {
       writeOrderStatus(draft.base, orderStatus.ORDER_STATUS.NOVO);
     }
 
-    clientes[whatsapp] = c;
-    writeClientes(clientes);
+    // Campaign usage belongs to its own ledger. Do not rewrite a stale account
+    // snapshot after awaiting the reservation and risk replacing other users.
+    if (!cobertoPeloBonusTestador) {
+      clientes[whatsapp] = c;
+      writeClientes(clientes);
+    }
 
     if (cupomLockAtivo) {
       liberarLockCupomJogadorEscudo();
@@ -14392,6 +14664,9 @@ function criarPedidoHandlerAsync(categoria) {
       valor_desconto: cupomAplicado ? resultadoCupom.desconto : 0,
       valor_final: Number(draft.pedido.valor_final || 0),
       coberto_pelo_plano: cobertoPeloPlano,
+      coberto_pelo_bonus_testador: cobertoPeloBonusTestador,
+      bonus_testador: cobertoPeloBonusTestador ? draft.pedido.bonus_testador : null,
+      tester_image_bonus: testerBonusSummary(c, whatsapp),
       plano_semanal: cobertoPeloPlano ? draft.pedido.plano_semanal : null,
       modalidade_criacao: modalidadeCriacao,
       camiseta_time_adicional: draft.pedido.camiseta_time_adicional === true,
@@ -14543,6 +14818,16 @@ app.post("/cupons/preco", (req, res) => {
       }
     }
 
+    const testerSummary = cliente ? testerBonusSummary(cliente, whatsapp) : null;
+    const testerOptions = testerBonusRequestOptions(categoria, orderService.normalizeOrderBody(body), body);
+    if (cliente?.ativo === true && testerSummary?.remaining > 0 &&
+        TESTER_BONUS_ELIGIBLE_PRODUCTS.includes(categoria) && !testerOptions.isVideo && !testerOptions.hasPaidAddon) {
+      const price = getCustoPedidoComAdicionais(categoria, cliente, body);
+      return res.json({ ok: true, produto: categoria, brinde_escudo_login: false,
+        bonus_testador: { aplicado: true, somente_imagem: true }, coberto_pelo_bonus_testador: true,
+        tester_image_bonus: testerSummary, cupom_aplicado: false, desconto: null,
+        valor_original: price, valor_desconto: 0, valor_final: 0 });
+    }
     const brindeEscudo3dApp = cliente
       ? clienteElegivelBrindeEscudo3dApp({ ...req, body }, cliente, whatsapp, categoria)
       : false;
@@ -14595,6 +14880,8 @@ app.post("/cupons/preco", (req, res) => {
       ok: true,
       produto: categoria,
       brinde_escudo_login: brindeEscudo3dApp,
+      coberto_pelo_bonus_testador: false,
+      tester_image_bonus: testerSummary,
       cupom_aplicado: resultadoCupom.cupomAplicado === true,
       desconto: resultadoCupom.cupomAplicado ? resultadoCupom.resumo : null,
       valor_original: resultadoCupom.cupomAplicado ? resultadoCupom.valorOriginal : Number(valorOriginal || 0),
@@ -14602,6 +14889,7 @@ app.post("/cupons/preco", (req, res) => {
       valor_final: resultadoCupom.cupomAplicado ? resultadoCupom.valorFinal : Number(valorOriginal || 0)
     });
   } catch (e) {
+    if (String(e?.code || "").startsWith("TESTER_BONUS")) return testerBonusErrorResponse(res, e);
     return res.status(500).json({ ok: false, error: "Erro ao calcular cupom." });
   }
 });
@@ -15203,6 +15491,8 @@ app.post("/pedidos/:id/aprovar", auth, async (req, res) => {
 
   const pedidoPath = path.join(base, "pedido.json");
   const pedido = safeReadJson(pedidoPath) || {};
+  const bonusVerification = await verificarAutorizacaoPedidoPlano(base, pedido);
+  if (!bonusVerification.ok) return weeklyPlanOrderAccessError(res, bonusVerification);
 
   if (pedido.pagamento_pendente === true) {
     return res.status(403).json({
@@ -15243,6 +15533,13 @@ app.post("/pedidos/:id/solicitar-ajuste", auth, (req, res) => {
 
   const pedidoPath = path.join(base, "pedido.json");
   const pedido = safeReadJson(pedidoPath) || {};
+  if (pedido.pagamento_metodo === "bonus_testador") {
+    try {
+      if (!testerBonusOrderAuthorization(pedido, req.user.whatsapp).authorized) {
+        return weeklyPlanOrderAccessError(res, { tester: true });
+      }
+    } catch (error) { return testerBonusErrorResponse(res, error); }
+  }
   const scenarioMeta = resultScenarioRegistry.getPedidoScenarioMeta(pedido);
 
   if (
@@ -16569,6 +16866,21 @@ app.post("/bot/suporte/erro-pedido", auth, safeAsyncRoute(async (req, res) => {
           "timeout",
           "erro_upload_resultado"
         ].some(codigo => motivoNormalizado.includes(codigo));
+        if (falhaTecnica && pedidoData.pagamento_metodo === "bonus_testador" &&
+            !fs.existsSync(path.join(basePedido, "resultado_final.png")) &&
+            !pedidoData.resultado_enviado_em && pedidoData.baixado_cliente !== true) {
+          try {
+            const returned = await testerBonusStore.release({
+              customerKey: pedidoData.bonus_testador?.customer_key,
+              orderId: String(pedido_id), usageId: pedidoData.bonus_testador?.uso_id,
+              reason: motivoNormalizado
+            });
+            if (!returned.ok) return weeklyPlanOrderAccessError(res, { tester: true });
+            pedidoData.bonus_testador_cota_devolvida = true;
+            pedidoData.bonus_testador_cota_devolvida_em ||= new Date().toISOString();
+            writePedidoAtomic(basePedido, pedidoData);
+          } catch (error) { return testerBonusErrorResponse(res, error); }
+        }
         if (
           falhaTecnica &&
           pedidoData.pagamento_metodo === "plano_semanal" &&
