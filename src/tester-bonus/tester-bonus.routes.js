@@ -42,8 +42,16 @@ function resolveTesterBonusLogin(identifier, customers, normalizeLegacyLogin) {
   return key && Object.hasOwn(customers || {}, key) ? key : null;
 }
 
-function createTemporaryPassword() {
-  return "Tmp-" + crypto.randomBytes(18).toString("base64url");
+function createTemporaryPassword(email) {
+  const localPart = (normalizeEmail(email) || "").split("@")[0];
+  const readable = localPart.replace(/[^a-z0-9]/gi, "").slice(0, 20);
+  const prefix = readable.length >= 2
+    ? readable.charAt(0).toUpperCase() + readable.slice(1)
+    : "Cliente";
+  // Keep the password related to the supplied address without making its
+  // variable part predictable. Existing accounts never call this generator.
+  const suffix = String(crypto.randomInt(0, 100000000)).padStart(8, "0");
+  return prefix + "-" + suffix;
 }
 
 function publicAccount(customerKey, customer, created = false) {
@@ -136,7 +144,7 @@ function createTesterBonusRouter({
           if (!email) throw campaignError(400, "EMAIL_REQUIRED", "Informe o e-mail para criar uma conta nova.");
           do { customerKey = "tester_" + crypto.randomBytes(12).toString("hex"); }
           while (Object.hasOwn(customers, customerKey));
-          password = createTemporaryPassword();
+          password = createTemporaryPassword(email);
           customer = {
             nome_time: String(body.nome_time || email.split("@")[0]).trim().slice(0, 120),
             email,

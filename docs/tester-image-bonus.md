@@ -8,7 +8,7 @@ A concessão é administrativa, única por conta, e cobre cinco pedidos de somen
 - No painel da conta, abrir **Liberar imagens para um cliente**.
 - Informar o login existente ou e-mail do cliente e clicar em **Liberar 5 imagens**.
 - Para uma conta nova, informar e-mail e marcar **Criar conta se este Gmail ainda não tiver cadastro**.
-- Copiar as credenciais retornadas uma única vez e entregá-las ao titular por um canal autorizado.
+- Copiar as credenciais retornadas uma única vez e entregá-las ao titular por um canal autorizado. A senha temporária começa com o nome do e-mail e termina com oito números aleatórios.
 - Repetir a liberação consulta/reutiliza a concessão; não recarrega a quantidade já usada.
 - Clientes novos entram por Gmail e senha temporária; podem trocar a senha no painel da conta. Contas Google existentes mantêm o acesso Google e a senha anterior não é substituída.
 
@@ -74,3 +74,7 @@ Frontend: `test-mascot-gallery-component.cjs`, `test-guided-tester-image-bonus.c
 
 Publicar API antes do frontend do bônus. Validar testes e confirmar a versão do serviço e a existência do volume persistente antes da primeira concessão real. A publicação não concede nada a clientes existentes; a primeira concessão depende de ação administrativa explícita.
 
+
+## Operação pelo Shell do serviço
+
+Na aba Shell do serviço existente no Render, execute `node scripts/grant-tester-images.js cliente@example.com`. O comando usa somente a API local da própria instância, reaproveita a autorização administrativa configurada, não mostra chaves do serviço e não cria novos serviços. Para conta nova, exibe o login e a senha temporária uma única vez e confere o acesso e a cota. Para conta existente, preserva credenciais e quantidade já utilizada. Uma verificação pendente é informada explicitamente.
