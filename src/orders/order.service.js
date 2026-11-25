@@ -352,6 +352,9 @@ function buildPedidoData({
     };
   }
 
+  if (require("./futebol-omni/catalog.json").some(row => row.product === categoria) &&
+      String(new_model?.fields?.sport || "").trim().toLowerCase() === "futebol") pedido.image_prompt_version = "football_field_v2";
+
   return pedido;
 }
 

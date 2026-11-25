@@ -85,6 +85,7 @@ test("pilot catalog, quote, paid order, scene integrity and retry use real route
         assert.equal(response.status,200,response.text);
         const saved=storage.findPedidoByClientRequestId(path.join(dataDir,"pedidos"),owner,id);
         assert(saved);
+        assert.equal(saved.pedido.image_prompt_version,"football_field_v2");
         assert.equal(saved.pedido.fields.futebol_scene,option.id);
         assert.equal(saved.pedido.video_generation.scene_id,option.id);
         assert.equal(saved.pedido.video_generation.resolution,"720p");
@@ -106,6 +107,7 @@ test("pilot catalog, quote, paid order, scene integrity and retry use real route
       const filename=path.join(saved.base,"pedido.json");
       const old={...saved.pedido,aprovado_cliente:true,pagamento_pendente:false,status:"pronto",
         video_generation:{...saved.pedido.video_generation,resolution,status:"ready",ready:true}};
+      delete old.image_prompt_version;
       delete old.video_generation.reference_mode;
       delete old.video_generation.prompt_version;
       fs.writeFileSync(filename,JSON.stringify(old));
@@ -129,6 +131,7 @@ test("pilot catalog, quote, paid order, scene integrity and retry use real route
       assert.equal((await create(row,fields,files,`football-history-${resolution}`)).status,200);
       assert.equal(Math.round((before-balance())*100),fields.futebol_price_cents);
       assert.equal(JSON.parse(fs.readFileSync(filename)).video_generation.resolution,resolution);
+      assert.equal(Object.hasOwn(JSON.parse(fs.readFileSync(filename)),"image_prompt_version"),false);
       assert.deepEqual(JSON.parse(fs.readFileSync(filename)).video_generation,historicalContract);
     });
     await t.test("stale price, mismatched assets and customer cannot create scene",async()=>{
