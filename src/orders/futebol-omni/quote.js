@@ -42,7 +42,7 @@ function quote(product, fields, uploads) {
 function contract(sceneId) {
   return { requested: true, commercial: true, internal_test: false, delivery_mode: 'image_video',
     model: 'omni', model_id: 'gemini-omni-1.2-flash', provider: 'google_vertex_ai', location: 'global',
-    duration_seconds: 10, resolution: '360p', aspect_ratio: '9:16', generate_audio: true,
+    duration_seconds: 10, resolution: '720p', aspect_ratio: '9:16', generate_audio: true,
     first_last_frame_same: false, scene_id: sceneId, status: 'pending', requested_at: new Date().toISOString() };
 }
 
