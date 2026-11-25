@@ -1064,9 +1064,18 @@ function pedidoPodeAcessarVideo(reqOuUsuario, pedido = {}) {
   return INTERNAL_VEO_TEST_ENABLED && userId === BOT_ADMIN_WHATSAPP && generation.internal_test === true;
 }
 
+const futebolOmni = require("./src/orders/futebol-omni/quote");
+const futebolOmniMode = String(process.env.FUTEBOL_OMNI360_MODE || "off");
+function futebolOmniEnabled(owner) {
+  return futebolOmniMode === "public" || (futebolOmniMode === "pilot" && owner === true);
+}
+
 function getCustoPedidoComAdicionais(categoria, cliente, source = {}) {
   const videoComercial = VIDEO_PURCHASE_PRODUCTS.has(categoria) && pedidoSolicitaVideoComercial(source);
   const structured = getContratacaoStructuredFields(source);
+  if (structured.futebol_scene && pedidoSolicitaVideoComercial(source) && Number.isInteger(structured.futebol_price_cents)) {
+    return structured.futebol_price_cents / 100;
+  }
   const videoModel = String(structured.video_model || source?.video_model || "").trim().toLowerCase();
   const mascotOption = String(structured.mascot_video_option || source?.mascot_video_option || "").trim().toLowerCase();
   const mascotPrice = Object.hasOwn(MASCOT_VIDEO_OPTION_PRICES, mascotOption)
@@ -2863,6 +2872,17 @@ function prepararInternalVeoPedido(req, categoria, fields) {
   }
 
   const commercialVideo = deliveryMode === "image_video";
+  if (structured.futebol_scene) {
+    if (!futebolOmniEnabled(isBotAdmin(req))) return { ok:false, status:503, error:"Galeria de futebol indisponível." };
+    try {
+      const cents = futebolOmni.quote(categoria, structured, req.files || {});
+      if (Number(structured.futebol_price_cents) !== cents) {
+        return { ok:false, status:409, error:"Os dados do pedido mudaram. Confira o preço antes de enviar." };
+      }
+      structured.futebol_price_cents = cents;
+      return {ok:true, patch:{video_generation:futebolOmni.contract(structured.futebol_scene)}};
+    } catch (error) { return {ok:false, status:400, error:error.message}; }
+  }
   const requestedRaw = structured.video_model || (commercialVideo ? "fast" : "");
   let modelKey = normalizarInternalVeoModel(requestedRaw);
 
@@ -14083,7 +14103,8 @@ function criarPedidoHandlerAsync(categoria) {
       ? normalizarModalidadeCriacao(req.body?.modalidade_criacao)
       : MODALIDADE_CRIACAO_COM_SUPORTE;
     const custoPedidoComSuporte = getCustoPedidoComAdicionais(categoria, c, fields);
-    const custoPedido = calcularCustoPedidoPorModalidade(custoPedidoComSuporte, modalidadeCriacao);
+    const custoPedido = internalVeoOrder.patch?.video_generation?.scene_id ? custoPedidoComSuporte :
+      calcularCustoPedidoPorModalidade(custoPedidoComSuporte, modalidadeCriacao);
     const pedidoAssistente = req.fotoJogosBatchItem === true || req.body?.assistente_lote === true;
     const valorBaseParaCupom = cobertoPeloBonusTestador ? 0 : custoPedido;
     const cupomCodigo = cobertoPeloBonusTestador ? "" : normalizarCupomCodigo(req.body?.cupom_codigo);
@@ -14830,6 +14851,15 @@ function criarPedidoHandler(categoria) {
 }
 
 // ===== CRIAR PEDIDO =====
+app.get("/catalogo/futebol-videos", (req, res) => {
+  let owner = false;
+  const token = (req.headers.authorization || "").replace(/^Bearer /, "");
+  try { if (token) owner = jwt.verify(token, JWT_SECRET)?.whatsapp === BOT_ADMIN_WHATSAPP; } catch {}
+  res.set("Cache-Control", "private, no-store");
+  const available = futebolOmniEnabled(owner);
+  res.json({ available, pilot: available && futebolOmniMode === "pilot", catalog: available ? futebolOmni.catalog : [] });
+});
+
 app.post("/cupons/preco", (req, res) => {
   try {
     let whatsapp = "";
@@ -14855,6 +14885,22 @@ app.post("/cupons/preco", (req, res) => {
       return res.status(400).json({ ok: false, error: "Produto invalido." });
     }
 
+    const soccerFields = getContratacaoStructuredFields(body);
+    if (soccerFields.futebol_scene) {
+      if (!futebolOmniEnabled(Boolean(whatsapp) && whatsapp === BOT_ADMIN_WHATSAPP))
+        return res.status(503).json({ok:false, error:"Galeria de futebol indisponível."});
+      try {
+        const counts = body.futebol_upload_counts || {};
+        const uploads = Object.fromEntries(["mascote", "patrocinadores"].map(name => {
+          const n = counts[name] ?? 0;
+          if (!Number.isInteger(n) || n < 0 || n > 20) throw new Error("Quantidade de arquivos inválida.");
+          return [name, Array(n)];
+        }));
+        const cents = futebolOmni.quote(categoria, soccerFields, uploads);
+        body.fields_json = {...soccerFields, futebol_price_cents:cents};
+        if (body.new_model?.fields) body.new_model.fields = body.fields_json;
+      } catch (error) { return res.status(400).json({ok:false, error:error.message}); }
+    }
     if (categoria === "escudo3d" && pedidoSolicitaVideoComercial(body)) {
       const model = normalizarInternalVeoModel(getContratacaoStructuredFields(body).video_model || "fast");
       if (!["fast", "omni"].includes(model) || (model === "omni" && !ESCUDO3D_OMNI_ENABLED)) {
