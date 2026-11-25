@@ -92,7 +92,7 @@ function createTesterBonusRouter({
     while (!handle) {
       try { handle = await fs.promises.open(lockPath, "wx", 0o600); }
       catch (error) {
-        if (error.code !== "EEXIST") throw error;
+        if (error.code !== "EEXIST" && !(process.platform === "win32" && error.code === "EPERM")) throw error;
         if (Date.now() >= deadline) throw campaignError(409, "TESTER_ACCOUNT_BUSY", "Cadastro em andamento. Tente novamente em alguns segundos.");
         await new Promise(resolve => setTimeout(resolve, 25));
       }

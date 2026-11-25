@@ -26,6 +26,11 @@ class TesterBonusStoreError extends Error {
   }
 }
 
+// Windows can report a delete-pending lock as EPERM until its last handle closes.
+function transientLockConflict(error) {
+  return error.code === "EEXIST" || (process.platform === "win32" && error.code === "EPERM");
+}
+
 function requiredString(value, name, maximum = 180) {
   const text = typeof value === "string" ? value.trim() : "";
   if (!text || text.length > maximum || /[\x00-\x1f\x7f]/.test(text)) {
@@ -50,6 +55,10 @@ function validDate(value) {
   return typeof value === "string" && Number.isFinite(new Date(value).getTime());
 }
 
+const MAX_LEDGER_BYTES = 16 * 1024 * 1024;
+const GMAIL_CAMPAIGN_ID = "gmail-welcome";
+const GMAIL_BONUS_LIMIT = 2;
+
 function validateState(state) {
   if (!isObject(state) || state.version !== 1 || !isObject(state.grants) || !isObject(state.usages)) {
     throw new Error("invalid_ledger_schema");
@@ -60,7 +69,9 @@ function validateState(state) {
   for (const [key, grant] of Object.entries(state.grants)) {
     if (!isObject(grant) || typeof grant.customerKey !== "string" ||
         key !== customerHash(grant.customerKey) || typeof grant.id !== "string" ||
-        !grant.id || grant.limit !== TESTER_BONUS_LIMIT || grant.active !== true ||
+        !grant.id || (grant.limit !== TESTER_BONUS_LIMIT &&
+          !(grant.limit === GMAIL_BONUS_LIMIT && grant.campaignId === GMAIL_CAMPAIGN_ID)) ||
+        ![undefined, 0, 1].includes(grant.legacyCrestUsed) || grant.active !== true ||
         typeof grant.campaignId !== "string" || !grant.campaignId ||
         typeof grant.actor !== "string" || !grant.actor || !validDate(grant.grantedAt)) {
       throw new Error("invalid_ledger_grant");
@@ -84,12 +95,14 @@ function validateState(state) {
     orders.add(usage.orderId);
     if (usage.state !== "released") activeCounts.set(grant.id, (activeCounts.get(grant.id) || 0) + 1);
   }
-  for (const count of activeCounts.values()) if (count > TESTER_BONUS_LIMIT) throw new Error("ledger_quota_exceeded");
+  for (const grant of Object.values(state.grants)) {
+    if ((activeCounts.get(grant.id) || 0) + (grant.legacyCrestUsed || 0) > grant.limit) throw new Error("ledger_quota_exceeded");
+  }
   return state;
 }
 
 /**
- * Persistent quota for ONE initial five-image grant per customer.
+ * Persistent quota for one image allowance per customer.
  * Writers use a filesystem-exclusive lock and atomic rename; reads never cache.
  * This requires all API processes to share the SAME persistent dataDir/filesystem.
  * A different campaign id does not reset an existing customer's grant.
@@ -115,18 +128,20 @@ function createTesterBonusStore(options = {}) {
       let contents;
       try { contents = fs.readFileSync(filePath, "utf8"); }
       catch (error) { if (error.code === "ENOENT") return emptyState(); throw error; }
-      if (Buffer.byteLength(contents, "utf8") > 16 * 1024 * 1024) throw new Error("ledger_too_large");
+      if (Buffer.byteLength(contents, "utf8") > MAX_LEDGER_BYTES) throw new Error("ledger_too_large");
       return validateState(JSON.parse(contents));
     } catch (error) { throw unavailable(error); }
   }
 
   function persist(state) {
     validateState(state);
+    const contents = JSON.stringify(state, null, 2) + "\n";
+    if (Buffer.byteLength(contents, "utf8") > MAX_LEDGER_BYTES) throw new Error("ledger_too_large");
     const temporary = `${filePath}.${process.pid}.${crypto.randomBytes(12).toString("hex")}.tmp`;
     let descriptor = null;
     try {
       descriptor = fs.openSync(temporary, "wx", 0o600);
-      fs.writeFileSync(descriptor, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+      fs.writeFileSync(descriptor, contents, "utf8");
       fs.fsyncSync(descriptor);
       fs.closeSync(descriptor);
       descriptor = null;
@@ -160,7 +175,7 @@ function createTesterBonusStore(options = {}) {
       const current = JSON.parse(fs.readFileSync(lockPath, "utf8"));
       if (current.token === owner.token && processKnownDead(current)) fs.unlinkSync(lockPath);
     } catch (error) {
-      if (!["EEXIST", "ENOENT"].includes(error.code) && !(error instanceof SyntaxError)) throw error;
+      if (!transientLockConflict(error) && error.code !== "ENOENT" && !(error instanceof SyntaxError)) throw error;
     } finally {
       if (recoveryDescriptor !== null) {
         fs.closeSync(recoveryDescriptor);
@@ -188,8 +203,8 @@ function createTesterBonusStore(options = {}) {
           // an empty lock permanently blocking a recoverable storage failure.
           try { fs.unlinkSync(lockPath); } catch {}
         }
-        if (error.code !== "EEXIST") throw error;
-        recoverDeadOwner();
+        if (!transientLockConflict(error)) throw error;
+        if (error.code === "EEXIST") recoverDeadOwner();
         if (Date.now() - startedAt >= lockTimeoutMs) {
           throw new TesterBonusStoreError("TESTER_BONUS_STORE_BUSY", 503);
         }
@@ -222,7 +237,7 @@ function createTesterBonusStore(options = {}) {
     const grant = state.grants[customerHash(customerKey)];
     if (!grant) return Object.freeze({ granted: false, active: false, limit: 0, used: 0, consumed: 0, reserved: 0, remaining: 0, available: 0, campaignId: null, grantId: null });
     const usages = Object.values(state.usages).filter(usage => usage.grantId === grant.id);
-    const consumed = usages.filter(usage => usage.state === "consumed").length;
+    const consumed = (grant.legacyCrestUsed || 0) + usages.filter(usage => usage.state === "consumed").length;
     const reserved = usages.filter(usage => usage.state === "reserved").length;
     const remaining = Math.max(0, grant.limit - consumed - reserved);
     return Object.freeze({ granted: true, active: true, limit: grant.limit, used: consumed, consumed, reserved, remaining, available: remaining, campaignId: grant.campaignId, grantId: grant.id });
@@ -234,15 +249,27 @@ function createTesterBonusStore(options = {}) {
 
   function hasGrant(customerKey) { return getSummary(customerKey).granted; }
 
-  async function grant({ customerKey, actor, campaignId = DEFAULT_CAMPAIGN_ID } = {}) {
+  function grant({ customerKey, actor, campaignId = DEFAULT_CAMPAIGN_ID } = {}) {
+    return grantAllowance(customerKey, actor, campaignId, TESTER_BONUS_LIMIT, 0);
+  }
+
+  function grantGmailWelcome(customerKey, redeemedCrest) {
+    return grantAllowance(customerKey, "google-login", GMAIL_CAMPAIGN_ID, GMAIL_BONUS_LIMIT, redeemedCrest ? 1 : 0);
+  }
+
+  async function grantAllowance(customerKey, actor, campaignId, limit, legacyCrestUsed) {
     const customer = requiredString(customerKey, "customer", 300);
     const approvedBy = requiredString(actor, "actor", 300);
     const campaign = requiredString(campaignId, "campaign", 100);
     return mutate(state => {
       const key = customerHash(customer);
       const existing = state.grants[key];
-      if (existing) return { changed: false, value: { granted: true, replayed: true, grantId: existing.id, campaignId: existing.campaignId, summary: summaryOf(state, customer) } };
-      const added = { id: crypto.randomUUID(), customerKey: customer, campaignId: campaign, limit: TESTER_BONUS_LIMIT, active: true, actor: approvedBy, grantedAt: timestamp() };
+      if (existing) {
+        const upgraded = existing.limit < limit;
+        if (upgraded) Object.assign(existing, { limit, campaignId: campaign, actor: approvedBy });
+        return { changed: upgraded, value: { granted: true, replayed: !upgraded, grantId: existing.id, campaignId: existing.campaignId, summary: summaryOf(state, customer) } };
+      }
+      const added = { id: crypto.randomUUID(), customerKey: customer, campaignId: campaign, limit, ...(legacyCrestUsed ? { legacyCrestUsed } : {}), active: true, actor: approvedBy, grantedAt: timestamp() };
       state.grants[key] = added;
       return { changed: true, value: { granted: true, replayed: false, grantId: added.id, campaignId: campaign, summary: summaryOf(state, customer) } };
     });
@@ -322,7 +349,7 @@ function createTesterBonusStore(options = {}) {
   // The original orderId is returned and must be used when recreating a draft.
   // A trusted reconciler may release only after proving the order cannot still
   // be committed/processing; a missing file alone is not sufficient evidence.
-  return Object.freeze({ filePath, getSummary, summary: getSummary, hasGrant, grant, reserve, authorize, consume, release });
+  return Object.freeze({ filePath, getSummary, summary: getSummary, hasGrant, grant, grantGmailWelcome, reserve, authorize, consume, release });
 }
 
 module.exports = { createTesterBonusStore, TesterBonusStoreError, TESTER_BONUS_LIMIT, TESTER_BONUS_ELIGIBLE_PRODUCTS, DEFAULT_CAMPAIGN_ID };

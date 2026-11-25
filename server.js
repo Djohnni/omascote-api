@@ -2668,11 +2668,6 @@ function registrarUsoCupomPedido(pedido, whatsapp, options = {}) {
   }
 }
 
-function clienteTemLoginParaBrinde(cliente) {
-  return !!cliente && cliente.ativo === true &&
-    !(cliente.cadastro_automatico === true && cliente.conta_finalizada !== true);
-}
-
 function testerBonusCustomerKey(cliente, fallback = "") {
   return String(cliente?.tester_bonus_customer_key || fallback || "").trim();
 }
@@ -2680,12 +2675,12 @@ function testerBonusCustomerKey(cliente, fallback = "") {
 function testerBonusSummary(cliente, fallback = "") {
   try {
     const summary = testerBonusStore.getSummary(testerBonusCustomerKey(cliente, fallback));
-    if (cliente?.tester_bonus_customer_key && !summary.granted) {
+    if ((cliente?.tester_bonus_customer_key || cliente?.gmail_image_bonus_grant_id) && !summary.granted) {
       throw Object.assign(new Error("TESTER_BONUS_GRANT_MISSING"), { code: "TESTER_BONUS_GRANT_MISSING", status: 503 });
     }
     return summary;
   } catch (error) {
-    if (cliente?.tester_bonus_customer_key) throw error;
+    if (cliente?.tester_bonus_customer_key || cliente?.gmail_image_bonus_grant_id) throw error;
     // A campaign storage outage must not change ordinary customers' paid flow.
     return { granted: false, active: false, limit: 0, remaining: 0, available: 0, used: 0, reserved: 0, consumed: 0 };
   }
@@ -2756,13 +2751,6 @@ function clienteUsouBrindeEscudo(cliente, whatsapp) {
     const pedido = item.pedido || {};
     return pedido.brinde_escudo_login === true || pedido.brinde_escudo3d_app === true;
   });
-}
-
-function clienteElegivelBrindeEscudo3dApp(req, cliente, whatsapp, categoria) {
-  return categoria === "escudo3d" && !pedidoSolicitaVideoComercial(req.body || {}) &&
-    clienteTemLoginParaBrinde(cliente) &&
-    !testerBonusSummary(cliente, whatsapp).granted &&
-    !clienteUsouBrindeEscudo(cliente, whatsapp);
 }
 
 function pedidoSolicitaBrindeEscudo(body = {}) {
@@ -9026,7 +9014,8 @@ async function verificarGoogleIdToken(id_token) {
 app.get("/auth/google-config", (req, res) => {
   return res.json({
     ok: true,
-    client_id: GOOGLE_CLIENT_ID
+    client_id: GOOGLE_CLIENT_ID,
+    gmail_image_bonus_limit: 2
   });
 });
 
@@ -9305,6 +9294,25 @@ app.post("/auth/google", async (req, res) => {
       writeClientes(clientes);
     }
 
+    if (c.ativo !== true) return res.status(403).json({ ok: false, error: "Conta inativa." });
+    if ((google.email_verified === true || google.email_verified === "true") &&
+        /^[^@\s]+@gmail\.com$/i.test(emailGoogle) && !c.tester_bonus_customer_key) {
+      try {
+        const summary = testerBonusStore.getSummary(chaveCliente);
+        if (c.gmail_image_bonus_grant_id && summary.grantId !== c.gmail_image_bonus_grant_id) {
+          throw new Error("GMAIL_BONUS_GRANT_MISSING");
+        }
+        if (!c.gmail_image_bonus_grant_id) {
+          const grant = summary.granted ? summary : await testerBonusStore.grantGmailWelcome(
+            chaveCliente, clienteUsouBrindeEscudo(c, chaveCliente));
+          const latest = readClientes();
+          c = latest[chaveCliente];
+          if (!c || c.ativo !== true) return res.status(403).json({ ok: false, error: "Conta inativa." });
+          c.gmail_image_bonus_grant_id = grant.grantId;
+          writeClientes(latest);
+        }
+      } catch (error) { return testerBonusErrorResponse(res, error); }
+    }
     const token = jwt.sign({ whatsapp: chaveCliente }, JWT_SECRET, { expiresIn: "7d" });
     const saldoInfo = billingService.getBalanceFields(c);
     await reconcileRadarAccount(chaveCliente, "auth-google");
@@ -9622,9 +9630,9 @@ app.get("/me", auth, (req, res) => {
     usados_no_ciclo: c.usados_no_ciclo,
     brinde_mascote_disponivel: c.brinde_mascote_disponivel === true,
     conta_auto_pendente: c.cadastro_automatico === true && c.conta_finalizada !== true,
-    brinde_escudo_login_disponivel: clienteElegivelBrindeEscudo3dApp({body:{}}, c, req.user.whatsapp, "escudo3d"),
+    brinde_escudo_login_disponivel: false,
     brinde_escudo_login_usado: clienteUsouBrindeEscudo(c, req.user.whatsapp),
-    brinde_escudo3d_app_disponivel: clienteElegivelBrindeEscudo3dApp({body:{}}, c, req.user.whatsapp, "escudo3d"),
+    brinde_escudo3d_app_disponivel: false,
     brinde_escudo3d_app_usado: clienteUsouBrindeEscudo(c, req.user.whatsapp),
     internal_features: {
       next_match_veo: internalVeoDisponivel(req),
@@ -13651,7 +13659,7 @@ function criarPedidoHandlerAsync(categoria) {
       return res.status(403).json({ ok: false, error: "Mensalidade inativa" });
     }
     // Validate campaign state before any balance debit, including paid video.
-    if (c.tester_bonus_customer_key) {
+    if (c.tester_bonus_customer_key || c.gmail_image_bonus_grant_id) {
       try { testerBonusSummary(c, whatsapp); }
       catch (error) { limparUploadsTemporarios(req.files); return testerBonusErrorResponse(res, error); }
     }
@@ -13984,21 +13992,23 @@ function criarPedidoHandlerAsync(categoria) {
       billingService.ensureCurrentBillingCycle(c, mesAtual);
     }
     const cobertoPeloBonusTestador = testerBonusReservation?.used === true;
-    const brindeEscudo3dApp = clienteElegivelBrindeEscudo3dApp(req, c, whatsapp, categoria);
-    if (pedidoSolicitaBrindeEscudo(req.body) && !cobertoPeloBonusTestador) {
-      const invalidProduct = categoria !== "escudo3d" || pedidoSolicitaVideoComercial(req.body || {});
-      if (invalidProduct || !clienteTemLoginParaBrinde(c) || !brindeEscudo3dApp) {
-        limparUploadsTemporarios(req.files);
-        return res.status(invalidProduct ? 400 : !clienteTemLoginParaBrinde(c) ? 403 : 409).json({
-          ok: false,
-          code: invalidProduct ? "ESCUDO_GIFT_IMAGE_ONLY" : !clienteTemLoginParaBrinde(c) ? "ESCUDO_GIFT_LOGIN_REQUIRED" : "ESCUDO_GIFT_ALREADY_USED",
-          error: invalidProduct ? "O brinde inclui somente uma imagem de escudo." :
-            !clienteTemLoginParaBrinde(c) ? "Entre ou finalize seu cadastro para receber o escudo de brinde." :
-            "Esta conta já recebeu o escudo de brinde. Nenhum valor foi cobrado."
-        });
-      }
+    // A tab opened before the offer changed may still display a free crest.
+    const previousCrestCheckout = categoria === "escudo3d" && !cobertoPeloBonusTestador &&
+      req.body?.image_price_version !== "gmail2" &&
+      ["https://omascote.com.br", "https://www.omascote.com.br"].includes(req.get("Origin")) &&
+      !pedidoSolicitaVideoComercial(req.body || {}) &&
+      !(c.cadastro_automatico === true && c.conta_finalizada !== true) &&
+      !testerBonusSummary(c, whatsapp).granted && !clienteUsouBrindeEscudo(c, whatsapp);
+    if (previousCrestCheckout) {
+      limparUploadsTemporarios(req.files);
+      return res.status(409).json({ ok: false, code: "CREST_PRICE_CHANGED",
+        error: "A oferta do escudo mudou. Atualize a página para conferir o preço antes de enviar. Nenhum valor foi cobrado." });
     }
-
+    if (!cobertoPeloBonusTestador && (pedidoSolicitaBrindeEscudo(req.body) || req.body?.image_bonus_required === "1")) {
+      limparUploadsTemporarios(req.files);
+      return res.status(409).json({ ok: false, code: "IMAGE_BONUS_UNAVAILABLE",
+        error: "Esta imagem não está coberta pelo bônus. Confira o saldo de artes e o preço antes de confirmar novamente. Nenhum valor foi cobrado." });
+    }
 
     const modalidadeCriacao = req.fotoJogosBatchItem === true
       ? normalizarModalidadeCriacao(req.body?.modalidade_criacao)
@@ -14006,8 +14016,8 @@ function criarPedidoHandlerAsync(categoria) {
     const custoPedidoComSuporte = getCustoPedidoComAdicionais(categoria, c, fields);
     const custoPedido = calcularCustoPedidoPorModalidade(custoPedidoComSuporte, modalidadeCriacao);
     const pedidoAssistente = req.fotoJogosBatchItem === true || req.body?.assistente_lote === true;
-    const valorBaseParaCupom = brindeEscudo3dApp || cobertoPeloBonusTestador ? 0 : custoPedido;
-    const cupomCodigo = brindeEscudo3dApp || cobertoPeloBonusTestador ? "" : normalizarCupomCodigo(req.body?.cupom_codigo);
+    const valorBaseParaCupom = cobertoPeloBonusTestador ? 0 : custoPedido;
+    const cupomCodigo = cobertoPeloBonusTestador ? "" : normalizarCupomCodigo(req.body?.cupom_codigo);
     let cupomLockAtivo = false;
     let cuponsJogadorEscudo = null;
     let cupomLegacyJogadorEscudo = false;
@@ -14070,7 +14080,7 @@ function criarPedidoHandlerAsync(categoria) {
     }
 
     const cupomAplicado = resultadoCupom.cupomAplicado === true;
-    let custoEfetivoPedido = brindeEscudo3dApp ? 0 : resultadoCupom.valorFinal;
+    let custoEfetivoPedido = resultadoCupom.valorFinal;
     const pedidoElegivelPlano = !cobertoPeloBonusTestador && pedidoElegivelPlanoSemanal(categoria, c, fields);
 
     if (!orderService.hasRequiredOrderFields(fields)) {
@@ -14544,34 +14554,6 @@ function criarPedidoHandlerAsync(categoria) {
         }
 
         orderService.orderStorage.writeOrder(draft.base, draft.pedido);
-      } else if (brindeEscudo3dApp) {
-        const confirmadoEm = new Date().toISOString();
-
-        c.brinde_escudo_login_usado = true;
-        c.brinde_escudo_login_usado_em = confirmadoEm;
-        c.brinde_escudo_login_pedido_id = id;
-        c.brinde_escudo3d_app_usado = true;
-        c.brinde_escudo3d_app_usado_em = confirmadoEm;
-        c.brinde_escudo3d_app_pedido_id = id;
-        c.primeiro_pedido_gratis_tipo = "escudo3d";
-
-        draft.pedido.pagamento_pendente = false;
-        draft.pedido.pagamento_metodo = "brinde_escudo_login";
-        draft.pedido.pagamento_confirmado_em = confirmadoEm;
-        draft.pedido.brinde_escudo3d_app = true;
-        draft.pedido.brinde_escudo_login = true;
-        draft.pedido.pagamento_info = {
-          tipo: "brinde_escudo_login",
-          status: "approved",
-          valor_pago: 0,
-          payment_id: "",
-          whatsapp: whatsapp,
-          pedido_id: id,
-          confirmado_em: confirmadoEm,
-          origem: "escudo_um_por_login"
-        };
-
-        orderService.orderStorage.writeOrder(draft.base, draft.pedido);
       } else if (custoEfetivoPedido > 0) {
         const confirmadoEm = new Date().toISOString();
 
@@ -14828,12 +14810,8 @@ app.post("/cupons/preco", (req, res) => {
         tester_image_bonus: testerSummary, cupom_aplicado: false, desconto: null,
         valor_original: price, valor_desconto: 0, valor_final: 0 });
     }
-    const brindeEscudo3dApp = cliente
-      ? clienteElegivelBrindeEscudo3dApp({ ...req, body }, cliente, whatsapp, categoria)
-      : false;
-    const custoPedido = getCustoPedidoComAdicionais(categoria, cliente, body);
-    const valorOriginal = brindeEscudo3dApp ? 0 : custoPedido;
-    const cupomCodigo = brindeEscudo3dApp ? "" : normalizarCupomCodigo(body.cupom_codigo);
+    const valorOriginal = getCustoPedidoComAdicionais(categoria, cliente, body);
+    const cupomCodigo = normalizarCupomCodigo(body.cupom_codigo);
     let resultadoCupom = validarCupomPedido({
       codigo: cupomCodigo,
       categoria,
@@ -14879,7 +14857,7 @@ app.post("/cupons/preco", (req, res) => {
     return res.json({
       ok: true,
       produto: categoria,
-      brinde_escudo_login: brindeEscudo3dApp,
+      brinde_escudo_login: false,
       coberto_pelo_bonus_testador: false,
       tester_image_bonus: testerSummary,
       cupom_aplicado: resultadoCupom.cupomAplicado === true,

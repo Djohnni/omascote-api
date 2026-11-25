@@ -258,14 +258,15 @@ test("tester promotion isolates five images from payments, video and other quota
     } finally { fs.writeFileSync(store.filePath, original); }
   });
 
-  await t.test("ordinary accounts retain the existing single escudo gift", async () => {
-    await customer("ordinary-gift", { bonus: false, balance: 0 });
-    assert.equal((await quote("ordinary-gift")).json.valor_final, 0);
-    const gifted = await image("ordinary-gift", "ordinary-gift-once");
-    assert.equal(gifted.json.brinde_escudo_login, true);
-    assert.equal(gifted.json.coberto_pelo_bonus_testador, false);
+  await t.test("ordinary accounts see the paid crest and stale gift requests cannot charge", async () => {
+    await customer("ordinary-gift", { bonus: false, balance: 20 });
+    assert.equal((await quote("ordinary-gift")).json.valor_final, 4);
+    const stale = await image("ordinary-gift", "ordinary-gift-once", {}, {brinde_escudo_login:"1"});
+    assert.equal(stale.status, 409);
+    assert.equal(stale.json.code, "IMAGE_BONUS_UNAVAILABLE");
+    assert.equal(readClients()["ordinary-gift"].saldo_extra, 20);
     const next = await image("ordinary-gift", "ordinary-gift-next");
-    assert.equal(next.json.pagamento_pendente, true);
+    assert.equal(next.json.valor_final, 4);
     assert.equal(next.json.brinde_escudo_login, false);
   });
 
