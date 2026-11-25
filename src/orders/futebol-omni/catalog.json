@@ -1,0 +1,363 @@
+[
+  {
+    "code": "P1",
+    "product": "proximo_jogo",
+    "kind": "mask",
+    "act": "mascote",
+    "title": "Próximo Jogo · mascote enviado",
+    "options": [
+      {
+        "id": "P1-A",
+        "title": "Duplo impacto no chão",
+        "cents": 2390
+      },
+      {
+        "id": "P1-B",
+        "title": "O desafio à torcida",
+        "cents": 2190
+      }
+    ]
+  },
+  {
+    "code": "P2",
+    "product": "proximo_jogo",
+    "kind": "person",
+    "act": "jogador",
+    "title": "Próximo Jogo · foto do jogador",
+    "options": [
+      {
+        "id": "P2-A",
+        "title": "Luz de túnel no uniforme",
+        "cents": 1990
+      },
+      {
+        "id": "P2-B",
+        "title": "Os dois lados do confronto",
+        "cents": 2090
+      }
+    ]
+  },
+  {
+    "code": "P3",
+    "product": "proximo_jogo",
+    "kind": "team",
+    "act": "time",
+    "title": "Próximo Jogo · foto do time",
+    "options": [
+      {
+        "id": "P3-A",
+        "title": "Acendimento da arquibancada",
+        "cents": 2190
+      },
+      {
+        "id": "P3-B",
+        "title": "Vento nas cores do confronto",
+        "cents": 2090
+      }
+    ]
+  },
+  {
+    "code": "P4",
+    "product": "proximo_jogo",
+    "kind": "bare",
+    "act": "sem",
+    "title": "Próximo Jogo · somente escudos",
+    "options": [
+      {
+        "id": "P4-A",
+        "title": "Escudos plantados no campo",
+        "cents": 2090
+      },
+      {
+        "id": "P4-B",
+        "title": "Encontro no X",
+        "cents": 1890
+      }
+    ]
+  },
+  {
+    "code": "P5",
+    "product": "proximo_jogo",
+    "kind": "desc",
+    "act": "mascote",
+    "title": "Próximo Jogo · mascote por descrição",
+    "options": [
+      {
+        "id": "P5-A",
+        "title": "A cravada alternada",
+        "cents": 2490
+      },
+      {
+        "id": "P5-B",
+        "title": "O duelo anunciado",
+        "cents": 2290
+      }
+    ]
+  },
+  {
+    "code": "R1",
+    "product": "resultado",
+    "kind": "mask",
+    "act": "mascote",
+    "title": "Resultado do Jogo · mascote enviado",
+    "options": [
+      {
+        "id": "R1-A",
+        "title": "Batida de fim de jogo",
+        "cents": 2490
+      },
+      {
+        "id": "R1-B",
+        "title": "Escudos em apresentação",
+        "cents": 2290
+      }
+    ]
+  },
+  {
+    "code": "R2",
+    "product": "resultado",
+    "kind": "person",
+    "act": "jogador",
+    "title": "Resultado do Jogo · foto do jogador",
+    "options": [
+      {
+        "id": "R2-A",
+        "title": "Eco do apito final",
+        "cents": 2090
+      },
+      {
+        "id": "R2-B",
+        "title": "Vento depois do jogo",
+        "cents": 2190
+      }
+    ]
+  },
+  {
+    "code": "R3",
+    "product": "resultado",
+    "kind": "team",
+    "act": "time",
+    "title": "Resultado do Jogo · foto do time",
+    "options": [
+      {
+        "id": "R3-A",
+        "title": "Luzes da torcida ao fundo",
+        "cents": 2290
+      },
+      {
+        "id": "R3-B",
+        "title": "Destaque sob o resultado",
+        "cents": 2190
+      }
+    ]
+  },
+  {
+    "code": "R4",
+    "product": "resultado",
+    "kind": "bare",
+    "act": "sem",
+    "title": "Resultado do Jogo · somente escudos",
+    "options": [
+      {
+        "id": "R4-A",
+        "title": "O apito sela o placar",
+        "cents": 1990
+      },
+      {
+        "id": "R4-B",
+        "title": "Grama marcada pelos escudos",
+        "cents": 2190
+      }
+    ]
+  },
+  {
+    "code": "R5",
+    "product": "resultado",
+    "kind": "desc",
+    "act": "mascote",
+    "title": "Resultado do Jogo · mascote por descrição",
+    "options": [
+      {
+        "id": "R5-A",
+        "title": "Os escudos em descanso",
+        "cents": 2290
+      },
+      {
+        "id": "R5-B",
+        "title": "Abertura do placar",
+        "cents": 2390
+      }
+    ]
+  },
+  {
+    "code": "A1",
+    "product": "proximo_jogo_jogador",
+    "kind": "ath",
+    "act": "jogador",
+    "title": "Próximo Jogo · produto Atleta",
+    "options": [
+      {
+        "id": "A1-A",
+        "title": "Retrato sob o refletor",
+        "cents": 1990
+      },
+      {
+        "id": "A1-B",
+        "title": "Corrida de luz até o horário",
+        "cents": 2090
+      }
+    ]
+  },
+  {
+    "code": "A2",
+    "product": "resultado_jogo_jogador",
+    "kind": "ath",
+    "act": "jogador",
+    "title": "Resultado · produto Atleta",
+    "options": [
+      {
+        "id": "A2-A",
+        "title": "Assinatura de pós-jogo",
+        "cents": 2090
+      },
+      {
+        "id": "A2-B",
+        "title": "Duas zonas de luz",
+        "cents": 2190
+      }
+    ]
+  },
+  {
+    "code": "J1",
+    "product": "jogador_escudo",
+    "kind": "ath",
+    "act": "jogador",
+    "title": "Jogador + Escudo",
+    "options": [
+      {
+        "id": "J1-A",
+        "title": "Relevo do escudo",
+        "cents": 1890
+      },
+      {
+        "id": "J1-B",
+        "title": "A camisa ganha vento",
+        "cents": 1990
+      }
+    ]
+  },
+  {
+    "code": "E1",
+    "product": "escalacao",
+    "kind": "team",
+    "act": "time",
+    "title": "Escalação · com foto do time",
+    "options": [
+      {
+        "id": "E1-A",
+        "title": "A lista ganha a luz do estádio",
+        "cents": 2390
+      },
+      {
+        "id": "E1-B",
+        "title": "A equipe sob os refletores",
+        "cents": 2490
+      }
+    ]
+  },
+  {
+    "code": "E2",
+    "product": "escalacao",
+    "kind": "bare",
+    "act": "sem",
+    "title": "Escalação · sem foto do time",
+    "options": [
+      {
+        "id": "E2-A",
+        "title": "Leitura de cima a baixo",
+        "cents": 2190
+      },
+      {
+        "id": "E2-B",
+        "title": "A área técnica acende",
+        "cents": 2290
+      }
+    ]
+  },
+  {
+    "code": "C1",
+    "product": "contratacao",
+    "kind": "hired",
+    "act": "jogador",
+    "title": "Contratação · CONTRATADO",
+    "options": [
+      {
+        "id": "C1-A",
+        "title": "Apresentação do reforço",
+        "cents": 2090
+      },
+      {
+        "id": "C1-B",
+        "title": "Entrada nas cores do clube",
+        "cents": 2190
+      }
+    ]
+  },
+  {
+    "code": "C2",
+    "product": "contratacao",
+    "kind": "renew",
+    "act": "jogador",
+    "title": "Renovação · RENOVADO",
+    "options": [
+      {
+        "id": "C2-A",
+        "title": "O vínculo continua",
+        "cents": 2190
+      },
+      {
+        "id": "C2-B",
+        "title": "A faixa de renovação",
+        "cents": 2090
+      }
+    ]
+  },
+  {
+    "code": "S1",
+    "product": "patrocinador",
+    "kind": "one",
+    "act": "sem",
+    "title": "Patrocinadores · uma marca",
+    "options": [
+      {
+        "id": "S1-A",
+        "title": "A marca no foco",
+        "cents": 1890
+      },
+      {
+        "id": "S1-B",
+        "title": "Ponte entre clube e patrocinador",
+        "cents": 1990
+      }
+    ]
+  },
+  {
+    "code": "S2",
+    "product": "patrocinador",
+    "kind": "many",
+    "act": "sem",
+    "title": "Patrocinadores · várias marcas",
+    "options": [
+      {
+        "id": "S2-A",
+        "title": "Apoio em sequência",
+        "cents": 2490
+      },
+      {
+        "id": "S2-B",
+        "title": "O painel inteiro se ilumina",
+        "cents": 2390
+      }
+    ]
+  }
+]
