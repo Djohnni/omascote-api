@@ -1,4 +1,5 @@
 const fs = require("node:fs/promises");
+const { openAsBlob } = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const { spawnSync } = require("node:child_process");
@@ -18,23 +19,43 @@ function buildPrompt(order) {
   return result.stdout;
 }
 
-async function prepare(base, order) {
-  if (catalog.owns(order)) return catalog.prepare(base, order);
+async function prepare(base, order, scratch) {
+  if (catalog.owns(order)) return catalog.prepare(base, order, scratch);
   const form = new FormData();
   for (const [key, value] of Object.entries({
     model, prompt: buildPrompt(order), size: "864x1536", quality: "medium", output_format: "jpeg", n: "1",
   })) form.append(key, value);
   for (const [field, filename] of [["mascote", "mascote.png"], ["escudo1", "escudo1.png"]]) {
-    const bytes = await fs.readFile(path.join(base, filename));
+    const source = await openAsBlob(path.join(base, filename));
+    const bytes = Buffer.from(await source.arrayBuffer());
     const expected = order.idempotency_input_files?.find(f => f.field === field && f.index === 0);
     if (expected?.sha256 && crypto.createHash("sha256").update(bytes).digest("hex") !== expected.sha256) {
       throw new Error("referencia_alterada");
     }
     const { format } = await sharp(bytes, { limitInputPixels: 60000000 }).metadata();
     if (!mime[format]) throw new Error("referencia_invalida");
-    form.append("image[]", new Blob([bytes], { type: mime[format] }), field + "." + format);
+    form.append("image[]", source.slice(0, source.size, mime[format]), field + "." + format);
   }
   return form;
+}
+
+function retryDelay(headers) {
+  const ms = headers.get("retry-after-ms");
+  if (ms !== null && Number.isFinite(Number(ms)) && Number(ms) > 0) return Math.ceil(Number(ms));
+  const value = headers.get("retry-after");
+  if (value) {
+    const delay = /^\d+(?:\.\d+)?$/.test(value) ? Number(value) * 1000 : Date.parse(value) - Date.now();
+    if (Number.isFinite(delay) && delay >= 0) return Math.ceil(delay);
+  }
+  const units = { d: 86400000, h: 3600000, m: 60000, s: 1000, ms: 1 };
+  const delays = ["images", "requests", "tokens"].map(resource => {
+    const reset = headers.get("x-ratelimit-reset-" + resource) || "";
+    if (Number(headers.get("x-ratelimit-remaining-" + resource)) > 0 ||
+        !/^(?:\d+(?:\.\d+)?(?:ms|[dhms]))+$/.test(reset)) return 0;
+    return [...reset.matchAll(/(\d+(?:\.\d+)?)(ms|[dhms])/g)]
+      .reduce((total, [, count, unit]) => total + Number(count) * units[unit], 0);
+  });
+  return Math.ceil(Math.max(...delays));
 }
 
 async function generate(form) {
@@ -51,7 +72,16 @@ async function generate(form) {
   const response = await fetch("https://api.openai.com/v1/images/" + endpoint, {
     method: "POST", headers, body, signal: AbortSignal.timeout(300000),
   });
-  if (!response.ok) throw new Error("openai_http_" + response.status);
+  if (!response.ok) {
+    const error = new Error("openai_http_" + response.status);
+    if (response.status === 429) {
+      const info = (await response.json().catch(() => null))?.error;
+      const quota = ["insufficient_quota", "billing_hard_limit_reached"];
+      error.rateLimited = !quota.includes(info?.code) && !quota.includes(info?.type);
+      error.retryAfterMs = retryDelay(response.headers);
+    }
+    throw error;
+  }
   const payload = await response.json();
   const encoded = payload.data?.[0]?.b64_json;
   if (typeof encoded !== "string" || !encoded.length) throw new Error("openai_sem_imagem");

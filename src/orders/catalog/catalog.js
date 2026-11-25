@@ -77,7 +77,7 @@ function inputIdentity(name) {
   throw new Error("referencia_invalida");
 }
 
-async function prepare(base, order) {
+async function prepare(base, order, scratch) {
   const plan = await desktop("prepare", base, {order});
   const form = new FormData();
   for (const [key,value] of Object.entries({model:plan.model, size:plan.size, quality:plan.quality,
@@ -86,7 +86,8 @@ async function prepare(base, order) {
     const [field, index] = inputIdentity(name);
     const filename = path.join(base,name);
     if (!(await fs.promises.lstat(filename)).isFile()) throw new Error("referencia_invalida");
-    const bytes = await fs.promises.readFile(filename);
+    const source = await fs.openAsBlob(filename);
+    const bytes = Buffer.from(await source.arrayBuffer());
     const expected = order.idempotency_input_files?.find(f => f.field === field && f.index === index);
     if (!expected?.sha256 || createHash("sha256").update(bytes).digest("hex") !== expected.sha256)
       throw new Error("referencia_alterada");
@@ -95,9 +96,19 @@ async function prepare(base, order) {
     if (!["png","jpeg","webp"].includes(format)) throw new Error("referencia_invalida");
     // Desktop preprocessing preserves crests, including transparency, and submits other references as RGB PNG.
     const preserve = field === "escudo1" || field === "escudo2";
-    const data = preserve ? bytes : await input.removeAlpha().toColourspace("srgb").png().toBuffer();
     const ext = preserve ? format : "png";
-    form.append("image[]", new Blob([data], {type:"image/" + ext}), name.replace(/\.png$/, "." + ext));
+    let blob = source.slice(0, source.size, "image/" + ext);
+    if (!preserve) {
+      const conversion = input.removeAlpha().toColourspace("srgb").png();
+      if (scratch) {
+        const file = path.join(scratch, name);
+        await conversion.toFile(file);
+        blob = await fs.openAsBlob(file, { type: "image/png" });
+      } else {
+        blob = new Blob([await conversion.toBuffer()], { type: "image/png" });
+      }
+    }
+    form.append("image[]", blob, name.replace(/\.png$/, "." + ext));
   }
   form.artLines = plan.lines;
   return form;

@@ -8799,13 +8799,14 @@ app.use(createHealthRouter({
     const database = operationallyRequired
       ? await checkDatabase(radarPool)
       : { ok: false, reason: "not_required" };
-    return weeklyPlansReadiness({
+    const readiness = weeklyPlansReadiness({
       requested: operationallyRequired,
       database,
       paymentProcessingEnabled: WEEKLY_PLAN_PAYMENT_PROCESSING_ENABLED,
       webhookProcessingEnabled: WEEKLY_PLAN_WEBHOOK_PROCESSING_ENABLED,
       purchasesEnabled: WEEKLY_PLAN_PURCHASES_ENABLED
     });
+    return { ...readiness, details: { ...readiness.details, image_queue_concurrency: playerCrestQueue.configuredConcurrency() } };
   }
 }));
 app.use(radarObservability.metricsRouter({
@@ -17253,13 +17254,17 @@ if (require.main === module) {
     );
     retentionTimer.unref?.();
   }
-  app.listen(PORT, () => {
+  const server = app.listen(PORT, () => {
     console.log("API rodando na porta", PORT);
     runRadarAutomaticBackfill().catch(error => {
       radarLogger.error?.("[RADAR_ACCOUNT_SYNC] backfill failed", {
         error: error?.name || "Error"
       });
     });
+  });
+  process.once("SIGTERM", () => {
+    const closed = new Promise(resolve => server.close(resolve));
+    Promise.all([closed, playerCrestQueue.stop()]).then(() => process.exit(0));
   });
 }
 

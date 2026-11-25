@@ -117,6 +117,13 @@ test("tester promotion isolates five images from payments, video and other quota
       const generate = renderer.generate;
       const sharp = require("sharp");
       try {
+        renderer.generate = async () => { throw Object.assign(new Error("openai_http_429"),
+          { rateLimited: true, retryAfterMs: 20 }); };
+        await cloudQueue.tick();
+        assert.equal(store.getSummary(owner).remaining, 4);
+        assert.equal((await create("image")).json.pedido_id, id);
+        assert.equal(store.getSummary(owner).remaining, 4);
+        await new Promise(resolve => setTimeout(resolve, 25));
         renderer.generate = async () => sharp({ create: { width: 540, height: 960, channels: 3,
           background: "#146831" } }).jpeg().toBuffer();
         await cloudQueue.tick();

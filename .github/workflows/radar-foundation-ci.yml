@@ -48,5 +48,7 @@ jobs:
           npm run db:migrate
           npm run db:migrate
       - run: npm test
+      - name: Test shared image queue offline
+        run: node --test test-image-queue.js test-player-crest-cloud.js
       - name: Validate mascot and crest video contracts and product isolation
         run: node --test test-escudo3d-omni.js test-mascot-omni.js test-multi-product-scenarios.js
