@@ -2,10 +2,11 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { createHash, randomUUID } = require("node:crypto");
 const image = require("./image");
+const catalog = require("../catalog/catalog");
 
 const executor = "openai_jogador_escudo_v1";
 const activationFile = dir => path.join(dir, executor + ".verified");
-const owns = order => order?.image_executor === executor && order.categoria === "jogador_escudo";
+const owns = order => (order?.image_executor === executor && order.categoria === "jogador_escudo") || catalog.owns(order);
 const revision = order => order.ajuste_solicitado_em || "original";
 const readyStates = new Set(["novo", "ajuste_pendente", "em_producao"]);
 
@@ -67,17 +68,23 @@ function createQueue({ dir, readOrder, writeOrder, readStatus, writeStatus, auth
         if (!await authorized()) return;
         writeStatus(base, "em_producao");
         // A crash after submission cannot safely be retried as a new paid edit.
+        if (Array.isArray(form.artLines)) job.lines = form.artLines;
         savePhase("submitted");
         replace(raw, await renderer.generate(form));
       }
       const { result, preview } = await renderer.makeOutputs(fs.readFileSync(raw));
       if (!await authorized()) return;
+      if (job.lines && job.caption === undefined && renderer.caption) {
+        job.caption = await renderer.caption(base, order, job.lines).catch(() => "");
+        savePhase("rendered");
+        if (!await authorized()) return;
+      }
       order = readOrder(base);
       replace(path.join(base, "preview_ia4tube.jpg"), preview);
       replace(path.join(base, "resultado_final.png"), result);
       writeOrder(base, { ...order, status: "pronto", aprovado_cliente: false, baixado_cliente: false,
         image_delivered_revision: rev, resultado_enviado_em: new Date().toISOString(),
-        descricao_instagram: order.descricao_instagram || String(order.fields?.player_name || order.data || "") });
+        descricao_instagram: job.caption || order.descricao_instagram || String(order.fields?.player_name || order.data || "") });
       writeStatus(base, "pronto");
       fs.rmSync(path.join(base, "ajuste_pendente.txt"), { force: true });
       finish();

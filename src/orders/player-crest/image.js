@@ -3,6 +3,7 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const { spawnSync } = require("node:child_process");
 const sharp = require("sharp");
+const catalog = require("../catalog/catalog");
 
 const model = "gpt-image-2.5-sunburst";
 const mime = { png: "image/png", jpeg: "image/jpeg", webp: "image/webp" };
@@ -18,6 +19,7 @@ function buildPrompt(order) {
 }
 
 async function prepare(base, order) {
+  if (catalog.owns(order)) return catalog.prepare(base, order);
   const form = new FormData();
   for (const [key, value] of Object.entries({
     model, prompt: buildPrompt(order), size: "864x1536", quality: "medium", output_format: "jpeg", n: "1",
@@ -38,9 +40,16 @@ async function prepare(base, order) {
 async function generate(form) {
   const key = process.env.PLAYER_CREST_OPENAI_API_KEY?.trim();
   if (!key) throw new Error("credencial_indisponivel");
-  const response = await fetch("https://api.openai.com/v1/images/edits", {
-    method: "POST", headers: { Authorization: "Bearer " + key },
-    body: form, signal: AbortSignal.timeout(300000),
+  const editing = form.has("image[]");
+  const headers = { Authorization: "Bearer " + key };
+  let body = form;
+  if (!editing) {
+    headers["Content-Type"] = "application/json";
+    body = JSON.stringify({ ...Object.fromEntries(form), n: 1 });
+  }
+  const endpoint = editing ? "edits" : "generations";
+  const response = await fetch("https://api.openai.com/v1/images/" + endpoint, {
+    method: "POST", headers, body, signal: AbortSignal.timeout(300000),
   });
   if (!response.ok) throw new Error("openai_http_" + response.status);
   const payload = await response.json();
@@ -62,4 +71,4 @@ async function makeOutputs(bytes) {
   return { preview, result: await input.png().toBuffer() };
 }
 
-module.exports = { model, buildPrompt, prepare, generate, makeOutputs };
+module.exports = { model, buildPrompt, prepare, generate, makeOutputs, caption: catalog.caption };

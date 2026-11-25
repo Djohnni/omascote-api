@@ -130,6 +130,36 @@ test("tester promotion isolates five images from payments, video and other quota
     } finally { delete process.env.PLAYER_CREST_OPENAI_API_KEY; }
   });
 
+  await t.test("catálogo verificado reserva a arte uma vez e deixa o vídeo na fila do PC", async () => {
+    const catalog = require("./src/orders/catalog/catalog");
+    const marker = catalog.activationFile(dataDir);
+    const originalReady = catalog.ready;
+    const owner = "catalog-escudo";
+    await customer(owner);
+    fs.writeFileSync(marker, "verified");
+    process.env.PLAYER_CREST_OPENAI_API_KEY = "offline-test-only";
+    catalog.ready = () => true;
+    try {
+      const first = await image(owner, "catalog-image-001");
+      assert.equal(first.status, 200, first.text);
+      const existing = saved(owner, "catalog-image-001");
+      assert.equal(existing.pedido.image_executor, catalog.executor);
+      assert.equal((await image(owner, "catalog-image-001")).json.pedido_id, first.json.pedido_id);
+      assert.equal(store.getSummary(owner).remaining, 4);
+      const listed = await api("tester-integration-bot", "/bot/pedidos/novos");
+      assert.equal(listed.json.pedidos.some(p => p.id === existing.pedido.id), false);
+      assert.equal((await api("tester-integration-bot", "/bot/pedidos/" + existing.pedido.id + "/zip")).status, 409);
+      const video = await image(owner, "catalog-video-001", {delivery_mode:"image_video", video_model:"fast"});
+      assert.equal(video.status, 200, video.text);
+      assert.equal(saved(owner, "catalog-video-001").pedido.image_executor, undefined);
+      assert.equal(store.getSummary(owner).remaining, 4);
+    } finally {
+      catalog.ready = originalReady;
+      fs.rmSync(marker, { force:true });
+      delete process.env.PLAYER_CREST_OPENAI_API_KEY;
+    }
+  });
+
   await t.test("unknown login keeps its existing unauthorized response and empty credentials remain invalid", async () => {
     for (const identifier of ["unknown-existing-format", "unknown.campaign@gmail.com"]) {
       const response = await api(null, "/auth/login", { whatsapp: identifier, senha: "local-unknown-password" });

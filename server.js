@@ -11,6 +11,7 @@ const productsRegistry = require("./src/products");
 const orderStorage = require("./src/orders/order.storage");
 const orderStatus = require("./src/orders/order.status");
 const playerCrest = require("./src/orders/player-crest/queue");
+const imageCatalog = require("./src/orders/catalog/catalog");
 const orderService = require("./src/orders/order.service");
 const productAuditService = require("./src/orders/product-audit.service");
 const resultScenarioRegistry = require("./src/orders/result-scenario-registry");
@@ -13753,12 +13754,22 @@ function criarPedidoHandlerAsync(categoria) {
       });
     }
 
-    const cloudImage = categoria === "jogador_escudo" &&
-      normalizarDeliveryMode(fields.new_model?.fields?.delivery_mode) === "image" &&
+    const imageMode = normalizarDeliveryMode(fields.new_model?.fields?.delivery_mode);
+    const structuredImage = fields.new_model?.fields || {};
+    const productMatches = !fields.new_model?.product_id || fields.new_model.product_id === categoria;
+    const implicitImage = imageMode === "" && Number(fields.new_model?.schema_version) >= 2 &&
+      imageCatalog.supported(categoria) && !req.body?.video_model && !req.body?.video_generation &&
+      !req.body?.delivery_mode && !structuredImage.video_generation;
+    // The retired tournament's signed links can still produce local commission records.
+    const tournamentCommission = ["resultado", "proximo_jogo"].includes(categoria) &&
+      String(structuredImage.comissao_origem || structuredImage.commission_source || "").toLowerCase() === "copacolombia";
+    const eligibleImage = (imageMode === "image" || implicitImage) && productMatches && !tournamentCommission &&
       internalVeoOrder.patch?.video_generation?.requested !== true &&
       process.env.PLAYER_CREST_CLOUD_ENABLED !== "false" && Boolean(process.env.PLAYER_CREST_OPENAI_API_KEY?.trim()) &&
       fs.existsSync(playerCrest.activationFile(DATA_DIR));
-    if (cloudImage && (!files.mascote?.[0] || !files.escudo1?.[0] ||
+    const cloudExecutor = eligibleImage && (categoria === "jogador_escudo" ? playerCrest.executor :
+      imageCatalog.ready() && imageCatalog.supported(categoria) && fs.existsSync(imageCatalog.activationFile(DATA_DIR)) && imageCatalog.executor);
+    if (cloudExecutor === playerCrest.executor && (!files.mascote?.[0] || !files.escudo1?.[0] ||
         !String(fields.new_model.fields.player_name || fields.new_model.fields.players?.[0]?.nome || fields.data || "").trim())) {
       limparUploadsTemporarios(files);
       return res.status(400).json({ ok: false, error: "Envie o nome, a foto do jogador e o escudo do time." });
@@ -14416,7 +14427,7 @@ function criarPedidoHandlerAsync(categoria) {
         })
       : null;
     const initialOrderPatch = {
-      ...(cloudImage ? { image_executor: playerCrest.executor } : {}),
+      ...(cloudExecutor ? { image_executor: cloudExecutor } : {}),
       ...(planoOrderPatch || {}),
       ...(cobertoPeloBonusTestador ? buildTesterBonusCoveredOrderPatch({
         customerKey: testerCustomerKey, reservation: testerBonusReservation, value: custoPedido
@@ -17229,6 +17240,9 @@ async function runProfilePrintRetentionCleanup() {
 }
 
 if (require.main === module) {
+  imageCatalog.initialize().then(ready => {
+    if (ready) console.log("[artes] Catalogo iA4Tube verificado:", imageCatalog.productIds.join(","));
+  }).catch(() => console.error("[artes] Catalogo indisponivel para novos pedidos"));
   playerCrestQueue.start();
   setInterval(finalizarConversasSuporteInativas, 60 * 1000);
   if (radarConfig.enabled && radarConfig.profilePrintImportEnabled && radarPool) {
