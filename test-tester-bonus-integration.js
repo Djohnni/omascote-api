@@ -94,6 +94,7 @@ test("tester promotion isolates five images from payments, video and other quota
     const owner = "jogador-cloud-integration";
     await customer(owner);
     process.env.PLAYER_CREST_OPENAI_API_KEY = "offline-fixture";
+    fs.writeFileSync(cloudModule.activationFile(dataDir), "verified in fixture");
     try {
       const create = mode => injectRequest(app, { method: "POST", path: "/pedidos", headers: headers(owner), multipart: {
         fields: { flyer_tipo: "jog_escudo", product_id: "jogador_escudo", schema_version: "2",

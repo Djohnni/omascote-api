@@ -4,6 +4,7 @@ const { createHash, randomUUID } = require("node:crypto");
 const image = require("./image");
 
 const executor = "openai_jogador_escudo_v1";
+const activationFile = dir => path.join(dir, executor + ".verified");
 const owns = order => order?.image_executor === executor && order.categoria === "jogador_escudo";
 const revision = order => order.ajuste_solicitado_em || "original";
 const readyStates = new Set(["novo", "ajuste_pendente", "em_producao"]);
@@ -108,4 +109,4 @@ function createQueue({ dir, readOrder, writeOrder, readStatus, writeStatus, auth
   return { enqueue, tick, start };
 }
 
-module.exports = { createQueue, owns, executor };
+module.exports = { createQueue, owns, executor, activationFile };

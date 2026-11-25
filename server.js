@@ -13756,7 +13756,8 @@ function criarPedidoHandlerAsync(categoria) {
     const cloudImage = categoria === "jogador_escudo" &&
       normalizarDeliveryMode(fields.new_model?.fields?.delivery_mode) === "image" &&
       internalVeoOrder.patch?.video_generation?.requested !== true &&
-      process.env.PLAYER_CREST_CLOUD_ENABLED !== "false" && Boolean(process.env.PLAYER_CREST_OPENAI_API_KEY?.trim());
+      process.env.PLAYER_CREST_CLOUD_ENABLED !== "false" && Boolean(process.env.PLAYER_CREST_OPENAI_API_KEY?.trim()) &&
+      fs.existsSync(playerCrest.activationFile(DATA_DIR));
     if (cloudImage && (!files.mascote?.[0] || !files.escudo1?.[0] ||
         !String(fields.new_model.fields.player_name || fields.new_model.fields.players?.[0]?.nome || fields.data || "").trim())) {
       limparUploadsTemporarios(files);
