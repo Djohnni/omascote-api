@@ -12,6 +12,8 @@ for (const row of catalog) {
     const order={...fields,futebol_scene:option.id};
     assert.equal(quote(row.product,order,files),option.cents);
     assert.equal(contract(option.id).resolution,'720p');
+    assert.equal(contract(option.id).reference_mode,'initial_only');
+    assert.equal(contract(option.id).prompt_version,'football_field_v2');
     assert.throws(()=>quote('escudo3d',order,files));
     assert.throws(()=>quote(row.product,{...order,sport:'Vôlei'},files));
     if(row.kind==='many') assert.equal(quote(row.product,order,{patrocinadores:Array(18)}),option.cents+300);

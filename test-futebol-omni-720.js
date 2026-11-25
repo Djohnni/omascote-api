@@ -88,6 +88,8 @@ test("pilot catalog, quote, paid order, scene integrity and retry use real route
         assert.equal(saved.pedido.fields.futebol_scene,option.id);
         assert.equal(saved.pedido.video_generation.scene_id,option.id);
         assert.equal(saved.pedido.video_generation.resolution,"720p");
+        assert.equal(saved.pedido.video_generation.reference_mode,"initial_only");
+        assert.equal(saved.pedido.video_generation.prompt_version,"football_field_v2");
         assert.equal(saved.pedido.video_generation.duration_seconds,10);
         assert.equal(saved.pedido.image_executor,undefined);
         assert.equal(Number((before-balance()).toFixed(2)),fields.futebol_price_cents/100);
@@ -95,25 +97,27 @@ test("pilot catalog, quote, paid order, scene integrity and retry use real route
         assert.equal(Number((before-balance()).toFixed(2)),fields.futebol_price_cents/100);
       }
     });
-    await t.test("historical 360p stays ready and downloadable after the new default",async()=>{
+    for (const resolution of ["360p","720p"]) await t.test(`historical ${resolution} stays ready and downloadable without acquiring new metadata`,async()=>{
       const row=catalog.find(r=>r.code==="P1"), {fields,files}=fixture(row,row.options[0]);
       const before=balance();
-      const response=await create(row,fields,files,"football-history-360");
+      const response=await create(row,fields,files,`football-history-${resolution}`);
       assert.equal(response.status,200,response.text);
-      const saved=storage.findPedidoByClientRequestId(path.join(dataDir,"pedidos"),owner,"football-history-360");
+      const saved=storage.findPedidoByClientRequestId(path.join(dataDir,"pedidos"),owner,`football-history-${resolution}`);
       const filename=path.join(saved.base,"pedido.json");
       const old={...saved.pedido,aprovado_cliente:true,pagamento_pendente:false,status:"pronto",
-        video_generation:{...saved.pedido.video_generation,resolution:"360p",status:"ready",ready:true}};
+        video_generation:{...saved.pedido.video_generation,resolution,status:"ready",ready:true}};
+      delete old.video_generation.reference_mode;
+      delete old.video_generation.prompt_version;
       fs.writeFileSync(filename,JSON.stringify(old));
       fs.writeFileSync(path.join(saved.base,"status.txt"),"pronto");
       const mp4=Buffer.from([0,0,0,24,0x66,0x74,0x79,0x70,0x69,0x73,0x6f,0x6d]);
       fs.writeFileSync(path.join(saved.base,"resultado_video.mp4"),mp4);
       const historicalContract=old.video_generation;
       assert.equal((await request(`/pedidos/${saved.id}/info`)).json.video_pronto,true);
-      assert.equal((await request(`/pedidos/${saved.id}/info`)).json.video_generation.resolution,"360p");
+      assert.equal((await request(`/pedidos/${saved.id}/info`)).json.video_generation.resolution,resolution);
       const listed=(await request("/meus-pedidos")).json.pedidos.find(order=>order.id===saved.id);
       assert.equal(listed.video_pronto,true);
-      assert.equal(listed.video_generation.resolution,"360p");
+      assert.equal(listed.video_generation.resolution,resolution);
       const ticket=await request(`/pedidos/${saved.id}/download-ticket`,{formato:"video",transporte:"https"});
       assert.equal(ticket.status,200,ticket.text);
       assert.equal(ticket.json.video_duration_seconds,10);
@@ -121,10 +125,11 @@ test("pilot catalog, quote, paid order, scene integrity and retry use real route
       assert.equal(downloaded.status,200);
       assert.match(downloaded.headers["content-type"],/video\/mp4/);
       assert.deepEqual(JSON.parse(fs.readFileSync(filename)).video_generation,historicalContract);
-      // Same request ID replays the 360p historical order without changing contract or charging again.
-      assert.equal((await create(row,fields,files,"football-history-360")).status,200);
+      // Same request ID replays the historical contract without adding metadata or charging again.
+      assert.equal((await create(row,fields,files,`football-history-${resolution}`)).status,200);
       assert.equal(Math.round((before-balance())*100),fields.futebol_price_cents);
-      assert.equal(JSON.parse(fs.readFileSync(filename)).video_generation.resolution,"360p");
+      assert.equal(JSON.parse(fs.readFileSync(filename)).video_generation.resolution,resolution);
+      assert.deepEqual(JSON.parse(fs.readFileSync(filename)).video_generation,historicalContract);
     });
     await t.test("stale price, mismatched assets and customer cannot create scene",async()=>{
       const row=catalog.find(r=>r.code==="P1"), {fields,files}=fixture(row,row.options[0]);
