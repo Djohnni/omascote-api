@@ -45,12 +45,15 @@ Module._load = function(request, parent, isMain) {
   if (request === "pg") return { Pool: class { constructor() { throw new Error("Unexpected PostgreSQL use in offline tester-bonus fixture"); } } };
   return load.call(this, request, parent, isMain);
 };
-let app, resetDedupe;
+const cloudModule = require("./src/orders/player-crest/queue");
+const createCloudQueue = cloudModule.createQueue;
+let app, resetDedupe, cloudQueue;
+cloudModule.createQueue = options => (cloudQueue = createCloudQueue(options));
 try {
   const serverModule = require("./server");
   app = serverModule.app;
   resetDedupe = serverModule.__resultadoScenarioTest.resetDedupe;
-} finally { Module._load = load; }
+} finally { Module._load = load; cloudModule.createQueue = createCloudQueue; }
 const { injectRequest } = require("./test-support/inject-request");
 const orderService = require("./src/orders/order.service");
 const orderStorage = require("./src/orders/order.storage");
@@ -86,6 +89,45 @@ function quote(owner, extra = {}) { return api(owner, "/cupons/preco", { product
 
 test("tester promotion isolates five images from payments, video and other quotas", async t => {
   await customer("tester-integration-bot", { bonus: false });
+
+  await t.test("Jogador + Escudo envia somente imagens novas à fila da API", async () => {
+    const owner = "jogador-cloud-integration";
+    await customer(owner);
+    process.env.PLAYER_CREST_OPENAI_API_KEY = "offline-fixture";
+    try {
+      const create = mode => injectRequest(app, { method: "POST", path: "/pedidos", headers: headers(owner), multipart: {
+        fields: { flyer_tipo: "jog_escudo", product_id: "jogador_escudo", schema_version: "2",
+          rodada: "Jogador + Escudo", data: "Atleta", client_request_id: "jogador-cloud-" + mode,
+          fields_json: JSON.stringify({ delivery_mode: mode, sport: "Futebol", player_name: "Atleta" }) },
+        files: ["mascote", "escudo1"].map(field => ({ field, filename: field + ".png", contentType: "image/png", data: png }))
+      } });
+      const response = await create("image");
+      assert.equal(response.status, 200, response.text);
+      const { id, pedido } = saved(owner, "jogador-cloud-image");
+      assert.equal(pedido.image_executor, require("./src/orders/player-crest/queue").executor);
+      assert.equal((await create("image")).status, 200);
+      assert.equal(store.getSummary(owner).remaining, 4);
+      assert.equal(fs.readdirSync(path.join(dataDir, "fila_jogador_escudo")).length, 1);
+      const listed = await api("tester-integration-bot", "/bot/pedidos/novos");
+      assert.equal(listed.json.pedidos.some(p => p.id === id), false);
+      assert.equal((await api("tester-integration-bot", "/bot/pedidos/" + id + "/zip")).status, 409);
+      assert.equal((await api(owner, "/pedidos/" + id + "/status", { status: "novo" })).status, 409);
+      const renderer = require("./src/orders/player-crest/image");
+      const generate = renderer.generate;
+      const sharp = require("sharp");
+      try {
+        renderer.generate = async () => sharp({ create: { width: 540, height: 960, channels: 3,
+          background: "#146831" } }).jpeg().toBuffer();
+        await cloudQueue.tick();
+      } finally { renderer.generate = generate; }
+      assert.equal(orderStorage.readStatus(saved(owner, "jogador-cloud-image").base), "pronto");
+      assert.equal((await api(owner, "/pedidos/" + id + "/aprovar", {})).status, 200);
+      assert.equal((await api(owner, "/pedidos/" + id + "/download-ticket", { formato: "resultado" })).status, 200);
+      assert.equal((await create("image_video")).status, 200);
+      assert.equal(saved(owner, "jogador-cloud-image_video").pedido.image_executor, undefined);
+      assert.equal(store.getSummary(owner).remaining, 4);
+    } finally { delete process.env.PLAYER_CREST_OPENAI_API_KEY; }
+  });
 
   await t.test("unknown login keeps its existing unauthorized response and empty credentials remain invalid", async () => {
     for (const identifier of ["unknown-existing-format", "unknown.campaign@gmail.com"]) {

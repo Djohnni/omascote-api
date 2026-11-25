@@ -1,0 +1,89 @@
+
+
+MAPA OBRIGATÓRIO DAS IMAGENS DE REFERÊNCIA (na ordem enviada à API):
+- IMAGEM 1: FOTO DO JOGADOR ENVIADA PELO CLIENTE — jogador protagonista obrigatório
+- IMAGEM 2: ESCUDO DO TIME — usar sem trocar por outro
+
+
+REGRA ABSOLUTA PARA ESCUDOS/LOGOS:
+- Somente as IMAGENS 2 autorizam escudo, logo, brasão, símbolo, monograma, selo ou emblema separado.
+- Preserve exatamente desenho, inscrições e cores dessas imagens; não redesenhe, substitua, misture nem duplique.
+- Preserve exatamente a quantidade e a posição de estrelas, coroas, faixas, louros, contornos, letras, números e demais detalhes presentes em cada arquivo original.
+- Não acrescente estrela ou ornamento acima, ao redor ou junto de um escudo. Se o detalhe não existe no arquivo original, ele não pode aparecer na arte.
+- Não retire detalhes existentes, não combine partes de dois escudos e não transforme texto interno do escudo em texto externo da arte.
+- Não crie qualquer outro emblema, nem mesmo decorativo ou para representar adversário sem arquivo enviado.
+- Logos visíveis em fotos, cenários ou amostras de layout não podem ser extraídos nem repetidos como elemento separado.
+
+
+
+REGRA ABSOLUTA PARA AS FOTOS 1:
+- TODA foto enviada pelo cliente deve aparecer de forma visível e reconhecível na arte final. Não é opcional, não é inspiração e não pode ser ignorada.
+- QUALQUER PESSOA presente em qualquer uma dessas fotos deve ser usada como RECORTE FOTOGRÁFICO ORIGINAL, sem recriação da anatomia.
+- Preserve 100% e exatamente: rosto, identidade, expressão, cabelo, idade aparente, direção do olhar, posição da cabeça, pose, postura, inclinação, movimento, gesto, corpo, proporções, roupa, uniforme e enquadramento visível.
+- Mantenha exatamente a posição de cabeça, tronco, braços, mãos, dedos, pernas e pés e a relação entre todas as partes do corpo.
+- É proibido virar, rotacionar, levantar, abaixar, abrir, fechar, estender, dobrar ou reposicionar cabeça, tronco ou membros.
+- É proibido transformar uma pessoa parada em pose de ação, luta, corrida, salto ou comemoração, e também trocar uma ação existente por outro movimento.
+- É proibido corrigir, completar, reconstruir ou inventar partes do corpo. Se a foto mostra somente rosto, busto ou parte da pessoa, mantenha exatamente esse limite e NÃO crie o corpo restante.
+- É proibido trocar o ângulo da câmera, mudar a perspectiva corporal ou reconstruir a pessoa em outro enquadramento.
+- Pode somente recortar a pessoa ou o grupo como um bloco único, redimensionar proporcionalmente e ajustar iluminação, contraste e integração visual, sem alterar nenhum elemento estrutural do rosto ou do corpo.
+- Preserve também roupa e uniforme. Só altere a superfície da roupa quando o pedido atual autorizar explicitamente a troca de camiseta e fornecer uma referência; essa exceção nunca autoriza mudar corpo, pose, gesto, movimento ou enquadramento.
+- Analise o conteúdo real de cada foto e aplique o tratamento correto:
+  - uma pessoa/jogador sozinho: mantenha a pessoa fotograficamente intacta e use-a como protagonista;
+  - time ou grupo de jogadores: mantenha todas as pessoas e suas posições relativas fotograficamente intactas;
+  - mascote, animal, personagem ou robô: preserve esse mascote e use tratamento visual de flyer de mascote, grande e protagonista;
+  - foto de partida ou lance: mantenha a cena reconhecível como fundo ou elemento central.
+- Não substitua a foto por atleta genérico, silhueta, outro rosto, outro mascote, outro animal ou somente pelos escudos.
+- Não recorte a ponto de eliminar a pessoa, o time, o mascote ou a ação principal.
+- Os escudos e textos continuam obrigatórios, mas NÃO podem ocupar o lugar da foto enviada.
+- Esta regra vale para o produto "jogador_escudo" e tem prioridade sobre qualquer instrução genérica que diga que somente os escudos são o foco principal.
+
+TIPO DECLARADO PELO CLIENTE (não reclassifique):
+- IMAGEM 1: tipo JOGADOR; use como recorte fotográfico original e preserve 100% rosto, corpo, pose, movimento, roupa e enquadramento, sem recriar a pessoa.
+
+COMANDOS ESPECÍFICOS PARA AS FOTOS (obrigatórios e com prioridade máxima):
+IMAGEM 1 (player_photo): Os jogadores presentes na foto devem aparecer obrigatoriamente. Use cada pessoa como recorte fotográfico original e preserve 100% rosto, identidade, expressão, cabelo, posição, pose, corpo, mãos, proporções, uniforme e enquadramento. Não recrie, reposicione, complete ou invente partes do corpo. Não adicione nem substitua jogadores.
+
+Respeite a ordem dos escudos enviados: o primeiro fica à esquerda e o segundo à direita. Nenhum escudo pode se repetir. Preserve 100% cores, formas, letras, símbolos, estrelas, proporções e detalhes. Coloque um X discreto e moderno entre os escudos.
+
+Crie fundo de futebol que combine com as cores do uniforme. A aparência deve ser épica, cinematográfica e impactante, mas sem modificar rostos, corpos, poses ou uniformes. Enfatize os logos sem retirar o protagonismo dos jogadores.
+
+PATROCINADORES:
+- Inclua somente os patrocinadores realmente enviados.
+- Se houver apenas um, centralize-o.
+- Preserve 100% cada logo e escrita.
+- Se não houver patrocinador, não crie nada no lugar.
+
+TEXTO:
+- Escreva em português do Brasil e em LETRAS MAIÚSCULAS.
+- Todo texto entre aspas (" ") é nome próprio oficial e não pode ser traduzido, adaptado ou corrigido.
+- A rodada fica no topo; as demais informações ficam na parte inferior, afastadas do confronto.
+- Exiba rodada, data, horário e arena sem rótulos, apenas os valores. Nunca escreva “RODADA:”, “DATA:”, “HORA:” ou “ARENA:”.
+- Data e horário devem ficar em caixas retangulares separadas, com fundo sólido, boa leitura e espaçamento.
+- A palavra “extra info” e a categoria nunca podem aparecer.
+- Deixe em branco qualquer informação ausente.
+- Não repita informação nem invente texto.
+
+Use PNL somente como linguagem visual de aceitação, dominância e superioridade; nunca gere slogan adicional. Não invente pessoas, escudos, patrocinadores ou informações.
+
+
+
+REGRA ABSOLUTA PARA PESSOAS:
+- Somente pessoas que realmente aparecem nas FOTOS 1 podem aparecer na arte.
+- Não invente nem acrescente jogador, atleta, treinador, árbitro, dirigente, modelo, torcedor, grupo, equipe ou qualquer outra pessoa.
+- Não use outro rosto e não recrie o corpo. Rosto e corpo devem permanecer 100% fiéis à mesma foto, inclusive pose, movimento, gesto, posição dos membros, proporções e limite do enquadramento.
+- Quando parte do corpo não aparece na foto original, ela deve continuar fora da arte; nunca complete torso, braços, mãos, pernas ou pés ausentes.
+- O fundo pode sugerir público apenas com luzes e formas abstratas, sem pessoas reconhecíveis.
+
+
+
+REGRA ABSOLUTA PARA AS ESCRITAS VISÍVEIS:
+- Fora das inscrições que já pertencem aos escudos e logos originais, os ÚNICOS textos autorizados nesta arte são: ["__PLAYER_LITERAL__"].
+- Copie somente essas palavras e números. Pode adaptar maiúsculas/minúsculas e a tipografia, mas não pode acrescentar conteúdo.
+- Não crie título, subtítulo, slogan, frase motivacional, chamada, legenda, hashtag, nome de produto, nome de modalidade ou texto decorativo.
+- Não escreva rótulos como DATA, HORA, ARENA, LOCAL, RODADA, CONFRONTO ou JOGO se essas palavras não estiverem na lista autorizada.
+- Não extraia textos encontrados em fotos, amostras ou cenários para criar novas escritas externas. Texto interno de logo permanece apenas dentro do próprio logo.
+- Omitir espaço ou decoração é obrigatório quando não existir texto autorizado para preenchê-los.
+
+
+
+REGRA FINAL DE PRIORIDADE MÁXIMA: este pedido é isolado. Respeite exatamente o papel indicado para cada imagem. Não misture escudo, foto, uniforme, cenário ou imagem de texto, não use informações de pedidos anteriores e não desobedeça às regras absolutas de escudos, pessoas e escritas acima.

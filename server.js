@@ -10,6 +10,7 @@ const crypto = require("crypto");
 const productsRegistry = require("./src/products");
 const orderStorage = require("./src/orders/order.storage");
 const orderStatus = require("./src/orders/order.status");
+const playerCrest = require("./src/orders/player-crest/queue");
 const orderService = require("./src/orders/order.service");
 const productAuditService = require("./src/orders/product-audit.service");
 const resultScenarioRegistry = require("./src/orders/result-scenario-registry");
@@ -150,6 +151,14 @@ const DATA_DIR = process.env.OMASCOTE_DATA_DIR
     : path.join(__dirname, "dados");
 
 const PEDIDOS_DIR = path.join(DATA_DIR, "pedidos");
+const playerCrestQueue = playerCrest.createQueue({
+  dir: path.join(DATA_DIR, "fila_jogador_escudo"),
+  readOrder: readPedido, writeOrder: writePedidoAtomic,
+  readStatus: readOrderStatus, writeStatus: orderStorage.writeStatus,
+  authorize: (base, order) => pedidoAguardandoPagamentoParaCriacao(order)
+    ? { ok: false, waiting: true } : verificarAutorizacaoPedidoPlano(base, order),
+  onFailure: registrarFalhaImagemJogador
+});
 const testerBonusStore = createTesterBonusStore({ dataDir: DATA_DIR });
 const CLIENTES_FILE = path.join(DATA_DIR, "clientes.json");
 const AVALIACOES_ARTES_FILE = path.join(DATA_DIR, "avaliacoes_artes.json");
@@ -3895,7 +3904,45 @@ function readOrderStatus(base, fallback = "") {
 }
 
 function writeOrderStatus(base, status) {
+  if (status === "novo" || status === "ajuste_pendente") {
+    playerCrestQueue.enqueue(base, readPedido(base));
+  }
   return orderStorage.writeStatus(base, status);
+}
+
+async function registrarFalhaImagemJogador(base, pedido, reason) {
+  const orderId = String(pedido.id);
+  const now = new Date().toISOString();
+  const firstDelivery = !pedido.resultado_enviado_em && !pedido.baixado_cliente;
+  if (firstDelivery && pedido.pagamento_metodo === "bonus_testador" && !pedido.bonus_testador_cota_devolvida) {
+    const returned = await testerBonusStore.release({ customerKey: pedido.bonus_testador?.customer_key,
+      orderId, usageId: pedido.bonus_testador?.uso_id, reason });
+    if (!returned.ok) throw new Error("bonus_release_pending");
+    pedido.bonus_testador_cota_devolvida = true;
+    pedido.bonus_testador_cota_devolvida_em = now;
+  }
+  if (firstDelivery && pedido.pagamento_metodo === "plano_semanal" && !pedido.plano_cota_devolvida) {
+    const customerKey = getWeeklyPlanCustomerKey(readClientes()[pedido.whatsapp]);
+    if (customerKey && await weeklyPlansService.release({ customerKey, orderId, reason })) {
+      pedido.plano_cota_devolvida = true;
+      pedido.plano_cota_devolvida_em = now;
+    }
+  }
+  const supportText = `O pedido ${orderId} precisa de revisão. Nossa equipe vai verificar a geração da imagem.`;
+  const conversations = readJsonArraySafe(SUPORTE_ABERTAS_FILE);
+  if (!conversations.some(c => c.whatsapp === pedido.whatsapp &&
+      c.mensagens?.some(m => m.texto === supportText))) {
+    const conversation = salvarMensagemSuporteAberta(pedido.whatsapp, "", supportText, "sistema");
+    conversation.precisa_humano = true;
+    conversation.status = "aguardando_suporte";
+    const open = readJsonArraySafe(SUPORTE_ABERTAS_FILE);
+    const index = open.findIndex(c => c.id === conversation.id);
+    if (index >= 0) { open[index] = conversation; writeJsonSafe(SUPORTE_ABERTAS_FILE, open); }
+  }
+  writePedidoAtomic(base, { ...readPedido(base), ...pedido, status: "erro", erro_cliente: true,
+    motivo_erro: reason, erro_em: now });
+  writeOrderStatus(base, "erro");
+  console.error("[jogador-escudo] pedido em suporte", orderId, reason);
 }
 
 function readJsonArraySafe(filePath) {
@@ -13706,6 +13753,15 @@ function criarPedidoHandlerAsync(categoria) {
       });
     }
 
+    const cloudImage = categoria === "jogador_escudo" &&
+      normalizarDeliveryMode(fields.new_model?.fields?.delivery_mode) === "image" &&
+      internalVeoOrder.patch?.video_generation?.requested !== true &&
+      process.env.PLAYER_CREST_CLOUD_ENABLED !== "false" && Boolean(process.env.PLAYER_CREST_OPENAI_API_KEY?.trim());
+    if (cloudImage && (!files.mascote?.[0] || !files.escudo1?.[0] ||
+        !String(fields.new_model.fields.player_name || fields.new_model.fields.players?.[0]?.nome || fields.data || "").trim())) {
+      limparUploadsTemporarios(files);
+      return res.status(400).json({ ok: false, error: "Envie o nome, a foto do jogador e o escudo do time." });
+    }
     if (categoria === "contratacao") {
       const validacaoContratacao = validarContratoContratacao({ fields, files });
       if (!validacaoContratacao.ok) {
@@ -14359,6 +14415,7 @@ function criarPedidoHandlerAsync(categoria) {
         })
       : null;
     const initialOrderPatch = {
+      ...(cloudImage ? { image_executor: playerCrest.executor } : {}),
       ...(planoOrderPatch || {}),
       ...(cobertoPeloBonusTestador ? buildTesterBonusCoveredOrderPatch({
         customerKey: testerCustomerKey, reservation: testerBonusReservation, value: custoPedido
@@ -15015,6 +15072,7 @@ app.get("/bot/pedidos/novos", auth, safeAsyncRoute(async (req, res) => {
         const pedido = readPedido(base);
 
         if (
+          !playerCrest.owns(pedido) &&
           (statusPedido === "novo" || statusPedido === "ajuste_pendente") &&
           !pedidoAguardandoPagamentoParaCriacao(pedido)
         ) {
@@ -15044,6 +15102,7 @@ app.get("/bot/pedidos/:id/zip", auth, safeAsyncRoute(async (req, res) => {
   }
 
   const pedido = readPedido(base);
+  if (playerCrest.owns(pedido)) return res.status(409).json({ ok: false, error: "Pedido processado pela API." });
   const verification = await verificarAutorizacaoPedidoPlano(base, pedido);
   if (!verification.ok) return weeklyPlanOrderAccessError(res, verification);
 
@@ -15080,6 +15139,7 @@ app.post("/bot/pedidos/:id/status", auth, safeAsyncRoute(async (req, res) => {
   const { status } = req.body || {};
 
   const pedido = readPedido(base);
+  if (playerCrest.owns(pedido)) return res.status(409).json({ ok: false, error: "Pedido processado pela API." });
   const verification = await verificarAutorizacaoPedidoPlano(base, pedido);
   if (!verification.ok) return weeklyPlanOrderAccessError(res, verification);
 
@@ -15116,7 +15176,7 @@ app.get("/pedidos/novos", auth, safeAsyncRoute(async (req, res) => {
 
     const pedido = readPedido(pdir);
     if (
-      readOrderStatus(pdir, "") === "novo" &&
+      !playerCrest.owns(pedido) && readOrderStatus(pdir, "") === "novo" &&
       !pedidoAguardandoPagamentoParaCriacao(pedido) &&
       (await verificarAutorizacaoPedidoPlano(pdir, pedido)).ok
     ) {
@@ -15511,6 +15571,9 @@ app.post("/pedidos/:id/solicitar-ajuste", auth, (req, res) => {
 
   const pedidoPath = path.join(base, "pedido.json");
   const pedido = safeReadJson(pedidoPath) || {};
+  if (playerCrest.owns(pedido) && readOrderStatus(base) !== "pronto") {
+    return res.status(409).json({ ok: false, error: "Aguarde a entrega da imagem para solicitar um ajuste." });
+  }
   if (pedido.pagamento_metodo === "bonus_testador") {
     try {
       if (!testerBonusOrderAuthorization(pedido, req.user.whatsapp).authorized) {
@@ -16167,6 +16230,7 @@ app.post("/pedidos/:id/status", auth, (req, res) => {
     return res.status(404).json({ ok: false, error: "Pedido não encontrado" });
   }
 
+  if (playerCrest.owns(readPedido(base))) return res.status(409).json({ ok: false, error: "Pedido processado pela API." });
   const { status } = req.body || {};
 
   if (!orderStatus.isValidPublicStatus(status)) {
@@ -16201,6 +16265,10 @@ app.post(
     }
 
     const pedidoAtual = readPedido(base);
+    if (playerCrest.owns(pedidoAtual)) {
+      limparUploadsRequest(req);
+      return res.status(409).json({ ok: false, error: "Pedido processado pela API." });
+    }
     const verification = await verificarAutorizacaoPedidoPlano(base, pedidoAtual);
     if (!verification.ok) {
       limparUploadsRequest(req);
@@ -16818,6 +16886,7 @@ app.post("/bot/suporte/erro-pedido", auth, safeAsyncRoute(async (req, res) => {
 
     const basePedido = getPedidoBaseGlobal(pedido_id);
 
+    if (basePedido && playerCrest.owns(readPedido(basePedido))) return res.status(409).json({ ok: false, error: "Pedido processado pela API." });
     if (basePedido) {
       try {
         writeOrderStatus(basePedido, orderStatus.ORDER_STATUS.ERRO);
@@ -17159,6 +17228,7 @@ async function runProfilePrintRetentionCleanup() {
 }
 
 if (require.main === module) {
+  playerCrestQueue.start();
   setInterval(finalizarConversasSuporteInativas, 60 * 1000);
   if (radarConfig.enabled && radarConfig.profilePrintImportEnabled && radarPool) {
     runProfilePrintRetentionCleanup();

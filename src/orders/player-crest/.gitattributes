@@ -1,0 +1,3 @@
+prompt_jogador_escudo.txt -text
+prompt_multiesportes.txt -text
+reference-*.txt text eol=lf
