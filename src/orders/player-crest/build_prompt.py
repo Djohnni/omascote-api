@@ -12,6 +12,8 @@ from prompt import (
 ROOT = Path(__file__).parent
 
 
+COMPOSITION_RULES = "\n\nREGRAS OBRIGATÓRIAS DE COMPOSIÇÃO — JOGADOR + ESCUDO:\n- MOSTRE O JOGADOR UMA ÚNICA VEZ. Use apenas o recorte principal da foto original, mantendo rosto, pose e uniforme. Não repita o jogador nem o rosto no fundo: sem retrato ampliado, sombra com a silhueta do jogador, montagem ou dupla exposição. O fundo deve mostrar apenas o ambiente escolhido, sem cópia do atleta.\n- MANTENHA O ESCUDO ORIGINAL INTEIRO E VISÍVEL. Posicione o escudo separado do jogador, ao lado dele, com espaço livre entre os dois. Nenhuma parte do corpo, mão, uniforme, texto, borda da imagem ou efeito pode cobrir qualquer parte do escudo. O contorno e todas as letras, números e detalhes devem estar visíveis e legíveis desde o primeiro quadro. Se faltar espaço, reposicione ou redimensione o escudo proporcionalmente. Nunca recorte, distorça, redesenhe ou complete o escudo."
+
 def render(order):
     fields = order.get("fields") or {}
     model = dict(product_id="jogador_escudo", fields=fields, assets=order.get("assets") or {},
@@ -37,7 +39,7 @@ def render(order):
     prompt += build_multisport_order_block(model)
     references = "reference-other.txt" if other_sport else "reference-football.txt"
     suffix = (ROOT / references).read_text(encoding="utf-8")
-    return prompt + suffix.replace('["__PLAYER_LITERAL__"]', json.dumps([name], ensure_ascii=False))
+    return prompt + suffix.replace('["__PLAYER_LITERAL__"]', json.dumps([name], ensure_ascii=False)) + COMPOSITION_RULES
 
 
 if __name__ == "__main__":
