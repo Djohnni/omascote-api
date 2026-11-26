@@ -14,6 +14,7 @@ const playerCrest = require("./src/orders/player-crest/queue");
 const imageCatalog = require("./src/orders/catalog/catalog");
 const orderService = require("./src/orders/order.service");
 const productAuditService = require("./src/orders/product-audit.service");
+const { createAdminOrdersRouter } = require("./src/admin/orders.routes");
 const resultScenarioRegistry = require("./src/orders/result-scenario-registry");
 const uploadContentHash = require("./src/orders/upload-content-hash");
 const billingService = require("./src/billing/billing.service");
@@ -12153,6 +12154,11 @@ app.get("/bot/cartas-app/:id/debug-leituras", auth, (req, res) => {
     return res.status(500).json({ ok: false, error: "erro_debug_leituras_carta_app" });
   }
 });
+
+app.use("/admin/pedidos", createAdminOrdersRouter({
+  auth, isAdmin: isBotAdmin, ordersDir: PEDIDOS_DIR, readCustomers: readClientes,
+  resolveOrderBase: getPedidoBaseGlobal, productName: nomeCategoriaPedido
+}));
 
 app.get("/admin/auditoria-produtos", auth, (req, res) => {
   try {
