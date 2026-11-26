@@ -31,8 +31,8 @@ function details(product, fields, uploads) {
 function quote(product, fields, uploads) {
   const entry = rows.get(fields.futebol_scene);
   if (!entry || entry.row.product !== product || fields.delivery_mode !== 'image_video' ||
-      fields.video_model !== 'omni' || String(fields.sport || '').toLowerCase() !== 'futebol') {
-    throw new Error('Escolha uma cena de futebol válida para este produto.');
+      fields.video_model !== 'omni' || typeof fields.sport !== 'string' || !fields.sport.trim()) {
+    throw new Error('Escolha uma cena válida para este produto e informe a modalidade.');
   }
   const { kind, extra } = details(product, fields, uploads);
   if (kind !== entry.row.kind) throw new Error('A cena escolhida não corresponde aos dados ou fotos do pedido.');

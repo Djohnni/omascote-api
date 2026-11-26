@@ -14,18 +14,18 @@ function build(categoria, sport, delivery_mode = "image", extras = {}) {
   assert.equal(JSON.stringify(fields), before);
   return pedido;
 }
-test("only new orders for the eight football products receive the image prompt version", () => {
+test("new orders for the eight gallery products receive the current image policy in every selected sport", () => {
   assert.equal(products.length, 8);
-  for (const product of products) for (const mode of ["image", "image_video"]) {
-    const order = build(product, "Futebol", mode);
+  for (const product of products) for (const mode of ["image", "image_video"]) for (const sport of ["Futebol", "Futsal", "Basquete", "Vôlei", "Tênis", "Parkour personalizado"]) {
+    const order = build(product, sport, mode);
     assert.equal(order.image_prompt_version, "football_field_v2");
-    assert.equal(order.fields.sport, "Futebol");
+    assert.equal(order.fields.sport, sport);
     assert.equal(order.fields.delivery_mode, mode);
     assert.equal(order.video_generation, undefined);
   }
 });
-test("other sports, absent sport and standalone crest or mascot never acquire the football image flag", () => {
-  for (const product of products) for (const sport of [undefined, "", "Futsal", "Vôlei", "Basquete"]) {
+test("absent or invalid sport and standalone crest or mascot never acquire the shared image flag", () => {
+  for (const product of products) for (const sport of [undefined, "", "  ", null, {}, []]) {
     assert.equal(Object.hasOwn(build(product, sport), "image_prompt_version"), false);
   }
   for (const product of ["escudo3d", "mascote_uniforme", "unknown"]) {

@@ -134,6 +134,47 @@ test("pilot catalog, quote, paid order, scene integrity and retry use real route
       assert.equal(Object.hasOwn(JSON.parse(fs.readFileSync(filename)),"image_prompt_version"),false);
       assert.deepEqual(JSON.parse(fs.readFileSync(filename)).video_generation,historicalContract);
     });
+    await t.test("gallery scene accepts the selected sport and location without changing its price or contract",async()=>{
+      const row=catalog.find(r=>r.code==="P1"),option=row.options.find(o=>o.id==="P1-A");
+      const cases=[
+        {sport:"Futsal",sport_context:"Quadra coberta do bairro",scenario_id:"proximo_jogo_futsal_v1"},
+        {sport:"Futsal",sport_context:"Quadra coberta",scenario_id:"proximo_jogo_atual_v1"},
+        {sport:"Futebol Society",sport_context:"Campo sintético"},
+        {sport:"Basquete",sport_context:"Ginásio municipal"},
+        {sport:"Vôlei",sport_context:"Quadra de areia"},
+        {sport:"Tênis",sport_context:"Quadra de saibro"},
+        {sport:"Peteca adaptada personalizada",sport_context:"Quadra comunitária"}
+      ];
+      for(const [index,selected] of cases.entries()){
+        const {fields,files}=fixture(row,option);Object.assign(fields,selected);
+        const quoted=await quote(row,fields,files);
+        assert.equal(quoted.status,200,quoted.text);
+        assert.equal(quoted.json.valor_original,option.cents/100);
+        const before=balance(),id=`sport-fixture-${index}`;
+        const response=await create(row,fields,files,id);
+        assert.equal(response.status,200,response.text);
+        const saved=storage.findPedidoByClientRequestId(path.join(dataDir,"pedidos"),owner,id);
+        assert.equal(saved.pedido.fields.sport,selected.sport);
+        assert.equal(saved.pedido.fields.sport_context,selected.sport_context);
+        assert.equal(saved.pedido.image_prompt_version,"football_field_v2");
+        assert.equal(saved.pedido.video_generation.scene_id,"P1-A");
+        assert.equal(saved.pedido.video_generation.resolution,"720p");
+        assert.equal(saved.pedido.video_generation.reference_mode,"initial_only");
+        assert.equal(saved.pedido.video_generation.prompt_version,"football_field_v2");
+        assert.equal((await create(row,fields,files,id)).status,200);
+        assert.equal(Math.round((before-balance())*100),option.cents);
+      }
+    });
+    await t.test("sport flexibility preserves mismatched-product and tampered scenario rejection before debit",async()=>{
+      const row=catalog.find(r=>r.code==="P1"),option=row.options[0],{fields,files}=fixture(row,option);
+      const before=balance();
+      const wrong=await create(row,{...fields,sport:"Futsal",scenario_id:"jogador_escudo_futsal_v1"},files,"sport-wrong-scenario");
+      assert.equal(wrong.status,400);assert.equal(wrong.json.code,"SCENARIO_PRODUCT_MISMATCH");
+      const tampered=await create(row,{...fields,sport:"Basquete",scenario_id:"proximo_jogo_atual_v1",scenario_version:1},files,"sport-tampered-scenario");
+      assert.equal(tampered.status,400);assert.equal(tampered.json.code,"SCENARIO_TAMPERED");
+      assert.equal((await create(row,{...fields,sport:""},files,"sport-missing-fixture")).status,400);
+      assert.equal(balance(),before);
+    });
     await t.test("stale price, mismatched assets and customer cannot create scene",async()=>{
       const row=catalog.find(r=>r.code==="P1"), {fields,files}=fixture(row,row.options[0]);
       const before=balance();

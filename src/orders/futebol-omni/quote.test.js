@@ -15,7 +15,10 @@ for (const row of catalog) {
     assert.equal(contract(option.id).reference_mode,'initial_only');
     assert.equal(contract(option.id).prompt_version,'football_field_v2');
     assert.throws(()=>quote('escudo3d',order,files));
-    assert.throws(()=>quote(row.product,{...order,sport:'Vôlei'},files));
+    for(const sport of ['Futsal','Futebol Society','Basquete','Vôlei','Tênis','Parkour personalizado'])
+      assert.equal(quote(row.product,{...order,sport},files),option.cents);
+    for(const sport of ['', '  ', null, undefined, {}, []])
+      assert.throws(()=>quote(row.product,{...order,sport},files));
     if(row.kind==='many') assert.equal(quote(row.product,order,{patrocinadores:Array(18)}),option.cents+300);
     assert(option.cents>=1890 && option.cents+300<=2790);
   }
